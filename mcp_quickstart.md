@@ -6,7 +6,7 @@
 ## 1. 前置条件
 
 1. 外部访问入口为前端 nginx，而不是后端容器直连
-2. 前端访问地址示例：`http://127.0.0.1:8102`
+2. 前端访问地址示例：`http://127.0.0.1:8226`
 3. 管理后台 -> 系统配置中：
    - 打开 `启用 MCP 接口`
    - 设置 `MCP Token`
@@ -14,7 +14,7 @@
 
 ## 2. 对外入口
 
-- MCP URL：`http://127.0.0.1:8102/mcp`
+- MCP URL：`http://127.0.0.1:8226/mcp`
 - 鉴权 Header：`X-MCP-Token: <你的MCPToken>`
 - 可选来源 Header：`X-MCP-Source: astrbot`
 - 传输方式：`streamable-http`
@@ -34,7 +34,7 @@
   "mcpServers": {
     "home-monitor": {
       "transport": "streamable-http",
-      "url": "http://127.0.0.1:8102/mcp",
+      "url": "http://127.0.0.1:8226/mcp",
       "headers": {
         "X-MCP-Token": "请替换为你的MCPToken",
         "X-MCP-Source": "astrbot"
@@ -48,7 +48,7 @@
 
 - Name: `home-monitor`
 - Transport: `streamable-http`
-- URL: `http://127.0.0.1:8102/mcp`
+- URL: `http://127.0.0.1:8226/mcp`
 - Header 1: `X-MCP-Token: <你的MCPToken>`
 - Header 2: `X-MCP-Source: astrbot`
 
@@ -121,7 +121,7 @@
 可以先用标准 MCP 初始化请求检查链路是否畅通：
 
 ```bash
-curl -sS -X POST "http://127.0.0.1:8102/mcp" \
+curl -sS -X POST "http://127.0.0.1:8226/mcp" \
   -H "Content-Type: application/json" \
   -H "X-MCP-Token: YOUR_TOKEN" \
   -d '{
@@ -148,7 +148,7 @@ curl -sS -X POST "http://127.0.0.1:8102/mcp" \
 
 - 如果 AstrBot 跑在 Docker 中，`127.0.0.1` 指向 AstrBot 自己，不是当前系统
 - 应填写前端 nginx 对外地址，例如：
-  - 同机映射端口：`http://宿主机IP:8102/mcp`
+  - 同机映射端口：`http://宿主机IP:8226/mcp`
   - 反向代理域名：`https://your-domain/mcp`
 - 不要让 AstrBot 直接连接 `backend:8000` 或宿主机 `8000`
 

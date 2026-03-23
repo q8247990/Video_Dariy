@@ -157,7 +157,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "8102:80"
+      - "8226:80"
     networks:
       - app_bridge
 

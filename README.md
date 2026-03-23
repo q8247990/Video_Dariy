@@ -193,10 +193,9 @@ bash scripts/package_release.sh --tag v1.0.0
 
 ## 默认访问地址
 
-- 前端：`http://localhost:8102`
-- 后端健康检查：`http://localhost:8000/health`
-- 前端反代健康检查：`http://localhost:8102/health`
-- MCP：`http://localhost:8102/mcp`
+- 前端：`http://localhost:8226`
+- 前端反代健康检查：`http://localhost:8226/health`
+- MCP：`http://localhost:8226/mcp`
 
 ## 初始化与运行说明
 

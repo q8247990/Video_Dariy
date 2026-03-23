@@ -248,7 +248,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "8102:80"
+      - "8226:80"
     networks:
       - app_bridge
 
@@ -276,7 +276,7 @@ cat > "${PACKAGE_DIR}/README.md" <<EOF
 
 - 已安装 Docker 与 Docker Compose
 - 具备管理员权限，可执行 docker 命令
-- 预留端口: 8102
+- 预留端口: 8226
 
 ## 3. 部署步骤
 
@@ -316,8 +316,8 @@ docker compose up -d
 
 ## 4. 访问地址
 
-- 前端: http://<NAS_IP>:8102
-- 系统健康检查(经前端反向代理): http://<NAS_IP>:8102/health
+- 前端: http://<NAS_IP>:8226
+- 系统健康检查(经前端反向代理): http://<NAS_IP>:8226/health
 
 ## 5. 运维命令
 
