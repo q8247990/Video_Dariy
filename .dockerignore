@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.env
+frontend/
+xiaomi_video/
+output/
+postgres_data/
+redis_data/
+data/

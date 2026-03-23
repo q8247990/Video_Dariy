@@ -1,0 +1,1 @@
+docker compose exec backend python -m src.reset_pipeline_data
