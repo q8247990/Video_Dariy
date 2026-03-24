@@ -10,7 +10,10 @@ class LLMUsageLog(Base):
     __tablename__ = "llm_usage_log"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    provider_id: Mapped[int] = mapped_column(ForeignKey("llm_provider.id"), nullable=False)
+    provider_id: Mapped[int | None] = mapped_column(
+        ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
+    )
+    provider_name_snapshot: Mapped[str | None] = mapped_column(String(128), nullable=True)
     usage_date: Mapped[date] = mapped_column(Date, nullable=False)
     scene: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

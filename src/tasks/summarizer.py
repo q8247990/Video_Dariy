@@ -128,6 +128,7 @@ def _upsert_daily_summary(
     structured_attention_items: list[dict[str, Any]],
     event_count: int,
     provider_id: int,
+    provider_name_snapshot: str | None,
 ) -> DailySummary:
     payload = {
         "summary_date": target_date,
@@ -137,6 +138,7 @@ def _upsert_daily_summary(
         "attention_items_json": structured_attention_items,
         "event_count": event_count,
         "provider_id": provider_id,
+        "provider_name_snapshot": provider_name_snapshot,
         "generated_at": datetime.now(),
     }
 
@@ -153,6 +155,7 @@ def _upsert_daily_summary(
                     "attention_items_json": payload["attention_items_json"],
                     "event_count": payload["event_count"],
                     "provider_id": payload["provider_id"],
+                    "provider_name_snapshot": payload["provider_name_snapshot"],
                     "generated_at": payload["generated_at"],
                 },
             )
@@ -170,6 +173,7 @@ def _upsert_daily_summary(
         summary.attention_items_json = structured_attention_items
         summary.event_count = event_count
         summary.provider_id = provider_id
+        summary.provider_name_snapshot = provider_name_snapshot
         summary.generated_at = payload["generated_at"]
     else:
         summary = DailySummary(**payload)
@@ -363,6 +367,7 @@ def _chat_completion_with_usage(
     db: Session,
     client: Any,
     provider_id: int,
+    provider_name_snapshot: str | None,
     messages: list[dict[str, str]],
 ) -> str:
     text = client.chat_completion(
@@ -373,6 +378,7 @@ def _chat_completion_with_usage(
     record_token_usage(
         db,
         provider_id=provider_id,
+        provider_name_snapshot=provider_name_snapshot,
         scene="daily_summary",
         usage=client.get_last_usage(),
     )
@@ -524,6 +530,7 @@ def _generate_single_pass_summary_payload(
     db: Session,
     client: Any,
     provider_id: int,
+    provider_name_snapshot: str | None,
     events: list[EventRecord],
     prompt: str,
     known_subjects: list[dict[str, str]],
@@ -533,6 +540,7 @@ def _generate_single_pass_summary_payload(
         db=db,
         client=client,
         provider_id=provider_id,
+        provider_name_snapshot=provider_name_snapshot,
         messages=[
             {"role": "system", "content": "你负责生成结构化家庭日报。"},
             {"role": "user", "content": prompt},
@@ -557,6 +565,7 @@ def _generate_single_pass_summary_payload(
                 db=db,
                 client=client,
                 provider_id=provider_id,
+                provider_name_snapshot=provider_name_snapshot,
                 messages=[
                     {"role": "system", "content": "你负责生成结构化家庭日报。"},
                     {"role": "user", "content": "请严格只输出JSON对象。\n\n" + prompt},
@@ -594,6 +603,7 @@ def _generate_serial_summary_payload(
     db: Session,
     client: Any,
     provider_id: int,
+    provider_name_snapshot: str | None,
     target_date: date,
     start_dt: datetime,
     end_dt: datetime,
@@ -658,6 +668,7 @@ def _generate_serial_summary_payload(
             db=db,
             client=client,
             provider_id=provider_id,
+            provider_name_snapshot=provider_name_snapshot,
             messages=[
                 {"role": "system", "content": "你负责生成结构化家庭日报对象摘要。"},
                 {"role": "user", "content": subject_prompt},
@@ -676,6 +687,7 @@ def _generate_serial_summary_payload(
                 db=db,
                 client=client,
                 provider_id=provider_id,
+                provider_name_snapshot=provider_name_snapshot,
                 messages=[
                     {
                         "role": "system",
@@ -723,6 +735,7 @@ def _generate_serial_summary_payload(
         db=db,
         client=client,
         provider_id=provider_id,
+        provider_name_snapshot=provider_name_snapshot,
         messages=[
             {"role": "system", "content": "你负责生成结构化家庭日报。"},
             {"role": "user", "content": rollup_prompt},
@@ -737,6 +750,7 @@ def _generate_serial_summary_payload(
             db=db,
             client=client,
             provider_id=provider_id,
+            provider_name_snapshot=provider_name_snapshot,
             messages=[
                 {"role": "system", "content": "你负责生成结构化家庭日报。"},
                 {"role": "user", "content": "请严格只输出JSON对象。\n\n" + rollup_prompt},
@@ -916,6 +930,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                 db=db,
                 client=client,
                 provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
                 target_date=target_date,
                 start_dt=start_dt,
                 end_dt=end_dt,
@@ -931,6 +946,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                 db=db,
                 client=client,
                 provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
                 events=events,
                 prompt=single_pass_prompt,
                 known_subjects=known_subjects,
@@ -967,6 +983,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
             structured_attention_items=structured_attention_items,
             event_count=event_count,
             provider_id=provider.id,
+            provider_name_snapshot=provider.provider_name,
         )
 
         ensure_task_not_cancelled(

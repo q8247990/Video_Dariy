@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter
+from sqlalchemy.exc import IntegrityError
 
 from src.api.deps import DB, CurrentUser
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
@@ -224,8 +225,15 @@ def delete_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
                 code=4004,
                 message=f"Provider is currently in use by: {role_text}",
             )
-        db.delete(provider)
-        db.commit()
+        try:
+            db.delete(provider)
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            return BaseResponse(
+                code=4005,
+                message="Provider has historical references and cannot be deleted",
+            )
     return BaseResponse(data={})
 
 

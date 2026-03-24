@@ -40,7 +40,7 @@ class LLMProviderResponse(LLMProviderBase):
 
 
 class LLMProviderUsageProviderItem(BaseModel):
-    provider_id: int
+    provider_id: int | None
     provider_name: str
     prompt_tokens: int
     completion_tokens: int

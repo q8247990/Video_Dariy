@@ -108,7 +108,13 @@ class QAService:
 
         # 9. 日志
         if request.write_query_log:
-            self._write_log(question, query_plan, referenced_events, provider.id)
+            self._write_log(
+                question,
+                query_plan,
+                referenced_events,
+                provider.id,
+                provider.provider_name,
+            )
 
         return QAResult(
             question=question,
@@ -153,6 +159,7 @@ class QAService:
             record_token_usage(
                 self.db,
                 provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
                 scene="qa_intent",
                 usage=gateway.get_last_usage(),
             )
@@ -199,6 +206,7 @@ class QAService:
             record_token_usage(
                 self.db,
                 provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
                 scene="qa_answer",
                 usage=gateway.get_last_usage(),
             )
@@ -216,6 +224,7 @@ class QAService:
         query_plan: Any,
         events: list[EventEvidence],
         provider_id: int,
+        provider_name_snapshot: str | None,
     ) -> None:
         import dataclasses
 
@@ -237,6 +246,7 @@ class QAService:
             answer_text="",
             referenced_event_ids_json=[e.id for e in events],
             provider_id=provider_id,
+            provider_name_snapshot=provider_name_snapshot,
         )
         self.db.add(log)
         self.db.commit()

@@ -86,7 +86,7 @@ export type Provider = {
 }
 
 export type ProviderUsageProviderItem = {
-  provider_id: number
+  provider_id: number | null
   provider_name: string
   prompt_tokens: number
   completion_tokens: number

@@ -15,7 +15,8 @@ class ChatQueryLog(Base):
     answer_text: Mapped[str] = mapped_column(Text, nullable=False)
     referenced_event_ids_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     provider_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("llm_provider.id"), nullable=True
+        Integer, ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
     )
+    provider_name_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("idx_chat_query_log_created_at", "created_at"),)

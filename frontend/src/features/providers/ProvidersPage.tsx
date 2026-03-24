@@ -109,7 +109,9 @@ export function ProvidersPage() {
       return result
     }
     for (const item of latestUsageDay.providers) {
-      result.set(item.provider_id, item.total_tokens)
+      if (item.provider_id !== null) {
+        result.set(item.provider_id, item.total_tokens)
+      }
     }
     return result
   }, [latestUsageDay])

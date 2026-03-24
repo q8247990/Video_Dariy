@@ -394,6 +394,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             record_token_usage(
                 db,
                 provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
                 scene="video_analysis",
                 usage=client.get_last_usage(),
             )

@@ -19,6 +19,7 @@ class DailySummary(Base):
     attention_items_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     provider_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("llm_provider.id"), nullable=True
+        Integer, ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
     )
+    provider_name_snapshot: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)

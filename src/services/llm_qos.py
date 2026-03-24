@@ -46,6 +46,7 @@ def record_token_usage(
     db: Session,
     *,
     provider_id: int,
+    provider_name_snapshot: str | None = None,
     scene: str,
     usage: dict[str, Any] | None,
     now: datetime | None = None,
@@ -65,6 +66,7 @@ def record_token_usage(
     db.add(
         LLMUsageLog(
             provider_id=provider_id,
+            provider_name_snapshot=provider_name_snapshot,
             usage_date=usage_date,
             scene=scene,
             prompt_tokens=prompt_tokens,
@@ -81,18 +83,30 @@ def get_daily_usage_stats(db: Session, days: int = 7) -> list[dict[str, Any]]:
         db.query(
             LLMUsageLog.usage_date,
             LLMUsageLog.provider_id,
+            LLMUsageLog.provider_name_snapshot,
             func.sum(LLMUsageLog.prompt_tokens),
             func.sum(LLMUsageLog.completion_tokens),
             func.sum(LLMUsageLog.total_tokens),
         )
         .filter(LLMUsageLog.usage_date >= start_date)
-        .group_by(LLMUsageLog.usage_date, LLMUsageLog.provider_id)
+        .group_by(
+            LLMUsageLog.usage_date,
+            LLMUsageLog.provider_id,
+            LLMUsageLog.provider_name_snapshot,
+        )
         .all()
     )
 
     providers = {item.id: item.provider_name for item in db.query(LLMProvider).all()}
     per_day: dict[date, dict[str, Any]] = {}
-    for usage_date, provider_id, prompt_sum, completion_sum, total_sum in rows:
+    for (
+        usage_date,
+        provider_id,
+        provider_name_snapshot,
+        prompt_sum,
+        completion_sum,
+        total_sum,
+    ) in rows:
         day = per_day.setdefault(
             usage_date,
             {
@@ -112,7 +126,9 @@ def get_daily_usage_stats(db: Session, days: int = 7) -> list[dict[str, Any]]:
         day["providers"].append(
             {
                 "provider_id": provider_id,
-                "provider_name": providers.get(provider_id, f"provider-{provider_id}"),
+                "provider_name": provider_name_snapshot
+                or providers.get(provider_id)
+                or (f"provider-{provider_id}" if provider_id is not None else "deleted-provider"),
                 "prompt_tokens": prompt_value,
                 "completion_tokens": completion_value,
                 "total_tokens": total_value,
