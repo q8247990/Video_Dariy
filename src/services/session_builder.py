@@ -26,7 +26,7 @@ from src.services.pipeline_constants import (
 
 logger = logging.getLogger(__name__)
 
-MERGE_GAP_SECONDS = 61
+MERGE_GAP_SECONDS = 1
 SEAL_BUFFER_SECONDS = 600  # 10 minutes
 HASH_QUERY_CHUNK_SIZE = 500
 
@@ -225,7 +225,10 @@ class SessionBuilder:
             source_id=source_id,
             session_start_time=first_file.start_time,
             session_end_time=first_file.end_time,
-            total_duration_seconds=first_file.duration_seconds or 0,
+            total_duration_seconds=self._calculate_session_duration_seconds(
+                first_file.start_time,
+                first_file.end_time,
+            ),
             analysis_status=SessionAnalysisStatus.OPEN,
         )
         db.add(session)
@@ -254,9 +257,17 @@ class SessionBuilder:
         db.add(rel)
 
         session.session_end_time = max(session.session_end_time, video_file.end_time)
-        if video_file.duration_seconds is not None:
-            current = session.total_duration_seconds or 0
-            session.total_duration_seconds = current + video_file.duration_seconds
+        session.total_duration_seconds = self._calculate_session_duration_seconds(
+            session.session_start_time,
+            session.session_end_time,
+        )
+
+    def _calculate_session_duration_seconds(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> int:
+        return max(0, int((end_time - start_time).total_seconds()))
 
     # ------------------------------------------------------------------
     # Seal logic
