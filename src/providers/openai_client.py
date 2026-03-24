@@ -23,6 +23,12 @@ class OpenAIClient:
         self.timeout = timeout
         self.last_usage: dict[str, int] | None = None
 
+    def _build_default_request_extras(self) -> dict[str, Any]:
+        model_name = self.model_name.strip().lower()
+        if "qwen" in model_name:
+            return {"chat_template_kwargs": {"enable_thinking": False}}
+        return {}
+
     def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -33,6 +39,7 @@ class OpenAIClient:
         url = f"{self.api_base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"model": self.model_name, "messages": messages, "temperature": temperature}
+        payload.update(self._build_default_request_extras())
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if response_format is not None:
