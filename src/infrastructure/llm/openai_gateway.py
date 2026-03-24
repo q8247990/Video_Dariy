@@ -25,6 +25,9 @@ class OpenAICompatGateway(LLMGatewayPort):
     def get_last_usage(self) -> Optional[dict[str, int]]:
         return self.client.last_usage
 
+    def get_last_raw_response_text(self) -> Optional[str]:
+        return self.client.last_raw_response_text
+
 
 class OpenAICompatGatewayFactory(LLMGatewayFactoryPort):
     def build(

@@ -89,6 +89,9 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
         def get_last_usage(self):
             return None
 
+        def get_last_raw_response_text(self):
+            return '{"choices":[{"message":{"content":null,"reasoning":"debug"}}]}'
+
     monkeypatch.setattr("src.tasks.analyzer.SessionLocal", session_factory)
     monkeypatch.setattr(
         "src.tasks.analyzer.build_session_video_chunks",
@@ -107,13 +110,13 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
     )
     monkeypatch.setattr(
         "src.tasks.analyzer._build_provider_client",
-        lambda db: (_FakeClient(), SimpleNamespace(id=1)),
+        lambda db: (_FakeClient(), SimpleNamespace(id=1, provider_name="mock-provider")),
     )
     monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
     monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
     monkeypatch.setattr(
         "src.tasks.analyzer.record_token_usage",
-        lambda db, provider_id, scene, usage: None,
+        lambda db, provider_id, provider_name_snapshot, scene, usage: None,
     )
 
 
@@ -237,6 +240,30 @@ def test_analyze_session_failure_keeps_old_events(monkeypatch) -> None:
         assert session.analysis_status == "failed"
     finally:
         verify_db.close()
+
+
+def test_analyze_session_failure_logs_prompt_and_raw_response(monkeypatch, caplog) -> None:
+    session_factory = _new_session_factory()
+    db = session_factory()
+    try:
+        source_id, session_id = _seed_source_and_session(db)
+        _seed_old_event(db, source_id, session_id, description="keep me")
+        db.commit()
+    finally:
+        db.close()
+
+    _mock_common(monkeypatch, session_factory)
+    monkeypatch.setattr("src.tasks.analyzer._build_prompt", lambda *args: "final prompt text")
+    monkeypatch.setattr(
+        "src.tasks.analyzer.parse_video_recognition_output",
+        lambda response_text: (_ for _ in ()).throw(RuntimeError("parse failed")),
+    )
+
+    with pytest.raises(RuntimeError):
+        analyze_session_task.run(session_id=session_id)
+
+    assert "final prompt text" in caplog.text
+    assert '"reasoning":"debug"' in caplog.text
 
 
 def test_analyze_session_deadlock_retries_with_exponential_backoff(monkeypatch) -> None:

@@ -49,7 +49,7 @@ def test_parse_video_recognition_output_success() -> None:
     assert result.events[0].event_type == "member_appear"
 
 
-def test_parse_video_recognition_output_invalid_event_type() -> None:
+def test_parse_video_recognition_output_invalid_event_type_falls_back_to_other() -> None:
     raw_text = """
     {
       "session_summary": {
@@ -77,5 +77,38 @@ def test_parse_video_recognition_output_invalid_event_type() -> None:
     }
     """
 
-    with pytest.raises(RecognitionOutputValidationError):
+    result = parse_video_recognition_output(raw_text)
+
+    assert result.events[0].event_type == "other"
+
+
+def test_parse_video_recognition_output_invalid_importance_level_still_fails() -> None:
+    raw_text = """
+    {
+      "session_summary": {
+        "summary_text": "无",
+        "activity_level": "low",
+        "main_subjects": [],
+        "has_important_event": false
+      },
+      "events": [
+        {
+          "offset_start_sec": 0,
+          "offset_end_sec": 1,
+          "event_type": "pet_activity",
+          "title": "test",
+          "summary": "test",
+          "detail": "test detail",
+          "related_entities": [],
+          "observed_actions": [],
+          "interpreted_state": [],
+          "confidence": 0.8,
+          "importance_level": "urgent"
+        }
+      ],
+      "analysis_notes": []
+    }
+    """
+
+    with pytest.raises(RecognitionOutputValidationError, match="importance_level"):
         parse_video_recognition_output(raw_text)

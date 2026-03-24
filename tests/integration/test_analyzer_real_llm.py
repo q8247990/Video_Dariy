@@ -120,7 +120,7 @@ def test_real_llm_recognition_with_memory_chunk(tmp_path: Path) -> None:
             }
         ],
         temperature=0,
-        max_tokens=4096,
+        max_tokens=8192,
     )
 
     assert response_text

@@ -12,6 +12,8 @@ class LLMGatewayPort(Protocol):
 
     def get_last_usage(self) -> Optional[dict[str, int]]: ...
 
+    def get_last_raw_response_text(self) -> Optional[str]: ...
+
 
 class LLMGatewayFactoryPort(Protocol):
     def build(

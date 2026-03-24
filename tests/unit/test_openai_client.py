@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from src.providers.openai_client import OpenAIClient
@@ -6,6 +7,7 @@ from src.providers.openai_client import OpenAIClient
 class _DummyResponse:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
+        self.text = json.dumps(payload)
 
     def raise_for_status(self) -> None:
         return None
@@ -54,6 +56,8 @@ def test_qwen_model_adds_disable_thinking_payload(monkeypatch) -> None:
     response_text = client.chat_completion(messages=[{"role": "user", "content": "hi"}])
 
     assert response_text == "pong"
+    assert client.last_raw_response_text is not None
+    assert '"content": "pong"' in client.last_raw_response_text
     assert recorded_requests[0]["json"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 

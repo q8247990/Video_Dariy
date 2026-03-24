@@ -68,6 +68,15 @@ def _truncate_task_message(value: str, max_length: int = 500) -> str:
     return f"{text[: max_length - 3]}..."
 
 
+def _truncate_prompt_text(value: str | None, max_length: int = 4000) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3]}..."
+
+
 def _truncate_response_excerpt(value: str | None, max_length: int = 1500) -> str | None:
     if value is None:
         return None
@@ -329,7 +338,9 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
     db: Session = SessionLocal()
     session = None
     last_chunk_index: int | None = None
+    last_prompt_text: str | None = None
     last_response_text: str | None = None
+    last_raw_response_text: str | None = None
     queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
     task_log = bind_or_create_running_task_log(
         db,
@@ -374,6 +385,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             last_chunk_index = chunk.chunk_index
             video_data_url = build_chunk_video_data_url(chunk)
             prompt = _build_prompt(source, home_context, session, chunk)
+            last_prompt_text = prompt
             enforce_token_quota(db, provider)
 
             response_text = client.chat_completion(
@@ -387,10 +399,11 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                     }
                 ],
                 temperature=0,
-                max_tokens=4096,
+                max_tokens=8192,
                 response_format={"type": "json_object"},
             )
             last_response_text = response_text
+            last_raw_response_text = client.get_last_raw_response_text()
             record_token_usage(
                 db,
                 provider_id=provider.id,
@@ -477,7 +490,14 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
         }
 
     except Exception as e:
-        logger.exception("Failed to analyze session %s", session_id)
+        logger.exception(
+            "Failed to analyze session %s, chunk=%s, prompt=%r, raw_response=%r",
+            session_id,
+            last_chunk_index,
+            _truncate_prompt_text(last_prompt_text),
+            _truncate_response_full(last_raw_response_text)
+            or _truncate_response_full(last_response_text),
+        )
         db.rollback()
 
         if _is_deadlock_operational_error(e) and self.request.retries < DEADLOCK_MAX_RETRIES:
@@ -499,8 +519,11 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 "session_id": session_id,
                 "failed_chunk_index": last_chunk_index,
                 "error_type": type(e).__name__,
+                "prompt_text": _truncate_prompt_text(last_prompt_text),
                 "raw_response_excerpt": _truncate_response_excerpt(last_response_text),
                 "raw_response_full": _truncate_response_full(last_response_text),
+                "raw_llm_response_excerpt": _truncate_response_excerpt(last_raw_response_text),
+                "raw_llm_response_full": _truncate_response_full(last_raw_response_text),
                 "priority": priority,
             },
         )

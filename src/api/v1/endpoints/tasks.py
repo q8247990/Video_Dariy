@@ -152,6 +152,13 @@ def retry_task_log(db: DB, current_user: CurrentUser, id: int) -> Any:  # noqa: 
             if session.analysis_status == SessionAnalysisStatus.OPEN:
                 return BaseResponse(code=4004, message="Session is open and cannot be analyzed yet")
 
+            if session.analysis_status in (
+                SessionAnalysisStatus.FAILED,
+                SessionAnalysisStatus.SUCCESS,
+            ):
+                session.analysis_status = SessionAnalysisStatus.SEALED
+                db.commit()
+
             priority = str(detail.get("priority") or session.analysis_priority or "hot")
             task_id = _pipeline_orchestrator.dispatch_analyze_session(
                 AnalyzeSessionCommand(session_id=row.task_target_id, priority=priority)

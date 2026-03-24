@@ -330,7 +330,7 @@ def _parse_summary_with_retry(
             {"role": "user", "content": retry_prompt},
         ],
         temperature=0,
-        max_tokens=4096,
+        max_tokens=8192,
     )
     parsed = parse_daily_summary_output(retry_text or "")
     return (
@@ -373,7 +373,7 @@ def _chat_completion_with_usage(
     text = client.chat_completion(
         messages,
         temperature=0,
-        max_tokens=4096,
+        max_tokens=8192,
     )
     record_token_usage(
         db,

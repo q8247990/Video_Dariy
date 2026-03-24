@@ -2,6 +2,11 @@ import json
 
 from pydantic import ValidationError
 
+from src.services.video_analysis.enums import (
+    normalize_activity_level,
+    normalize_analysis_note_type,
+    normalize_event_type,
+)
 from src.services.video_analysis.schemas import RecognitionResultDTO
 
 
@@ -30,32 +35,25 @@ def _strip_code_block(text: str) -> str:
 
 def _extract_json_object(text: str) -> dict:
     decoder = json.JSONDecoder()
-    for idx, ch in enumerate(text):
-        if ch != "{":
-            continue
-        try:
-            result, _ = decoder.raw_decode(text[idx:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(result, dict):
-            return result
+    stripped = text.lstrip()
+    if not stripped.startswith("{"):
+        raise RecognitionOutputFormatError("LLM response does not start with a JSON object")
 
-    raise RecognitionOutputFormatError("LLM response does not contain valid JSON object")
+    try:
+        result, end_index = decoder.raw_decode(stripped)
+    except json.JSONDecodeError as exc:
+        raise RecognitionOutputFormatError(
+            "LLM response does not contain a complete top-level JSON object"
+        ) from exc
 
+    if not isinstance(result, dict):
+        raise RecognitionOutputFormatError("LLM response top-level JSON must be an object")
 
-def _extract_all_json_objects(text: str) -> list[dict]:
-    decoder = json.JSONDecoder()
-    objects: list[dict] = []
-    for idx, ch in enumerate(text):
-        if ch != "{":
-            continue
-        try:
-            result, _ = decoder.raw_decode(text[idx:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(result, dict):
-            objects.append(result)
-    return objects
+    trailing = stripped[end_index:].strip()
+    if trailing:
+        raise RecognitionOutputFormatError("LLM response contains unexpected trailing content")
+
+    return result
 
 
 def _looks_like_session_summary(payload: dict) -> bool:
@@ -102,20 +100,56 @@ def _normalize_recognition_payload(payload: dict) -> list[dict]:
     return [item for item in candidates if isinstance(item, dict)]
 
 
+def _sanitize_recognition_payload(payload: dict) -> dict:
+    sanitized = dict(payload)
+
+    events = sanitized.get("events")
+    if not isinstance(events, list):
+        events = []
+    sanitized_events: list[dict] = []
+    for item in events:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        normalized["event_type"] = normalize_event_type(item.get("event_type"))
+        sanitized_events.append(normalized)
+    sanitized["events"] = sanitized_events
+
+    summary = sanitized.get("session_summary")
+    if isinstance(summary, dict):
+        normalized_summary = dict(summary)
+        normalized_summary["activity_level"] = normalize_activity_level(
+            summary.get("activity_level"),
+            has_events=bool(sanitized_events),
+        )
+        sanitized["session_summary"] = normalized_summary
+
+    notes = sanitized.get("analysis_notes")
+    if not isinstance(notes, list):
+        notes = []
+    sanitized_notes: list[dict] = []
+    for item in notes:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        normalized["type"] = normalize_analysis_note_type(item.get("type"))
+        sanitized_notes.append(normalized)
+    sanitized["analysis_notes"] = sanitized_notes
+
+    return sanitized
+
+
 def parse_video_recognition_output(raw_text: str) -> RecognitionResultDTO:
     text = _strip_code_block(raw_text)
-    raw_candidates = _extract_all_json_objects(text)
-    if not raw_candidates:
-        raw_candidates = [_extract_json_object(text)]
+    raw_payload = _extract_json_object(text)
 
     validation_errors: list[str] = []
-    for raw_payload in raw_candidates:
-        for payload in _normalize_recognition_payload(raw_payload):
-            try:
-                return RecognitionResultDTO.model_validate(payload)
-            except ValidationError as e:
-                validation_errors.append(str(e))
-                continue
+    for payload in _normalize_recognition_payload(raw_payload):
+        try:
+            return RecognitionResultDTO.model_validate(_sanitize_recognition_payload(payload))
+        except ValidationError as e:
+            validation_errors.append(str(e))
+            continue
 
-    merged_error = validation_errors[-1] if validation_errors else "unknown validation error"
+    merged_error = validation_errors[0] if validation_errors else "unknown validation error"
     raise RecognitionOutputValidationError(f"Recognition output validation failed: {merged_error}")

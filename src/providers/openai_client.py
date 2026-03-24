@@ -22,6 +22,7 @@ class OpenAIClient:
         self.model_name = model_name
         self.timeout = timeout
         self.last_usage: dict[str, int] | None = None
+        self.last_raw_response_text: str | None = None
 
     def _build_default_request_extras(self) -> dict[str, Any]:
         model_name = self.model_name.strip().lower()
@@ -48,6 +49,7 @@ class OpenAIClient:
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(url, headers=headers, json=payload)
+                self.last_raw_response_text = response.text
                 response.raise_for_status()
                 data = response.json()
                 usage = data.get("usage")

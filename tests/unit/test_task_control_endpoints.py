@@ -122,6 +122,56 @@ def test_retry_task_log_rejects_duplicate_running(monkeypatch) -> None:
         db.close()
 
 
+def test_retry_analysis_task_resets_failed_session_to_sealed(monkeypatch) -> None:
+    db = _new_db_session()
+    try:
+        source = VideoSource(
+            source_name="客厅",
+            camera_name="cam3",
+            location_name="客厅",
+            source_type="local_directory",
+            config_json={"root_path": "/tmp"},
+            enabled=True,
+            last_validate_status="success",
+        )
+        db.add(source)
+        db.flush()
+
+        session = VideoSession(
+            source_id=source.id,
+            session_start_time=datetime(2026, 3, 16, 12, 0, 0),
+            session_end_time=datetime(2026, 3, 16, 12, 5, 0),
+            total_duration_seconds=300,
+            analysis_status=SessionAnalysisStatus.FAILED,
+            analysis_priority="full",
+        )
+        db.add(session)
+        db.flush()
+
+        failed = TaskLog(
+            task_type=TaskType.SESSION_ANALYSIS,
+            task_target_id=session.id,
+            status=TaskStatus.FAILED,
+            detail_json={"priority": "full"},
+        )
+        db.add(failed)
+        db.commit()
+
+        monkeypatch.setattr(
+            "src.api.v1.endpoints.tasks._pipeline_orchestrator.dispatch_analyze_session",
+            lambda command: "analysis-task-1",
+        )
+
+        resp = retry_task_log(db=db, current_user=_current_user(), id=failed.id)
+
+        assert resp.code == 0
+        assert resp.data["task_id"] == "analysis-task-1"
+        db.refresh(session)
+        assert session.analysis_status == SessionAnalysisStatus.SEALED
+    finally:
+        db.close()
+
+
 def test_delete_task_log_blocks_running_and_allows_finished() -> None:
     db = _new_db_session()
     try:
