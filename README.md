@@ -3,13 +3,22 @@
 这是一个面向家庭场景的离线监控视频分析系统。项目以 NAS/目录中的摄像头录像为输入，自动完成视频扫描、会话合并、AI 事件识别、家庭日报生成，并提供 Web 管理后台、自然语言问答、Webhook 与 MCP 对外能力。
 对接LLM可自由选择，推荐本地搭建多模态大模型，开发者本地环境是3090ti，vllm部署。推荐模型：
 
-1. [MiniCPM-v4.5 int4量化](https://modelscope.cn/models/OpenBMB/MiniCPM-V-4_5-int4)
+1. [MiniCPM-v 4.5 int4量化](https://modelscope.cn/models/OpenBMB/MiniCPM-V-4_5-int4)
 2. [MiniCPM-o 4.5 int4量化](https://modelscope.cn/models/OpenBMB/MiniCPM-o-4_5-awq)
+3. [qwen3.5-9b](https://modelscope.cn/models/Qwen/Qwen3.5-9B)
+
+已知对接公网大模型限制：
+
+- 调用百炼平台时，上传超过1分钟视频需要使用公网可访问url进行上传，目前不支持。
+
+本地部署注意：
+
+- ollama不支持video参数，可以不用尝试了。
 
 ## 项目能做什么
 
 - 自动扫描视频目录，识别新增录像并去重入库
-- 将连续视频片段合并为可理解的 `Session`
+- 将连续视频片段合并为可理解的 `Session`（事件）
 - 调用兼容 OpenAI 接口的视觉模型识别关键事件并落库
 - 生成按天汇总的家庭日报，提炼重点对象与关注事项
 - 提供自然语言问答能力，支持围绕事件、会话、日报检索回答
