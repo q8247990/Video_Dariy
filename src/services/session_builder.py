@@ -175,18 +175,18 @@ class SessionBuilder:
         record: dict,
         file_hash: str,
     ) -> Optional[VideoFile]:
-        video_file = VideoFile(
-            source_id=source_id,
-            file_path_hash=file_hash,
-            parse_status="parsed",
-            **record,
-        )
-        db.add(video_file)
         try:
-            db.flush()
+            with db.begin_nested():
+                video_file = VideoFile(
+                    source_id=source_id,
+                    file_path_hash=file_hash,
+                    parse_status="parsed",
+                    **record,
+                )
+                db.add(video_file)
+                db.flush()
             return video_file
         except IntegrityError:
-            db.rollback()
             return None
 
     # ------------------------------------------------------------------

@@ -70,6 +70,11 @@ def _compute_hot_scan_start(db: Session, source_id: int, now: datetime) -> datet
     return max(window_start, latest_end)
 
 
+def _compute_full_scan_end(now: datetime) -> datetime:
+    """Full scan end uses a stable hot boundary fixed at task start."""
+    return now - timedelta(hours=HOT_WINDOW_HOURS)
+
+
 def _dispatch_analysis_for_sealed(
     sealed_sessions: list,
 ) -> list[dict]:
@@ -242,11 +247,11 @@ def full_build_task(self, source_id: int) -> dict:
             return {"skipped": True, "reason": "no_directories"}
 
         now = datetime.now()
-        hot_start = _compute_hot_scan_start(db, source_id, now)
+        hot_boundary = _compute_full_scan_end(now)
 
         # Full scans from earliest to hot boundary
         scan_start = earliest_folder_time - timedelta(hours=1)
-        scan_end = hot_start
+        scan_end = hot_boundary
 
         if scan_start >= scan_end:
             finalize_task_log(
