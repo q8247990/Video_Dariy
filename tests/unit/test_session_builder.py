@@ -199,3 +199,86 @@ def test_build_keeps_prior_results_when_later_file_conflicts(monkeypatch) -> Non
         assert sessions[1].session_start_time == records[1]["start_time"]
     finally:
         db.close()
+
+
+def test_build_does_not_merge_older_files_into_latest_open_session(monkeypatch) -> None:
+    db = _new_db_session()
+    try:
+        latest_start = datetime(2026, 3, 25, 19, 29, 29)
+        latest_end = latest_start + timedelta(seconds=60)
+        open_session = VideoSession(
+            source_id=1,
+            session_start_time=latest_start,
+            session_end_time=latest_end,
+            total_duration_seconds=60,
+            analysis_status=SessionAnalysisStatus.OPEN,
+            analysis_priority="hot",
+        )
+        db.add(open_session)
+        db.flush()
+
+        latest_file = VideoFile(
+            source_id=1,
+            file_name="latest.mp4",
+            file_path="/tmp/latest.mp4",
+            file_path_hash=build_file_path_hash("/tmp/latest.mp4"),
+            start_time=latest_start,
+            end_time=latest_end,
+            duration_seconds=60,
+            file_size=1024,
+            file_format="mp4",
+            storage_type="local_file",
+            parse_status="parsed",
+        )
+        db.add(latest_file)
+        db.flush()
+        db.add(
+            VideoSessionFileRel(
+                session_id=open_session.id,
+                video_file_id=latest_file.id,
+                sort_index=0,
+            )
+        )
+        db.commit()
+
+        historical_records = [
+            _record(datetime(2025, 10, 12, 1, 33, 6), "old-a"),
+            _record(datetime(2025, 10, 12, 1, 47, 48), "old-b"),
+        ]
+
+        monkeypatch.setattr(
+            "src.services.session_builder.XiaomiDirectoryParser.scan_directory",
+            lambda self, min_time=None, max_time=None, cancel_check=None: historical_records,
+        )
+
+        result = SessionBuilder().build(
+            db,
+            source_id=1,
+            root_path="/tmp/videos",
+            scan_mode=ScanMode.FULL,
+            scan_start=datetime(2025, 10, 12, 0, 0, 0),
+            scan_end=datetime(2026, 3, 24, 0, 0, 0),
+        )
+        db.commit()
+
+        sessions = db.query(VideoSession).order_by(VideoSession.id.asc()).all()
+        open_session_rels = (
+            db.query(VideoSessionFileRel)
+            .filter(VideoSessionFileRel.session_id == open_session.id)
+            .order_by(VideoSessionFileRel.sort_index.asc())
+            .all()
+        )
+
+        assert result.files_inserted == 2
+        assert result.sessions_created == 2
+        assert len(sessions) == 3
+        assert len(open_session_rels) == 1
+        assert sessions[0].id == open_session.id
+        assert sessions[0].session_start_time == latest_start
+        assert sessions[0].session_end_time == latest_end
+        assert sessions[1].session_start_time == historical_records[0]["start_time"]
+        assert sessions[1].session_end_time == historical_records[0]["end_time"]
+        assert sessions[2].session_start_time == historical_records[1]["start_time"]
+        assert sessions[2].session_end_time == historical_records[1]["end_time"]
+    finally:
+        db.close()

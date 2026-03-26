@@ -120,7 +120,7 @@ class SessionBuilder:
             # Merge into session
             if current_session is not None:
                 gap = (video_file.start_time - current_session.session_end_time).total_seconds()
-                if gap <= MERGE_GAP_SECONDS:
+                if 0 <= gap <= MERGE_GAP_SECONDS:
                     self._append_file_to_session(db, current_session, video_file, next_sort_index)
                     next_sort_index += 1
                     result.sessions_updated += 1
