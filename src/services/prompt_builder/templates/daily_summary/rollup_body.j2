@@ -1,0 +1,18 @@
+汇总任务：
+日期={{ summary_date }}，基于对象摘要生成日报总览与关注事项。
+对象摘要：
+{% if not subject_results %}
+- 无对象摘要
+{% endif %}
+{% for row in subject_results %}
+- {{ "%02d" | format(loop.index) }}. 对象={{ row.subject_name }}({{ row.subject_type }}) 活动度={{ row.activity_score | default(0, true) }} 关注={{ row.attention_needed }} 摘要={{ row.summary }}
+{% endfor %}
+关注候选：
+{% if not attention_candidates %}
+- 无关注候选
+{% endif %}
+{% for item in attention_candidates %}
+- {{ "%02d" | format(loop.index) }}. [{{ item.importance_level | default("unknown", true) }}] 类型={{ item.event_type }} 次数={{ item.occurrence_count }} 标题={{ item.title }} 摘要={{ item.summary }}
+{% endfor %}
+写作要求：1) 必须保留所有对象，且按活动度从高到低排序；2) overall_summary 120~180 字；3) 每个对象摘要 50~90 字；4) 全文控制在 500~900 字；5) 禁止省略号和半句。
+请仅输出 JSON：{"overall_summary":"...","attention_items":[{"title":"...","summary":"...","level":"low|medium|high"}]}，不要输出其他内容。

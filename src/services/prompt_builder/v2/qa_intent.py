@@ -1,10 +1,9 @@
-import json
+"""v2: QA 意图识别 prompt 构建器（Jinja2 模板版）。"""
+
 from datetime import datetime
 from typing import Any
 
-from src.services.prompt_builder.templates.qa_intent.system_rules import (
-    SYSTEM_QA_INTENT_RULES_PROMPT,
-)
+from src.services.prompt_builder.engine import render_template
 
 EVENT_TYPE_DEFINITIONS: list[dict[str, str]] = [
     {"type": "member_appear", "desc": "家庭成员出现在画面中"},
@@ -46,52 +45,20 @@ QUERY_PLAN_SCHEMA = {
 }
 
 
-def _build_home_context_section(home_context: dict[str, Any]) -> tuple[str, list[str]]:
-    home_profile = home_context.get("home_profile", {})
+def _extract_subject_names(home_context: dict[str, Any]) -> list[str]:
+    """从家庭上下文中提取已知主体名称列表。"""
     members = home_context.get("members", [])
     pets = home_context.get("pets", [])
-
     subject_names: list[str] = []
-    member_lines: list[str] = []
     for item in members:
         name = item.get("name", "")
-        role = item.get("role_type", "")
-        member_lines.append(f"- {name}（{role}）")
         if name:
             subject_names.append(name)
-
-    pet_lines: list[str] = []
     for item in pets:
         name = item.get("name", "")
-        role = item.get("role_type", "")
-        pet_lines.append(f"- {name}（{role}）")
         if name:
             subject_names.append(name)
-
-    lines = [
-        "家庭上下文：",
-        f"家庭名称: {home_profile.get('home_name', '')}",
-        f"关注重点: {'、'.join(home_profile.get('focus_points', [])) or '无'}",
-        "家庭成员:",
-        *(member_lines if member_lines else ["- 无"]),
-        "宠物:",
-        *(pet_lines if pet_lines else ["- 无"]),
-    ]
-    return "\n".join(lines), subject_names
-
-
-def _build_event_type_section() -> str:
-    lines = ["事件类型说明："]
-    for item in EVENT_TYPE_DEFINITIONS:
-        lines.append(f"- {item['type']}: {item['desc']}")
-    return "\n".join(lines)
-
-
-def _build_question_mode_section() -> str:
-    lines = ["问答模式说明："]
-    for item in QUESTION_MODE_DEFINITIONS:
-        lines.append(f"- {item['mode']}: {item['desc']}")
-    return "\n".join(lines)
+    return subject_names
 
 
 def build_qa_intent_prompt(
@@ -100,28 +67,26 @@ def build_qa_intent_prompt(
     timezone: str,
     home_context: dict[str, Any],
 ) -> tuple[str, str]:
-    """构建意图识别 prompt。
+    """构建意图识别 prompt。返回 (system_prompt, user_prompt)。"""
+    home_profile = home_context.get("home_profile", {})
+    members = home_context.get("members", [])
+    pets = home_context.get("pets", [])
+    subject_names = _extract_subject_names(home_context)
 
-    Returns:
-        (system_prompt, user_prompt)
-    """
-    home_section, subject_names = _build_home_context_section(home_context)
-    event_type_section = _build_event_type_section()
-    question_mode_section = _build_question_mode_section()
+    system_prompt = render_template("qa_intent/system_rules.j2")
 
-    schema_text = json.dumps(QUERY_PLAN_SCHEMA, ensure_ascii=False, indent=2)
-
-    user_prompt = "\n\n".join(
-        [
-            f"当前时间: {now.isoformat()}",
-            f"时区: {timezone}",
-            home_section,
-            f"已知主体列表: {', '.join(subject_names) if subject_names else '无'}",
-            event_type_section,
-            question_mode_section,
-            f"输出 schema（严格遵守）:\n{schema_text}",
-            f"用户问题: {question}",
-        ]
+    user_prompt = render_template(
+        "qa_intent/user.j2",
+        now_iso=now.isoformat(),
+        timezone=timezone,
+        home_profile=home_profile,
+        members=members,
+        pets=pets,
+        subject_names=subject_names,
+        event_type_definitions=EVENT_TYPE_DEFINITIONS,
+        question_mode_definitions=QUESTION_MODE_DEFINITIONS,
+        query_plan_schema=QUERY_PLAN_SCHEMA,
+        question=question,
     )
 
-    return SYSTEM_QA_INTENT_RULES_PROMPT, user_prompt
+    return system_prompt, user_prompt

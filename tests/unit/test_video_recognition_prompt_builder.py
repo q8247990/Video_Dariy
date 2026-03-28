@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from src.models.video_source import VideoSource
-from src.services.prompt_builder.video_recognition import (
+from src.services.prompt_builder.v2.video_recognition import (
     build_strategy_note,
     build_video_recognition_prompt,
 )

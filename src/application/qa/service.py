@@ -24,8 +24,8 @@ from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.chat_query_log import ChatQueryLog
 from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
-from src.services.prompt_builder.qa_answer import build_qa_answer_prompt
-from src.services.prompt_builder.qa_intent import build_qa_intent_prompt
+from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
+from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
 from src.services.provider_selector import PROVIDER_TYPE_QA, find_enabled_provider
 
 logger = logging.getLogger(__name__)
