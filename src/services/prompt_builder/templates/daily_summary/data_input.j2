@@ -1,0 +1,19 @@
+数据输入（紧凑版）：
+对象聚合摘要：
+{% if not compressed_subject_sections %}
+- 无对象事件摘要
+{% endif %}
+{% for section in compressed_subject_sections %}
+- 对象={{ section.subject_name }}({{ section.subject_type }}) | 原始命中={{ section.raw_event_count }} | 聚合簇={{ section.clusters | length }}
+{% for cluster in section.clusters %}
+  {{ "%02d" | format(loop.index) }}. [{{ cluster.importance_level or "unknown" }}] 类型={{ cluster.event_type }} 次数={{ cluster.occurrence_count }} 识别={{ cluster.recognition_status }} 标题={{ cluster.title }} 摘要={{ cluster.summary }}
+{% endfor %}
+{% endfor %}
+未命中对象：{{ missing_subjects | join("、") if missing_subjects else "无" }}
+关注候选摘要：
+{% if not compressed_attention_candidates %}
+- 无关注候选
+{% endif %}
+{% for item in compressed_attention_candidates %}
+- {{ "%02d" | format(loop.index) }}. [{{ item.importance_level or "unknown" }}] 类型={{ item.event_type }} 次数={{ item.occurrence_count }} 标题={{ item.title }} 摘要={{ item.summary }}
+{% endfor %}

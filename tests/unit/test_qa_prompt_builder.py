@@ -1,8 +1,8 @@
 from datetime import datetime
 
 from src.application.qa.schemas import CompressedEvidence, QueryPlan, TimeRange
-from src.services.prompt_builder.qa_answer import build_qa_answer_prompt
-from src.services.prompt_builder.qa_intent import build_qa_intent_prompt
+from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
+from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
 
 # ---------------------------------------------------------------------------
 # qa_intent prompt builder

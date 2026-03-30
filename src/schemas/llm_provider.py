@@ -14,6 +14,7 @@ class LLMProviderBase(BaseModel):
     enabled: bool = True
     supports_vision: bool = False
     supports_qa: bool = True
+    supports_tool_calling: bool = False
     is_default_vision: bool = False
     is_default_qa: bool = False
 

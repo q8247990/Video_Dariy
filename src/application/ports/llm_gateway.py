@@ -2,6 +2,8 @@ from typing import Any, Optional, Protocol
 
 
 class LLMGatewayPort(Protocol):
+    supports_tool_calling: bool
+
     def chat_completion(
         self,
         messages: list[dict[str, Any]],
@@ -9,6 +11,14 @@ class LLMGatewayPort(Protocol):
         max_tokens: Optional[int] = None,
         response_format: Optional[dict[str, Any]] = None,
     ) -> Optional[str]: ...
+
+    def chat_completion_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]: ...
 
     def get_last_usage(self) -> Optional[dict[str, int]]: ...
 
@@ -23,4 +33,5 @@ class LLMGatewayFactoryPort(Protocol):
         api_key: str,
         model_name: str,
         timeout_seconds: int,
+        supports_tool_calling: bool = False,
     ) -> LLMGatewayPort: ...

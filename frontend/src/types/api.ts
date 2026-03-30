@@ -74,6 +74,7 @@ export type Provider = {
   enabled: boolean
   supports_vision: boolean
   supports_qa: boolean
+  supports_tool_calling: boolean
   is_default_vision: boolean
   is_default_qa: boolean
   availability_status: 'available' | 'degraded' | 'unavailable' | 'unknown' | string
@@ -112,6 +113,7 @@ export type ProviderCreate = {
   enabled: boolean
   supports_vision: boolean
   supports_qa: boolean
+  supports_tool_calling: boolean
   is_default_vision: boolean
   is_default_qa: boolean
 }
@@ -127,6 +129,7 @@ export type ProviderUpdate = {
   enabled?: boolean
   supports_vision?: boolean
   supports_qa?: boolean
+  supports_tool_calling?: boolean
   is_default_vision?: boolean
   is_default_qa?: boolean
 }

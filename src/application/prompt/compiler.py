@@ -4,10 +4,10 @@ from src.application.prompt.contracts import (
     QAIntentPromptInput,
     VideoRecognitionPromptInput,
 )
-from src.services.prompt_builder.daily_summary import build_daily_summary_prompt
-from src.services.prompt_builder.qa_answer import build_qa_answer_prompt
-from src.services.prompt_builder.qa_intent import build_qa_intent_prompt
-from src.services.prompt_builder.video_recognition import build_video_recognition_prompt
+from src.services.prompt_builder.v2.daily_summary import build_daily_summary_prompt
+from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
+from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
+from src.services.prompt_builder.v2.video_recognition import build_video_recognition_prompt
 
 
 def compile_video_recognition_prompt(input_data: VideoRecognitionPromptInput) -> str:

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Provider, ProviderCreate, ProviderUpdate } from '../../types/api'
+import { testProvider } from './api'
+import type { TestProviderResult } from './api'
 
 type ProviderFormProps = {
   initialValue?: Provider
@@ -19,6 +21,7 @@ type FormState = {
   enabled: boolean
   supports_vision: boolean
   supports_qa: boolean
+  supports_tool_calling: boolean
 }
 
 function getInitialState(initialValue?: Provider): FormState {
@@ -32,6 +35,7 @@ function getInitialState(initialValue?: Provider): FormState {
     enabled: initialValue?.enabled ?? true,
     supports_vision: initialValue?.supports_vision ?? false,
     supports_qa: initialValue?.supports_qa ?? true,
+    supports_tool_calling: initialValue?.supports_tool_calling ?? false,
   }
 }
 
@@ -42,8 +46,33 @@ export function ProviderForm({
   onSubmit,
 }: ProviderFormProps) {
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<TestProviderResult | null>(null)
+  const [testError, setTestError] = useState<string | null>(null)
   const submitLabel = useMemo(() => (initialValue ? '保存修改' : '创建 Provider'), [initialValue])
   const capabilityError = !form.supports_vision && !form.supports_qa
+
+  const handleTest = async () => {
+    if (!initialValue) return
+    setTesting(true)
+    setTestResult(null)
+    setTestError(null)
+    try {
+      const result = await testProvider(initialValue.id)
+      setTestResult(result)
+      if (result.success) {
+        setForm((old) => ({
+          ...old,
+          supports_vision: result.supports_vision,
+          supports_tool_calling: result.supports_tool_calling,
+        }))
+      }
+    } catch (e: unknown) {
+      setTestError(e instanceof Error ? e.message : '测试请求失败')
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -57,6 +86,7 @@ export function ProviderForm({
         enabled: form.enabled,
         supports_vision: form.supports_vision,
         supports_qa: form.supports_qa,
+        supports_tool_calling: form.supports_tool_calling,
       }
       if (form.api_key.trim()) {
         payload.api_key = form.api_key.trim()
@@ -76,6 +106,7 @@ export function ProviderForm({
       enabled: form.enabled,
       supports_vision: form.supports_vision,
       supports_qa: form.supports_qa,
+      supports_tool_calling: form.supports_tool_calling,
       is_default_vision: false,
       is_default_qa: false,
     }
@@ -119,6 +150,18 @@ export function ProviderForm({
             }
           >
             问答能力
+          </button>
+          <button
+            type="button"
+            className={form.supports_tool_calling ? 'capability-btn capability-btn-active' : 'capability-btn'}
+            onClick={() =>
+              setForm((old) => ({
+                ...old,
+                supports_tool_calling: !old.supports_tool_calling,
+              }))
+            }
+          >
+            工具调用
           </button>
         </div>
       </label>
@@ -186,6 +229,33 @@ export function ProviderForm({
         />
         启用该 Provider
       </label>
+
+      {initialValue ? (
+        <div className="test-section">
+          <button
+            type="button"
+            className="ghost"
+            disabled={testing}
+            onClick={handleTest}
+          >
+            {testing ? '检测中...' : '测试能力'}
+          </button>
+          {testResult ? (
+            <div className={testResult.success ? 'test-result test-result-success' : 'test-result test-result-fail'}>
+              <span>连通性: {testResult.success ? 'OK' : '失败'}</span>
+              {testResult.success ? (
+                <>
+                  <span>视觉: {testResult.supports_vision ? 'OK' : '不支持'}</span>
+                  <span>工具调用: {testResult.supports_tool_calling ? 'OK' : '不支持'}</span>
+                </>
+              ) : null}
+              <span className="test-result-message">{testResult.message}</span>
+            </div>
+          ) : null}
+          {testError ? <div className="api-error">{testError}</div> : null}
+        </div>
+      ) : null}
+
       <div className="dialog-actions">
         <button type="button" className="ghost" onClick={onCancel}>
           取消

@@ -1,0 +1,40 @@
+当前时间: {{ now_iso }}
+
+时区: {{ timezone }}
+
+家庭上下文：
+家庭名称: {{ home_profile.home_name | default("", true) }}
+关注重点: {{ home_profile.focus_points | default([], true) | compact_list }}
+家庭成员:
+{% if members %}
+{% for m in members %}
+- {{ m.name | default("", true) }}（{{ m.role_type | default("", true) }}）
+{% endfor %}
+{% else %}
+- 无
+{% endif %}
+宠物:
+{% if pets %}
+{% for p in pets %}
+- {{ p.name | default("", true) }}（{{ p.role_type | default("", true) }}）
+{% endfor %}
+{% else %}
+- 无
+{% endif %}
+
+已知主体列表: {{ subject_names | join(", ") if subject_names else "无" }}
+
+事件类型说明：
+{% for item in event_type_definitions %}
+- {{ item.type }}: {{ item.desc }}
+{% endfor %}
+
+问答模式说明：
+{% for item in question_mode_definitions %}
+- {{ item.mode }}: {{ item.desc }}
+{% endfor %}
+
+输出 schema（严格遵守）:
+{{ query_plan_schema | to_json }}
+
+用户问题: {{ question }}

@@ -35,7 +35,7 @@ from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.onboarding import DEFAULT_DAILY_SUMMARY_SCHEDULE
 from src.services.pipeline_constants import TaskStatus, TaskType
-from src.services.prompt_builder.daily_summary import (
+from src.services.prompt_builder.v2.daily_summary import (
     build_daily_rollup_prompt,
     build_subject_summary_prompt,
     compress_daily_input,

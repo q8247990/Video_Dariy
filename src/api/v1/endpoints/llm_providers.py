@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from src.api.deps import DB, CurrentUser
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.llm_provider import LLMProvider
+from src.providers.openai_client import OpenAIClient
 from src.schemas.llm_provider import (
     LLMProviderCreate,
     LLMProviderResponse,
@@ -310,15 +311,25 @@ def test_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
 
     test_status = "failed"
     test_message = ""
+    vision_result = False
+    tool_calling_result = False
 
+    client = OpenAIClient(
+        api_base_url=provider.api_base_url,
+        api_key=provider.api_key,
+        model_name=provider.model_name,
+        timeout=provider.timeout_seconds,
+    )
+
+    # 1. 连通性测试
     try:
-        client = OpenAICompatGatewayFactory().build(
+        gateway = OpenAICompatGatewayFactory().build(
             api_base_url=provider.api_base_url,
             api_key=provider.api_key,
             model_name=provider.model_name,
             timeout_seconds=provider.timeout_seconds,
         )
-        _ = client.chat_completion(
+        _ = gateway.chat_completion(
             messages=[
                 {"role": "system", "content": "You are a connectivity test assistant."},
                 {"role": "user", "content": "Reply with 'pong'."},
@@ -329,6 +340,23 @@ def test_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
         test_message = "provider reachable"
     except Exception as e:
         test_message = str(e)[:512]
+
+    # 2. 连通性通过后，探测视觉和 tool_calling 能力
+    if test_status == "success":
+        vision_result = client.probe_vision()
+        tool_calling_result = client.probe_tool_calling()
+
+        # 自动回写能力字段
+        provider.supports_vision = vision_result
+        provider.supports_tool_calling = tool_calling_result
+
+        capabilities = []
+        if vision_result:
+            capabilities.append("视觉")
+        if tool_calling_result:
+            capabilities.append("工具调用")
+        cap_text = "、".join(capabilities) if capabilities else "无"
+        test_message = f"连通性正常，检测到能力：{cap_text}"
 
     provider.last_test_status = test_status
     provider.last_test_message = test_message
@@ -343,5 +371,7 @@ def test_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
             "last_test_status": provider.last_test_status,
             "last_test_message": provider.last_test_message,
             "last_test_at": provider.last_test_at,
+            "supports_vision": provider.supports_vision,
+            "supports_tool_calling": provider.supports_tool_calling,
         }
     )

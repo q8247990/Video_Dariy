@@ -1,1 +1,0 @@
-"""QA intent prompt templates."""
