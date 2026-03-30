@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.application.qa.agent import QAAgent
 from src.application.qa.evidence_compressor import compress_evidence
 from src.application.qa.planner import (
     build_retrieval_plan,
@@ -60,25 +61,76 @@ class QAService:
             api_key=provider.api_key,
             model_name=provider.model_name,
             timeout_seconds=provider.timeout_seconds,
+            supports_tool_calling=provider.supports_tool_calling,
         )
 
-        # 2. 家庭上下文
+        # 2. 根据 provider 能力选择链路
+        if gateway.supports_tool_calling:
+            return self._answer_via_agent(gateway, provider, question, request)
+
+        return self._answer_via_legacy(gateway, provider, question, request)
+
+    # ------------------------------------------------------------------
+    # Agent 链路（supports_tool_calling = True）
+    # ------------------------------------------------------------------
+
+    def _answer_via_agent(
+        self,
+        gateway: Any,
+        provider: Any,
+        question: str,
+        request: QARequest,
+    ) -> QAResult:
+        agent = QAAgent(db=self.db, gateway=gateway, provider=provider)
+
+        try:
+            agent_result = agent.run(
+                question=question,
+                now=request.now,
+                timezone=request.timezone,
+            )
+        except Exception as e:
+            logger.warning("Agent loop failed: %s, falling back to legacy", e)
+            return self._answer_via_legacy(gateway, provider, question, request)
+
+        # 日志
+        if request.write_query_log:
+            self._write_agent_log(
+                question=question,
+                tool_calls_log=agent_result.tool_calls_log,
+                provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
+            )
+
+        return QAResult(
+            question=question,
+            answer_text=agent_result.answer_text,
+            provider_id=provider.id,
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy 链路（supports_tool_calling = False）
+    # ------------------------------------------------------------------
+
+    def _answer_via_legacy(
+        self,
+        gateway: Any,
+        provider: Any,
+        question: str,
+        request: QARequest,
+    ) -> QAResult:
         home_context = build_home_context(self.db)
 
-        # 3. 意图识别
         query_plan = self._parse_intent(
             gateway, provider, question, request.now, request.timezone, home_context
         )
 
-        # 4. 检索规划
         retrieval_plan = build_retrieval_plan(query_plan)
 
-        # 5. 分层检索
         daily_summaries = retrieve_daily_summaries(self.db, retrieval_plan)
         sessions = retrieve_sessions(self.db, retrieval_plan, query_plan.question_mode)
         events = retrieve_events(self.db, retrieval_plan, query_plan.question_mode)
 
-        # 6. 证据压缩
         evidence = compress_evidence(
             home_context=home_context,
             query_plan=query_plan,
@@ -87,7 +139,6 @@ class QAService:
             events=events,
         )
 
-        # 7. 最终回答
         answer_text = self._generate_answer(
             gateway,
             provider,
@@ -99,14 +150,12 @@ class QAService:
             evidence,
         )
 
-        # 8. 构建引用
         referenced_events = list(events)
         session_ids = sorted({e.session_id for e in events})
         referenced_sessions = [s for s in sessions if s.id in session_ids]
         if not referenced_sessions and sessions:
             referenced_sessions = sessions
 
-        # 9. 日志
         if request.write_query_log:
             self._write_log(
                 question,
@@ -245,6 +294,24 @@ class QAService:
             parsed_condition_json=plan_dict,
             answer_text="",
             referenced_event_ids_json=[e.id for e in events],
+            provider_id=provider_id,
+            provider_name_snapshot=provider_name_snapshot,
+        )
+        self.db.add(log)
+        self.db.commit()
+
+    def _write_agent_log(
+        self,
+        question: str,
+        tool_calls_log: list[dict[str, Any]],
+        provider_id: int,
+        provider_name_snapshot: str | None,
+    ) -> None:
+        log = ChatQueryLog(
+            user_question=question,
+            parsed_condition_json={"mode": "agent", "tool_calls": tool_calls_log},
+            answer_text="",
+            referenced_event_ids_json=[],
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
         )

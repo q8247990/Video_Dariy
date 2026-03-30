@@ -60,64 +60,101 @@ def _tool_error(code: str, message: str) -> dict[str, Any]:
 
 TOOLS: list[dict[str, Any]] = [
     {
-        "name": "get_daily_summary",
-        "description": "获取某日结构化日报",
+        "name": "get_data_availability",
+        "description": "查询系统中数据的时间范围和视频源列表",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "date": {
-                    "type": "string",
-                    "description": "日期，格式 YYYY-MM-DD",
-                }
-            },
-            "required": ["date"],
+            "properties": {},
             "additionalProperties": False,
         },
     },
     {
         "name": "search_events",
-        "description": "按时间、摄像头、关键词、标签检索事件",
+        "description": "按时间范围和过滤条件查询事件列表",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "start_time": {"type": "string", "description": "开始时间，ISO 8601"},
-                "end_time": {"type": "string", "description": "结束时间，ISO 8601"},
-                "camera": {"type": "string", "description": "摄像头名称"},
+                "start_time": {
+                    "type": "string",
+                    "description": "开始时间，ISO 8601 格式",
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "结束时间，ISO 8601 格式",
+                },
+                "subjects": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "主体名称列表",
+                },
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "关键词列表",
+                    "description": "关键词列表，匹配事件标题/摘要/详情",
                 },
-                "tags": {
+                "event_types": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "标签列表",
+                    "description": "事件类型列表",
+                },
+                "importance_levels": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "description": "重要程度列表",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "返回数量上限，默认 20",
                 },
             },
+            "required": ["start_time", "end_time"],
             "additionalProperties": False,
         },
     },
     {
-        "name": "get_event_detail",
-        "description": "查询单个事件详情及关联 session",
+        "name": "get_sessions",
+        "description": "按时间范围和主体查询 session 摘要列表",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "integer", "description": "事件 ID"},
+                "start_time": {
+                    "type": "string",
+                    "description": "开始时间，ISO 8601 格式",
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "结束时间，ISO 8601 格式",
+                },
+                "subjects": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "主体名称列表",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "返回数量上限，默认 20",
+                },
             },
-            "required": ["event_id"],
+            "required": ["start_time", "end_time"],
             "additionalProperties": False,
         },
     },
     {
-        "name": "get_video_segments",
-        "description": "查询事件或 session 对应的视频片段",
+        "name": "get_daily_summary",
+        "description": "按日期范围查询日报",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "integer", "description": "事件 ID"},
-                "session_id": {"type": "integer", "description": "Session ID"},
+                "start_date": {
+                    "type": "string",
+                    "description": "开始日期，格式 YYYY-MM-DD",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "结束日期，格式 YYYY-MM-DD",
+                },
             },
+            "required": ["start_date"],
             "additionalProperties": False,
         },
     },
@@ -146,18 +183,25 @@ def _execute_tool(
     service: MCPToolService, tool_name: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     handlers = {
-        "get_daily_summary": lambda: service.get_daily_summary(_required_str(arguments, "date")),
+        "get_data_availability": lambda: service.get_data_availability(),
         "search_events": lambda: service.search_events(
             start_time=_optional_str(arguments.get("start_time")),
             end_time=_optional_str(arguments.get("end_time")),
-            camera=_optional_str(arguments.get("camera")),
+            subjects=_optional_str_list(arguments.get("subjects")),
             keywords=_optional_str_list(arguments.get("keywords")),
-            tags=_optional_str_list(arguments.get("tags")),
+            event_types=_optional_str_list(arguments.get("event_types")),
+            importance_levels=_optional_str_list(arguments.get("importance_levels")),
+            limit=arguments.get("limit", 20),
         ),
-        "get_event_detail": lambda: service.get_event_detail(_required_int(arguments, "event_id")),
-        "get_video_segments": lambda: service.get_video_segments(
-            _optional_int(arguments.get("event_id")),
-            _optional_int(arguments.get("session_id")),
+        "get_sessions": lambda: service.get_sessions(
+            start_time=_optional_str(arguments.get("start_time")),
+            end_time=_optional_str(arguments.get("end_time")),
+            subjects=_optional_str_list(arguments.get("subjects")),
+            limit=arguments.get("limit", 20),
+        ),
+        "get_daily_summary": lambda: service.get_daily_summary(
+            start_date=_required_str(arguments, "start_date"),
+            end_date=_optional_str(arguments.get("end_date")),
         ),
         "ask_home_monitor": lambda: service.ask_home_monitor(_required_str(arguments, "question")),
     }
@@ -209,25 +253,10 @@ def call_tool(
     return result
 
 
-def _required_int(arguments: dict[str, Any], key: str) -> int:
-    value = arguments.get(key)
-    if not isinstance(value, int):
-        raise MCPInvalidArgumentError(f"{key} is required")
-    return value
-
-
 def _required_str(arguments: dict[str, Any], key: str) -> str:
     value = arguments.get(key)
     if not isinstance(value, str):
         raise MCPInvalidArgumentError(f"{key} is required")
-    return value
-
-
-def _optional_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    if not isinstance(value, int):
-        raise MCPInvalidArgumentError("event_id and session_id must be integers")
     return value
 
 
@@ -243,5 +272,5 @@ def _optional_str_list(value: Any) -> Optional[list[str]]:
     if value is None:
         return None
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise MCPInvalidArgumentError("keywords and tags must be string arrays")
+        raise MCPInvalidArgumentError("list arguments must be string arrays")
     return value
