@@ -43,8 +43,19 @@ export async function setDefaultQaProvider(id: number): Promise<void> {
   await apiClient.post(`/providers/${id}/set-default-qa`)
 }
 
-export async function testProvider(id: number): Promise<void> {
-  await apiClient.post(`/providers/${id}/test`)
+export type TestProviderResult = {
+  success: boolean
+  message: string
+  last_test_status: string | null
+  last_test_message: string | null
+  last_test_at: string | null
+  supports_vision: boolean
+  supports_tool_calling: boolean
+}
+
+export async function testProvider(id: number): Promise<TestProviderResult> {
+  const response = await apiClient.post(`/providers/${id}/test`)
+  return unwrapApi<TestProviderResult>(response)
 }
 
 export async function deleteProvider(id: number): Promise<void> {

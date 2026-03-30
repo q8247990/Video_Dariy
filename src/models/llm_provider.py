@@ -22,6 +22,7 @@ class LLMProvider(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     supports_vision: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     supports_qa: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    supports_tool_calling: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_default_vision: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_default_qa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_test_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)

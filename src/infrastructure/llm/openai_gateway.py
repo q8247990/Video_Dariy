@@ -5,8 +5,9 @@ from src.providers.openai_client import OpenAIClient
 
 
 class OpenAICompatGateway(LLMGatewayPort):
-    def __init__(self, client: OpenAIClient):
+    def __init__(self, client: OpenAIClient, *, supports_tool_calling: bool = False):
         self.client = client
+        self.supports_tool_calling = supports_tool_calling
 
     def chat_completion(
         self,
@@ -20,6 +21,20 @@ class OpenAICompatGateway(LLMGatewayPort):
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+        )
+
+    def chat_completion_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]:
+        return self.client.chat_completion_with_tools(
+            messages=messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     def get_last_usage(self) -> Optional[dict[str, int]]:
@@ -37,6 +52,7 @@ class OpenAICompatGatewayFactory(LLMGatewayFactoryPort):
         api_key: str,
         model_name: str,
         timeout_seconds: int,
+        supports_tool_calling: bool = False,
     ) -> LLMGatewayPort:
         return OpenAICompatGateway(
             OpenAIClient(
@@ -44,5 +60,6 @@ class OpenAICompatGatewayFactory(LLMGatewayFactoryPort):
                 api_key=api_key,
                 model_name=model_name,
                 timeout=timeout_seconds,
-            )
+            ),
+            supports_tool_calling=supports_tool_calling,
         )

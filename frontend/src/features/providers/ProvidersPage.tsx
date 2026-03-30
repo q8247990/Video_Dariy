@@ -76,8 +76,8 @@ export function ProvidersPage() {
 
   const testMutation = useMutation({
     mutationFn: testProvider,
-    onSuccess: () => {
-      setMessage('连通性测试任务已触发')
+    onSuccess: (data) => {
+      setMessage(data.message)
       queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -187,10 +187,13 @@ export function ProvidersPage() {
                 <td>{item.id}</td>
                 <td>{item.provider_name}</td>
                 <td>
-                  {item.supports_vision ? '视觉' : ''}
-                  {item.supports_vision && item.supports_qa ? ' + ' : ''}
-                  {item.supports_qa ? '问答' : ''}
-                  {!item.supports_vision && !item.supports_qa ? '-' : ''}
+                  {[
+                    item.supports_vision ? '视觉' : '',
+                    item.supports_qa ? '问答' : '',
+                    item.supports_tool_calling ? '工具调用' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' + ') || '-'}
                 </td>
                 <td>{item.model_name}</td>
                 <td>
