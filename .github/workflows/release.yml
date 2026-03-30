@@ -43,6 +43,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          build-args: USE_CN_MIRROR=false
           tags: |
             ${{ env.BACKEND_IMAGE }}:${{ steps.version.outputs.VERSION }}
             ${{ env.BACKEND_IMAGE }}:latest
@@ -55,6 +56,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
+          build-args: USE_CN_MIRROR=false
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ steps.version.outputs.VERSION }}
             ${{ env.FRONTEND_IMAGE }}:latest

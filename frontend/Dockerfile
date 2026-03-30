@@ -1,8 +1,13 @@
 FROM node:20-alpine AS builder
+
+ARG USE_CN_MIRROR=true
+
 WORKDIR /app
 COPY package*.json /app/
-RUN npm config set registry https://registry.npmmirror.com \
-  && npm ci --no-audit --no-fund
+RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
+      npm config set registry https://registry.npmmirror.com; \
+    fi && \
+    npm ci --no-audit --no-fund
 COPY . /app
 RUN npm run build
 
