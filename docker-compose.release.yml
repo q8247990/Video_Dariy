@@ -1,0 +1,170 @@
+# docker-compose.release.yml
+# 生产部署用，使用预构建的 ghcr.io 镜像，无需本地 build。
+# 使用方式：
+#   1. 创建 .env 文件配置环境变量（参考 .env.example）
+#   2. docker compose -f docker-compose.release.yml pull
+#   3. docker compose -f docker-compose.release.yml up -d
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: hm_postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      POSTGRES_DB: ${POSTGRES_DB:-home_monitor}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d home_monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - app_bridge
+
+  redis:
+    image: redis:alpine
+    container_name: hm_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - app_bridge
+
+  backend:
+    image: ghcr.io/q8247990/video_dariy/backend:${IMAGE_TAG:-latest}
+    container_name: hm_backend
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      VIDEO_ROOT_PATH: /data/videos
+      PLAYBACK_CACHE_ROOT: /data/hls
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+      DB_INIT_MAX_RETRIES: ${DB_INIT_MAX_RETRIES:-180}
+      DB_INIT_RETRY_INTERVAL_SECONDS: ${DB_INIT_RETRY_INTERVAL_SECONDS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+      - app_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - app_bridge
+
+  celery_worker:
+    image: ghcr.io/q8247990/video_dariy/backend:${IMAGE_TAG:-latest}
+    container_name: hm_celery_worker
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      VIDEO_ROOT_PATH: /data/videos
+      PLAYBACK_CACHE_ROOT: /data/hls
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+      - app_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A src.core.celery_app worker --loglevel=info -Q celery,analysis_hot,analysis_full
+    networks:
+      - app_bridge
+
+  celery_beat:
+    image: ghcr.io/q8247990/video_dariy/backend:${IMAGE_TAG:-latest}
+    container_name: hm_celery_beat
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      VIDEO_ROOT_PATH: /data/videos
+      PLAYBACK_CACHE_ROOT: /data/hls
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+      - app_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A src.core.celery_app beat --loglevel=info
+    networks:
+      - app_bridge
+
+  frontend:
+    image: ghcr.io/q8247990/video_dariy/frontend:${IMAGE_TAG:-latest}
+    container_name: hm_frontend
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8226}:80"
+    networks:
+      - app_bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  app_data:
+
+networks:
+  app_bridge:
+    driver: bridge
