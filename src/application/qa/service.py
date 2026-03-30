@@ -97,6 +97,7 @@ class QAService:
         if request.write_query_log:
             self._write_agent_log(
                 question=question,
+                answer_text=agent_result.answer_text,
                 tool_calls_log=agent_result.tool_calls_log,
                 provider_id=provider.id,
                 provider_name_snapshot=provider.provider_name,
@@ -159,6 +160,7 @@ class QAService:
         if request.write_query_log:
             self._write_log(
                 question,
+                answer_text,
                 query_plan,
                 referenced_events,
                 provider.id,
@@ -270,6 +272,7 @@ class QAService:
     def _write_log(
         self,
         question: str,
+        answer_text: str,
         query_plan: Any,
         events: list[EventEvidence],
         provider_id: int,
@@ -292,7 +295,7 @@ class QAService:
         log = ChatQueryLog(
             user_question=question,
             parsed_condition_json=plan_dict,
-            answer_text="",
+            answer_text=answer_text,
             referenced_event_ids_json=[e.id for e in events],
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
@@ -303,6 +306,7 @@ class QAService:
     def _write_agent_log(
         self,
         question: str,
+        answer_text: str,
         tool_calls_log: list[dict[str, Any]],
         provider_id: int,
         provider_name_snapshot: str | None,
@@ -310,7 +314,7 @@ class QAService:
         log = ChatQueryLog(
             user_question=question,
             parsed_condition_json={"mode": "agent", "tool_calls": tool_calls_log},
-            answer_text="",
+            answer_text=answer_text,
             referenced_event_ids_json=[],
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
