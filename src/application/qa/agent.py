@@ -17,9 +17,7 @@ from src.application.qa.tools import QA_TOOLS, execute_tool
 from src.application.query.service import HomeQueryService
 from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
-from src.services.prompt_builder.v2.qa_intent import (
-    EVENT_TYPE_DEFINITIONS,
-)
+from src.services.video_analysis.enums import EVENT_TYPE_DEFINITIONS
 
 logger = logging.getLogger(__name__)
 

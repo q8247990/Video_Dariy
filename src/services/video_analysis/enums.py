@@ -26,6 +26,21 @@ ANALYSIS_NOTE_TYPES = {
     "no_significant_event",
 }
 
+EVENT_TYPE_DEFINITIONS: list[dict[str, str]] = [
+    {"type": "member_appear", "desc": "家庭成员出现在画面中"},
+    {"type": "member_enter", "desc": "成员进入画面或区域"},
+    {"type": "member_leave", "desc": "成员离开画面或区域"},
+    {"type": "member_stay", "desc": "成员持续停留"},
+    {"type": "unknown_person_appear", "desc": "陌生人/未知人员出现"},
+    {"type": "pet_appear", "desc": "宠物出现在画面中"},
+    {"type": "pet_activity", "desc": "宠物活动（走动、玩耍等）"},
+    {"type": "pet_rest", "desc": "宠物休息或静止"},
+    {"type": "member_pet_interaction", "desc": "成员与宠物互动"},
+    {"type": "multi_entity_interaction", "desc": "多个对象之间互动"},
+    {"type": "abnormal_stay", "desc": "异常停留（长时间不动、异常位置等）"},
+    {"type": "scene_attention_needed", "desc": "场景需要关注（异常光线、物品移动等）"},
+]
+
 IMPORTANCE_LEVELS = {"low", "medium", "high"}
 RECOGNITION_STATUSES = {"confirmed", "suspected", "unknown"}
 ACTIVITY_LEVELS = {"low", "medium", "high"}

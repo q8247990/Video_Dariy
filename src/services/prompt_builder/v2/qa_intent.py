@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from src.services.prompt_builder.engine import render_template
+from src.services.video_analysis.enums import EVENT_TYPE_DEFINITIONS
 
 
 def _extract_subject_names(home_context: dict[str, Any]) -> list[str]:
@@ -32,7 +33,10 @@ def build_qa_intent_prompt(
     home_profile = home_context.get("home_profile", {})
     subject_names = _extract_subject_names(home_context)
 
-    system_prompt = render_template("qa_intent/system_rules.j2")
+    system_prompt = render_template(
+        "qa_intent/system_rules.j2",
+        event_type_definitions=EVENT_TYPE_DEFINITIONS,
+    )
 
     user_prompt = render_template(
         "qa_intent/user.j2",

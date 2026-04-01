@@ -39,19 +39,9 @@
 14. 禁止输出任何数据库 ID、摄像头名称、SQL 表达式。
 
 事件类型枚举：
-- member_appear: 家庭成员出现在画面中
-- member_enter: 成员进入画面或区域
-- member_leave: 成员离开画面或区域
-- member_stay: 成员持续停留
-- unknown_person_appear: 陌生人/未知人员出现
-- pet_appear: 宠物出现在画面中
-- pet_activity: 宠物活动（走动、玩耍等）
-- pet_rest: 宠物休息或静止
-- member_pet_interaction: 成员与宠物互动
-- multi_entity_interaction: 多个对象之间互动
-- abnormal_stay: 异常停留（长时间不动、异常位置等）
-- scene_attention_needed: 场景需要关注（异常光线、物品移动等）
-
+{% for item in event_type_definitions %}
+- {{ item.type }}: {{ item.desc }}
+{% endfor %}
 输出 schema（严格遵守）:
 {
   "question_mode": "overview|latest|existence|subject_activity|risk_check",
