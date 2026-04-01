@@ -72,6 +72,5 @@ def compile_qa_answer_prompt(input_data: QAAnswerPromptInput) -> tuple[str, str]
         now_iso=input_data.now_iso,
         timezone=input_data.timezone,
         home_context_text=input_data.home_context_text,
-        query_plan=input_data.query_plan,
         evidence=input_data.evidence,
     )

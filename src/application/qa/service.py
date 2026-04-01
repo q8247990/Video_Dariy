@@ -241,7 +241,6 @@ class QAService:
             now_iso=now.isoformat(),
             timezone=timezone,
             home_context_text=home_context_text,
-            query_plan=query_plan,
             evidence=evidence,
         )
 

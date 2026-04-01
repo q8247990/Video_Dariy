@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Optional
 
-from src.application.qa.schemas import CompressedEvidence, QueryPlan
+from src.application.qa.schemas import CompressedEvidence
 
 
 @dataclass
@@ -67,5 +67,4 @@ class QAAnswerPromptInput:
     now_iso: str
     timezone: str
     home_context_text: str
-    query_plan: QueryPlan
     evidence: CompressedEvidence
