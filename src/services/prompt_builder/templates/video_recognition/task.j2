@@ -1,8 +1,6 @@
 任务级 Prompt：
 任务目标: 对当前 session 做结构化识别，输出可入库事件。
 会话上下文: session_id={{ session_context.session_id }}; source_id={{ session_context.source_id }}; start={{ session_start_time_iso }}; end={{ session_end_time_iso }}; duration={{ session_context.total_duration_seconds }}; segment_index={{ session_context.segment_index }}; segment_start_offset_sec={{ session_context.segment_start_offset_sec }}; segment_duration_seconds={{ session_context.segment_duration_seconds }}.
-策略上下文: ingest_type={{ strategy_context.ingest_type | compact_text }}; source_type={{ strategy_context.source_type | compact_text }}; strategy_note={{ strategy_context.strategy_note | compact_text }}
+策略上下文: ingest_type={{ strategy_context.ingest_type | compact_text }}; source_type={{ strategy_context.source_type | compact_text }}; strategy_note={{ strategy_context.strategy_note | compact_text }}.
 事件抽取规则: event_type 枚举={{ event_type_list | compact_list }}; analysis_note_type 枚举={{ note_type_list | compact_list }}; merge_similar_actions=true; split_only_on_significant_change=true.
-输出 schema（完整示例，必须严格遵守）:
-{{ schema_hint | to_json }}
-最终约束: 只能输出 JSON 对象; 所有 offset 必须为非负数且 end>=start; offset 以当前输入视频片段起点为 0 秒; event_type 必须来自枚举; importance_level 必须来自 low/medium/high; detail 需详细描述可观察事实; 当识别 confirmed 且可匹配家庭档案时，优先使用档案姓名（成员与宠物都适用）。
+最终约束: 只能输出 JSON 对象; 所有 offset 必须为非负数且 end>=start; offset 以当前输入视频片段起点为 0 秒; event_type 必须来自枚举; importance_level 必须来自 low/medium/high; detail 需详细描述可观察事实.

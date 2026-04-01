@@ -3,10 +3,44 @@
 规则：
 1. 事实优先：先描述可观察行为，再做轻度概括。
 2. 保守识别：身份不确定时使用 suspected 或 unknown，禁止虚构名字。
-3. 命名优先：当识别状态为 confirmed 且可匹配家庭档案时，
-   summary_text 与事件文本优先使用档案姓名（成员与宠物都适用）。
+3. 命名优先：当识别状态为 confirmed 且可匹配家庭档案时，summary_text 与事件文本优先使用档案姓名（成员与宠物都适用）。
 4. 状态边界：禁止输出开心/生病/抑郁等主观或医学心理判断。
 5. 事件粒度：连续同类活动尽量合并，仅在明显变化时拆分。
-6. 时间规则：仅输出相对 session 的 offset_start_sec / offset_end_sec。
+6. 时间规则：offset_start_sec / offset_end_sec 以当前输入视频片段起点为 0 秒，不是 session 起点。
 7. 风格边界：风格只影响自然语言字段措辞，不改变识别边界和重要性判断。
 8. 输出约束：仅输出 JSON 对象，不要输出额外文字。
+9. 干扰排除：注意电视反光、玻璃反射、走廊远处小目标等误判风险。
+
+输出 schema（完整示例，必须严格遵守）:
+{
+  "session_summary": {
+    "summary_text": "string",
+    "activity_level": "low|medium|high",
+    "main_subjects": ["string"],
+    "has_important_event": true
+  },
+  "events": [
+    {
+      "offset_start_sec": 0,
+      "offset_end_sec": 12,
+      "event_type": "member_appear",
+      "title": "string",
+      "summary": "string",
+      "detail": "string",
+      "related_entities": [
+        {
+          "entity_type": "member|pet|unknown_person|other",
+          "display_name": "string",
+          "matched_profile_name": "string|null",
+          "recognition_status": "confirmed|suspected|unknown",
+          "confidence": 0.9
+        }
+      ],
+      "observed_actions": ["string"],
+      "interpreted_state": ["string"],
+      "confidence": 0.9,
+      "importance_level": "low|medium|high"
+    }
+  ],
+  "analysis_notes": [{"type": "identity_uncertain", "note": "string"}]
+}

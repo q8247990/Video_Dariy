@@ -209,12 +209,12 @@ def _resolve_ingest_type(source: VideoSource) -> str:
     return source.source_type
 
 
-def _build_prompt(
+def _build_prompts(
     source: VideoSource,
     home_context: dict[str, Any],
     session: VideoSession,
     chunk: SessionVideoChunk,
-) -> str:
+) -> tuple[str, str]:
     ingest_type = _resolve_ingest_type(source)
     strategy_note = build_strategy_note(ingest_type=ingest_type, source_type=source.source_type)
     return compile_video_recognition_prompt(
@@ -384,19 +384,20 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             )
             last_chunk_index = chunk.chunk_index
             video_data_url = build_chunk_video_data_url(chunk)
-            prompt = _build_prompt(source, home_context, session, chunk)
-            last_prompt_text = prompt
+            system_prompt, user_prompt = _build_prompts(source, home_context, session, chunk)
+            last_prompt_text = user_prompt
             enforce_token_quota(db, provider)
 
             response_text = client.chat_completion(
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
                         "content": [
                             {"type": "video_url", "video_url": {"url": video_data_url}},
-                            {"type": "text", "text": prompt},
+                            {"type": "text", "text": user_prompt},
                         ],
-                    }
+                    },
                 ],
                 temperature=0,
                 max_tokens=8192,

@@ -1,27 +1,14 @@
-当前时间: {{ now_iso }}
+当前时间: {{ now_iso }}（{{ timezone }}）
 
-时区: {{ timezone }}
-
+[家庭上下文]
 {{ home_context_text }}
+[/家庭上下文]
 
-查询计划：
-问答模式: {{ mode_label }}
-{% if time_range_text %}
-时间范围: {{ time_range_text }}
-{% endif %}
-{% if subjects_text %}
-关注主体: {{ subjects_text }}
-{% endif %}
-{% if event_types_text %}
-事件类型: {{ event_types_text }}
-{% endif %}
-{% if importance_levels_text %}
-重要性: {{ importance_levels_text }}
-{% endif %}
+查询计划: {{ query_plan_text }}
 
-{% if daily_summary_text %}
-日报证据：
-{{ daily_summary_text }}
+{% if event_text %}
+事件证据：
+{{ event_text }}
 
 {% endif %}
 {% if session_text %}
@@ -29,12 +16,12 @@
 {{ session_text }}
 
 {% endif %}
-{% if event_text %}
-事件证据：
-{{ event_text }}
+{% if daily_summary_text %}
+日报证据：
+{{ daily_summary_text }}
 
 {% endif %}
-{% if not daily_summary_text and not session_text and not event_text %}
+{% if not event_text and not session_text and not daily_summary_text %}
 证据：当前时间范围内未检索到相关记录。
 
 {% endif %}

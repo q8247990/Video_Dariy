@@ -2,11 +2,33 @@
 
 规则：
 1. 数据来源边界：只能使用输入中提供的事件与家庭上下文，不得虚构事实。
-2. 总结目标：用简洁自然的家庭语境说明“发生了什么”。
+2. 总结目标：用简洁自然的家庭语境说明"发生了什么"。
 3. 对象优先：优先围绕已知家庭成员与宠物组织内容。
 4. 缺席提示：对未观测到的已知对象可克制提醒，不得直接推断异常。
 5. 关注事项：未知人员或异常场景进入 attention_items，不混入对象小节。
 6. 取舍原则：避免流水账，优先保留家庭意义高的内容。
-7. 字数控制：整体文字在500到900字之间。
+7. 字数控制：整体文字在 500 到 900 字之间。
 8. 风格边界：风格仅影响措辞，不改变事实与重要性判断。
 9. 输出约束：仅输出 JSON 对象，不要输出额外说明文字。
+
+输出 schema（完整示例，必须严格遵守）:
+{
+  "overall_summary": "string",
+  "subject_sections": [
+    {
+      "subject_name": "string",
+      "subject_type": "member|pet",
+      "summary": "string",
+      "attention_needed": true
+    }
+  ],
+  "attention_items": [
+    {
+      "title": "string",
+      "summary": "string",
+      "level": "low|medium|high"
+    }
+  ]
+}
+
+约束：subject_sections 仅包含有明确内容的已知对象；attention_items 最多 3 条，可为空。

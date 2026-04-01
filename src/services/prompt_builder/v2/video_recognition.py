@@ -6,39 +6,6 @@ from typing import Any
 from src.services.prompt_builder.engine import render_template
 from src.services.video_analysis.enums import ANALYSIS_NOTE_TYPES, VIDEO_EVENT_TYPES
 
-_SCHEMA_HINT = {
-    "session_summary": {
-        "summary_text": "string",
-        "activity_level": "low|medium|high",
-        "main_subjects": ["string"],
-        "has_important_event": True,
-    },
-    "events": [
-        {
-            "offset_start_sec": 0,
-            "offset_end_sec": 12,
-            "event_type": "member_appear",
-            "title": "string",
-            "summary": "string",
-            "detail": "string",
-            "related_entities": [
-                {
-                    "entity_type": "member|pet|unknown_person|other",
-                    "display_name": "string",
-                    "matched_profile_name": "string|null",
-                    "recognition_status": "confirmed|suspected|unknown",
-                    "confidence": 0.9,
-                }
-            ],
-            "observed_actions": ["string"],
-            "interpreted_state": ["string"],
-            "confidence": 0.9,
-            "importance_level": "low|medium|high",
-        }
-    ],
-    "analysis_notes": [{"type": "identity_uncertain", "note": "string"}],
-}
-
 
 def _serialize_datetime(value: datetime | None) -> str | None:
     if value is None:
@@ -57,7 +24,7 @@ def build_strategy_note(ingest_type: str, source_type: str) -> str:
     return "按常规家庭监控分析策略执行，保持中等事件粒度。"
 
 
-def build_video_recognition_prompt(input_data: dict[str, Any]) -> str:
+def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str]:
     home_context = input_data["home_context"]
     video_source = input_data["video_source"]
     session_context = input_data["session_context"]
@@ -73,38 +40,36 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> str:
             return video_source.get(key)
         return getattr(video_source, key, None)
 
-    camera_context_payload = {
-        "source_name": _read_vs("source_name"),
-        "camera_name": _read_vs("camera_name"),
-        "location_name": _read_vs("location_name"),
-        "camera_note": _read_vs("prompt_text"),
-        "interference_hint": "注意电视反光、玻璃反射、走廊远处小目标等误判风险。",
-    }
-
     session_start_iso = _serialize_datetime(session_context.get("session_start_time"))
     session_end_iso = _serialize_datetime(session_context.get("session_end_time"))
 
-    sections = [
-        "系统识别规则：\n" + render_template("video_recognition/system_rules.j2"),
-        render_template(
-            "video_recognition/home_context.j2",
-            home_profile=home_profile,
-            members=members,
-            pets=pets,
-        ),
-        render_template(
-            "video_recognition/camera_context.j2",
-            camera_context_payload=camera_context_payload,
-        ),
-        render_template(
-            "video_recognition/task.j2",
-            session_context=session_context,
-            session_start_time_iso=session_start_iso,
-            session_end_time_iso=session_end_iso,
-            strategy_context=strategy_context,
-            event_type_list=event_type_list,
-            note_type_list=sorted(ANALYSIS_NOTE_TYPES),
-            schema_hint=_SCHEMA_HINT,
-        ),
-    ]
-    return "\n\n".join(sections)
+    system_prompt = render_template("video_recognition/system_rules.j2")
+
+    user_prompt = "\n\n".join(
+        [
+            render_template(
+                "video_recognition/home_context.j2",
+                home_profile=home_profile,
+                members=members,
+                pets=pets,
+            ),
+            render_template(
+                "video_recognition/camera_context.j2",
+                source_name=_read_vs("source_name"),
+                camera_name=_read_vs("camera_name"),
+                location_name=_read_vs("location_name"),
+                camera_note=_read_vs("prompt_text"),
+            ),
+            render_template(
+                "video_recognition/task.j2",
+                session_context=session_context,
+                session_start_time_iso=session_start_iso,
+                session_end_time_iso=session_end_iso,
+                strategy_context=strategy_context,
+                event_type_list=event_type_list,
+                note_type_list=sorted(ANALYSIS_NOTE_TYPES),
+            ),
+        ]
+    )
+
+    return system_prompt, user_prompt

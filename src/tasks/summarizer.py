@@ -532,18 +532,19 @@ def _generate_single_pass_summary_payload(
     provider_id: int,
     provider_name_snapshot: str | None,
     events: list[EventRecord],
-    prompt: str,
+    prompt: tuple[str, str],
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
+    system_prompt, user_prompt = prompt
     response_text = _chat_completion_with_usage(
         db=db,
         client=client,
         provider_id=provider_id,
         provider_name_snapshot=provider_name_snapshot,
         messages=[
-            {"role": "system", "content": "你负责生成结构化家庭日报。"},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
     )
 
@@ -567,8 +568,8 @@ def _generate_single_pass_summary_payload(
                 provider_id=provider_id,
                 provider_name_snapshot=provider_name_snapshot,
                 messages=[
-                    {"role": "system", "content": "你负责生成结构化家庭日报。"},
-                    {"role": "user", "content": "请严格只输出JSON对象。\n\n" + prompt},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": "请严格只输出JSON对象。\n\n" + user_prompt},
                 ],
             )
             try:
@@ -593,7 +594,7 @@ def _generate_single_pass_summary_payload(
         overall_summary,
         completed_sections,
         structured_attention_items,
-        len(prompt),
+        len(user_prompt),
         parse_retried,
     )
 
@@ -660,7 +661,8 @@ def _generate_serial_summary_payload(
             time_range_end=end_dt.isoformat(),
             subject_section=subject_section,
         )
-        prompt_chars_total += len(subject_prompt)
+        subject_system_prompt, subject_user_prompt = subject_prompt
+        prompt_chars_total += len(subject_user_prompt)
         subject_name = str(subject_section.get("subject_name") or "未知对象")
         subject_type = str(subject_section.get("subject_type") or "unknown")
 
@@ -670,8 +672,8 @@ def _generate_serial_summary_payload(
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
             messages=[
-                {"role": "system", "content": "你负责生成结构化家庭日报对象摘要。"},
-                {"role": "user", "content": subject_prompt},
+                {"role": "system", "content": subject_system_prompt},
+                {"role": "user", "content": subject_user_prompt},
             ],
         )
 
@@ -691,11 +693,11 @@ def _generate_serial_summary_payload(
                 messages=[
                     {
                         "role": "system",
-                        "content": "你负责生成结构化家庭日报对象摘要。",
+                        "content": subject_system_prompt,
                     },
                     {
                         "role": "user",
-                        "content": "请严格只输出JSON对象。\n\n" + subject_prompt,
+                        "content": "请严格只输出JSON对象。\n\n" + subject_user_prompt,
                     },
                 ],
             )
@@ -729,7 +731,8 @@ def _generate_serial_summary_payload(
         subject_results=structured_subject_sections,
         attention_candidates=compressed_input["attention_candidates"],
     )
-    prompt_chars_total += len(rollup_prompt)
+    rollup_system_prompt, rollup_user_prompt = rollup_prompt
+    prompt_chars_total += len(rollup_user_prompt)
 
     rollup_response_text = _chat_completion_with_usage(
         db=db,
@@ -737,8 +740,8 @@ def _generate_serial_summary_payload(
         provider_id=provider_id,
         provider_name_snapshot=provider_name_snapshot,
         messages=[
-            {"role": "system", "content": "你负责生成结构化家庭日报。"},
-            {"role": "user", "content": rollup_prompt},
+            {"role": "system", "content": rollup_system_prompt},
+            {"role": "user", "content": rollup_user_prompt},
         ],
     )
     try:
@@ -752,8 +755,8 @@ def _generate_serial_summary_payload(
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
             messages=[
-                {"role": "system", "content": "你负责生成结构化家庭日报。"},
-                {"role": "user", "content": "请严格只输出JSON对象。\n\n" + rollup_prompt},
+                {"role": "system", "content": rollup_system_prompt},
+                {"role": "user", "content": "请严格只输出JSON对象。\n\n" + rollup_user_prompt},
             ],
         )
         try:
@@ -941,7 +944,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                 missing_subjects=missing_subjects,
                 attention_candidates_payload=attention_candidates_payload,
             )
-            if len(single_pass_prompt) > SERIAL_SPLIT_PROMPT_THRESHOLD
+            if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
             else _generate_single_pass_summary_payload(
                 db=db,
                 client=client,
@@ -956,7 +959,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
 
         summary_mode = (
             "split_serial"
-            if len(single_pass_prompt) > SERIAL_SPLIT_PROMPT_THRESHOLD
+            if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
             else "single_pass"
         )
 
@@ -1022,7 +1025,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         detail.update(
             {
                 "prompt_chars": prompt_chars_total,
-                "single_pass_prompt_chars": len(single_pass_prompt),
+                "single_pass_prompt_chars": len(single_pass_prompt[1]),
                 "summary_mode": summary_mode,
                 "split_threshold": SERIAL_SPLIT_PROMPT_THRESHOLD,
                 "subject_sections_count": len(subject_sections),

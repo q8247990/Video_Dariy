@@ -1,6 +1,6 @@
 对象摘要任务：
-日期={{ summary_date }} 时间范围={{ time_range_start }}~{{ time_range_end }} 对象={{ subject_name }}({{ subject_type }})
-原始命中事件数={{ raw_event_count }}，聚合簇数={{ clusters | length }}
+日期={{ summary_date }}; 时间范围={{ time_range_start }}~{{ time_range_end }}; 对象={{ subject_name }}({{ subject_type }}).
+原始命中事件数={{ raw_event_count }}，聚合簇数={{ clusters | length }}.
 对象事件簇：
 {% for cluster in clusters %}
 - {{ "%02d" | format(loop.index) }}. [{{ cluster.importance_level | default("unknown", true) }}] 类型={{ cluster.event_type }} 次数={{ cluster.occurrence_count }} 识别={{ cluster.recognition_status }} 标题={{ cluster.title }} 摘要={{ cluster.summary }}

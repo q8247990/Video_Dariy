@@ -7,6 +7,7 @@ from src.application.qa.schemas import (
     QueryPlan,
     SessionEvidence,
 )
+from src.services.prompt_builder.engine import render_template
 
 MAX_DETAIL_LENGTH = 150
 MAX_SUMMARY_LENGTH = 80
@@ -22,18 +23,12 @@ def compress_home_context(home_context: dict[str, Any]) -> str:
     home_profile = home_context.get("home_profile", {})
     members = home_context.get("members", [])
     pets = home_context.get("pets", [])
-
-    member_parts = [f"{item.get('name', '?')}({item.get('role_type', '?')})" for item in members]
-    pet_parts = [f"{item.get('name', '?')}({item.get('role_type', '?')})" for item in pets]
-
-    lines = [
-        f"家庭: {home_profile.get('home_name', '')}",
-        f"标签: {'、'.join(home_profile.get('family_tags', [])) or '无'}",
-        f"关注: {'、'.join(home_profile.get('focus_points', [])) or '无'}",
-        f"成员: {'、'.join(member_parts) if member_parts else '无'}",
-        f"宠物: {'、'.join(pet_parts) if pet_parts else '无'}",
-    ]
-    return "\n".join(lines)
+    return render_template(
+        "shared/home_context.j2",
+        home_profile=home_profile,
+        members=members,
+        pets=pets,
+    )
 
 
 # ---------------------------------------------------------------------------

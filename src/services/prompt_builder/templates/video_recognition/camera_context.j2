@@ -1,2 +1,2 @@
 摄像头上下文：
-{{ camera_context_payload | to_json }}
+摄像头={{ source_name | compact_text }}; 名称={{ camera_name | compact_text }}; 位置={{ location_name | compact_text }}{% if camera_note and camera_note != '无' %}; 备注={{ camera_note | compact_text }}{% endif %}.

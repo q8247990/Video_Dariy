@@ -10,7 +10,7 @@ from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
 from src.services.prompt_builder.v2.video_recognition import build_video_recognition_prompt
 
 
-def compile_video_recognition_prompt(input_data: VideoRecognitionPromptInput) -> str:
+def compile_video_recognition_prompt(input_data: VideoRecognitionPromptInput) -> tuple[str, str]:
     return build_video_recognition_prompt(
         {
             "home_context": input_data.home_context,
@@ -41,7 +41,7 @@ def compile_video_recognition_prompt(input_data: VideoRecognitionPromptInput) ->
     )
 
 
-def compile_daily_summary_prompt(input_data: DailySummaryPromptInput) -> str:
+def compile_daily_summary_prompt(input_data: DailySummaryPromptInput) -> tuple[str, str]:
     return build_daily_summary_prompt(
         {
             "home_context": input_data.home_context,

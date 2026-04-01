@@ -1,5 +1,5 @@
 家庭上下文：
 家庭概况: 家庭名={{ home_profile.home_name | compact_text }}; 标签={{ home_profile.family_tags | default([], true) | compact_list }}; 关注点={{ home_profile.focus_points | default([], true) | compact_list }}; 风格={{ home_profile.system_style | compact_text }}; 风格偏好={{ home_profile.style_preference_text | compact_text }}; 助手名={{ home_profile.assistant_name | compact_text }}; 备注={{ home_profile.home_note | compact_text }}.
-家庭成员: {% if members %}{% for m in members %}{{ m.name | compact_text }}(角色:{{ m.role_type | compact_text }}, 年龄段:{{ m.age_group | compact_text }}, 外观:{{ m.appearance_desc | compact_text }}, 备注:{{ m.note | compact_text }}){% if not loop.last %}；{% endif %}{% endfor %}{% else %}无{% endif %}。
-宠物信息: {% if pets %}{% for p in pets %}{{ p.name | compact_text }}(类型:{{ p.role_type | compact_text }}, 品种:{{ p.breed | compact_text }}, 外观:{{ p.appearance_desc | compact_text }}, 备注:{{ p.note | compact_text }}){% if not loop.last %}；{% endif %}{% endfor %}{% else %}无{% endif %}。
-边界: 家庭档案仅作为辅助上下文，不能替代视频证据。
+家庭成员: {% if members %}{% for m in members %}{{ m.name | compact_text }}(角色:{{ m.role_type | compact_text }}, 年龄段:{{ m.age_group | compact_text }}, 外观:{{ m.appearance_desc | compact_text }}, 备注:{{ m.note | compact_text }}){% if not loop.last %}；{% endif %}{% endfor %}{% else %}无{% endif %}.
+宠物信息: {% if pets %}{% for p in pets %}{{ p.name | compact_text }}(类型:{{ p.role_type | compact_text }}, 品种:{{ p.breed | compact_text }}, 外观:{{ p.appearance_desc | compact_text }}, 备注:{{ p.note | compact_text }}){% if not loop.last %}；{% endif %}{% endfor %}{% else %}无{% endif %}.
+边界: 家庭档案仅作为辅助上下文，不能替代视频证据.

@@ -150,36 +150,6 @@ def build_home_context(db: Session) -> dict[str, Any]:
     }
 
 
-def build_home_context_prompt_text(context: dict[str, Any]) -> str:
-    home_profile = context.get("home_profile", {})
-    members = context.get("members", [])
-    pets = context.get("pets", [])
-
-    member_lines = [
-        f"- {item.get('name')} ({item.get('role_type')}, {item.get('age_group') or 'age_unknown'})"
-        for item in members
-    ]
-    pet_lines = [
-        f"- {item.get('name')} ({item.get('role_type')}, {item.get('breed') or 'breed_unknown'})"
-        for item in pets
-    ]
-
-    return (
-        "家庭语境：\n"
-        f"家庭名称: {home_profile.get('home_name', '')}\n"
-        f"家庭标签: {', '.join(home_profile.get('family_tags', [])) or 'none'}\n"
-        f"关注重点: {', '.join(home_profile.get('focus_points', [])) or 'none'}\n"
-        f"系统风格: {home_profile.get('system_style', '')}\n"
-        f"风格补充: {home_profile.get('style_preference_text') or 'none'}\n"
-        f"系统名称: {home_profile.get('assistant_name', '')}\n"
-        f"家庭说明: {home_profile.get('home_note') or 'none'}\n"
-        "家庭成员:\n"
-        f"{chr(10).join(member_lines) if member_lines else '- none'}\n"
-        "宠物:\n"
-        f"{chr(10).join(pet_lines) if pet_lines else '- none'}"
-    )
-
-
 def get_options() -> dict[str, list[str]]:
     return {
         "family_tags": sorted(FAMILY_TAG_OPTIONS),

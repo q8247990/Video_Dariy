@@ -1,2 +1,4 @@
 家庭上下文：
-{{ home_context_payload | to_json }}
+{{ home_profile.home_name | compact_text }}; 标签={{ home_profile.family_tags | default([], true) | compact_list }}; 关注点={{ home_profile.focus_points | default([], true) | compact_list }}; 风格={{ home_profile.system_style | compact_text }}; 风格偏好={{ home_profile.style_preference_text | compact_text }}; 助手名={{ home_profile.assistant_name | compact_text }}; 备注={{ home_profile.home_note | compact_text }}.
+成员: {% if members %}{% for m in members %}{{ m.name | compact_text }}(角色:{{ m.role_type | compact_text }}, 年龄段:{{ m.age_group | compact_text }}){% if not loop.last %}；{% endif %}{% endfor %}{% else %}无{% endif %}.
+宠物: {% if pets %}{% for p in pets %}{{ p.name | compact_text }}(类型:{{ p.role_type | compact_text }}, 品种:{{ p.breed | compact_text }}){% if not loop.last %}；{% endif %}{% endfor %}{% else %}无{% endif %}.
