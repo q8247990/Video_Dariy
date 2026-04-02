@@ -15,4 +15,4 @@ output/
 postgres_data/
 redis_data/
 data/
-.playwright-mcp
+.playwright-mcp/
