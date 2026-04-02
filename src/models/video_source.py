@@ -1,10 +1,15 @@
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import JSON, Boolean, Date, DateTime, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
+
+if TYPE_CHECKING:
+    from src.models.video_file import VideoFile
+    from src.models.video_session import VideoSession
+    from src.models.video_source_runtime_state import VideoSourceRuntimeState
 
 
 class VideoSource(Base):
@@ -26,3 +31,13 @@ class VideoSource(Base):
     last_validate_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     last_validate_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     last_validate_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    video_files: Mapped[list["VideoFile"]] = relationship(
+        "VideoFile", back_populates="source", lazy="select"
+    )
+    sessions: Mapped[list["VideoSession"]] = relationship(
+        "VideoSession", back_populates="source", lazy="select"
+    )
+    runtime_state: Mapped[Optional["VideoSourceRuntimeState"]] = relationship(
+        "VideoSourceRuntimeState", back_populates="source", uselist=False, lazy="select"
+    )

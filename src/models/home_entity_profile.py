@@ -20,3 +20,4 @@ class HomeEntityProfile(Base):
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    image_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

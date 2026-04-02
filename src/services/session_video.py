@@ -1,7 +1,4 @@
 import os
-import shlex
-import subprocess
-import tempfile
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -10,6 +7,7 @@ from src.core.config import settings
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
+from src.services.ffmpeg_utils import run_ffmpeg_concat_to_file
 
 
 def get_session_video_files(db: Session, session_id: int) -> list[VideoFile]:
@@ -61,59 +59,14 @@ def ensure_merged_video(db: Session, session_id: int) -> str:
     if len(source_paths) == 1:
         return source_paths[0]
 
-    concat_file = _build_concat_file(source_paths)
-    tmp_output = str(target_path) + ".tmp.mp4"
-    copy_cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        concat_file,
-        "-c",
-        "copy",
-        tmp_output,
-    ]
-    copy_result = subprocess.run(copy_cmd, capture_output=True, text=True)
-    if copy_result.returncode != 0:
-        reencode_cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-            tmp_output,
-        ]
-        reencode_result = subprocess.run(reencode_cmd, capture_output=True, text=True)
-        if reencode_result.returncode != 0:
-            copy_stderr = (copy_result.stderr or "")[-1000:]
-            reencode_stderr = (reencode_result.stderr or "")[-1000:]
-            raise ValueError(
-                "Failed to merge videos with ffmpeg. "
-                f"copy_error={copy_stderr}; reencode_error={reencode_stderr}"
-            )
-
-    os.replace(tmp_output, str(target_path))
-    os.remove(concat_file)
+    run_ffmpeg_concat_to_file(source_paths, str(target_path))
     return str(target_path)
 
 
 def _build_concat_file(paths: list[str]) -> str:
+    import shlex
+    import tempfile
+
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
     try:
         for path in paths:

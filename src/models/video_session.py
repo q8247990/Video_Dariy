@@ -1,10 +1,14 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
+
+if TYPE_CHECKING:
+    from src.models.event_record import EventRecord
+    from src.models.video_source import VideoSource
 
 
 class VideoSession(Base):
@@ -24,6 +28,11 @@ class VideoSession(Base):
     analysis_notes_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     last_analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     analysis_priority: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
+    source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="sessions")
+    events: Mapped[list["EventRecord"]] = relationship(
+        "EventRecord", back_populates="session", lazy="select"
+    )
 
     __table_args__ = (
         Index("idx_video_session_source_start", "source_id", "session_start_time"),

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Storage
     VIDEO_ROOT_PATH: str = "/data/videos"
     PLAYBACK_CACHE_ROOT: str = "/data/hls"
+    ENTITY_IMAGE_ROOT: str = "/data/images"
     SESSION_PLAYBACK_MODE: str = "hls_index_only"
 
     # Analysis

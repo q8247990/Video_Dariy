@@ -139,7 +139,7 @@ def retry_task_log(db: DB, current_user: CurrentUser, id: int) -> Any:  # noqa: 
             if not source.enabled:
                 return BaseResponse(code=4004, message="Source is disabled")
 
-            scan_mode = str(detail.get("scan_mode") or ScanMode.HOT)
+            scan_mode = str(detail.get("scan_mode") or ScanMode.HOT.value)
             task_id = _pipeline_orchestrator.dispatch_session_build(
                 SessionBuildCommand(source_id=row.task_target_id, scan_mode=scan_mode)
             )

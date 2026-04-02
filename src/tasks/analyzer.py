@@ -28,6 +28,7 @@ from src.models.llm_provider import LLMProvider
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.home_profile import build_home_context
+from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import (
     SessionAnalysisStatus,
@@ -59,40 +60,6 @@ logger = logging.getLogger(__name__)
 NOT_FOUND_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 POSTGRES_RETRYABLE_SQLSTATES = {"40P01", "40001"}
 DEADLOCK_MAX_RETRIES = 3
-
-
-def _truncate_task_message(value: str, max_length: int = 500) -> str:
-    text = value.strip()
-    if len(text) <= max_length:
-        return text
-    return f"{text[: max_length - 3]}..."
-
-
-def _truncate_prompt_text(value: str | None, max_length: int = 4000) -> str | None:
-    if value is None:
-        return None
-    text = value.strip()
-    if len(text) <= max_length:
-        return text
-    return f"{text[: max_length - 3]}..."
-
-
-def _truncate_response_excerpt(value: str | None, max_length: int = 1500) -> str | None:
-    if value is None:
-        return None
-    text = value.strip()
-    if len(text) <= max_length:
-        return text
-    return f"{text[: max_length - 3]}..."
-
-
-def _truncate_response_full(value: str | None, max_length: int = 16000) -> str | None:
-    if value is None:
-        return None
-    text = value.strip()
-    if len(text) <= max_length:
-        return text
-    return f"{text[: max_length - 3]}..."
 
 
 def _get_session_with_retry(db: Session, session_id: int) -> VideoSession | None:
@@ -495,9 +462,9 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             "Failed to analyze session %s, chunk=%s, prompt=%r, raw_response=%r",
             session_id,
             last_chunk_index,
-            _truncate_prompt_text(last_prompt_text),
-            _truncate_response_full(last_raw_response_text)
-            or _truncate_response_full(last_response_text),
+            truncate_text(last_prompt_text, 4000),
+            truncate_text(last_raw_response_text, 16000)
+            or truncate_text(last_response_text, 16000),
         )
         db.rollback()
 
@@ -515,16 +482,16 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
         finalize_task_log(
             task_log,
             TaskStatus.FAILED,
-            _truncate_task_message(str(e)),
+            truncate_text(str(e), 500) or str(e),
             {
                 "session_id": session_id,
                 "failed_chunk_index": last_chunk_index,
                 "error_type": type(e).__name__,
-                "prompt_text": _truncate_prompt_text(last_prompt_text),
-                "raw_response_excerpt": _truncate_response_excerpt(last_response_text),
-                "raw_response_full": _truncate_response_full(last_response_text),
-                "raw_llm_response_excerpt": _truncate_response_excerpt(last_raw_response_text),
-                "raw_llm_response_full": _truncate_response_full(last_raw_response_text),
+                "prompt_text": truncate_text(last_prompt_text, 4000),
+                "raw_response_excerpt": truncate_text(last_response_text, 1500),
+                "raw_response_full": truncate_text(last_response_text, 16000),
+                "raw_llm_response_excerpt": truncate_text(last_raw_response_text, 1500),
+                "raw_llm_response_full": truncate_text(last_raw_response_text, 16000),
                 "priority": priority,
             },
         )

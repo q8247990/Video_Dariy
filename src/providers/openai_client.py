@@ -55,8 +55,8 @@ class OpenAIClient:
                 self._extract_usage(data)
                 return data["choices"][0]["message"]["content"]
         except Exception as e:
-            logger.error(f"Error calling OpenAI API: {e}")
-            raise e
+            logger.error("Error calling OpenAI API: %s", e)
+            raise
 
     def chat_completion_with_tools(
         self,
@@ -90,8 +90,8 @@ class OpenAIClient:
                 tool_calls = message.get("tool_calls")
                 return content, tool_calls
         except Exception as e:
-            logger.error(f"Error calling OpenAI API with tools: {e}")
-            raise e
+            logger.error("Error calling OpenAI API with tools: %s", e)
+            raise
 
     def probe_tool_calling(self) -> bool:
         """探测模型是否支持 tool_calling。

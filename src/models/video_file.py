@@ -1,11 +1,14 @@
 import hashlib
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
+
+if TYPE_CHECKING:
+    from src.models.video_source import VideoSource
 
 
 def build_file_path_hash(file_path: str) -> str:
@@ -40,6 +43,8 @@ class VideoFile(Base):
     file_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     parse_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     parse_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
+    source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="video_files")
 
     __table_args__ = (
         Index("uk_video_file_source_path_hash", "source_id", "file_path_hash", unique=True),

@@ -1,7 +1,6 @@
-import json
-
 from pydantic import ValidationError
 
+from src.services.llm_output_utils import extract_json_object, strip_code_block
 from src.services.video_analysis.enums import (
     normalize_activity_level,
     normalize_analysis_note_type,
@@ -20,40 +19,6 @@ class RecognitionOutputFormatError(RecognitionOutputError):
 
 class RecognitionOutputValidationError(RecognitionOutputError):
     pass
-
-
-def _strip_code_block(text: str) -> str:
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    if len(lines) < 3:
-        return stripped
-    return "\n".join(lines[1:-1]).strip()
-
-
-def _extract_json_object(text: str) -> dict:
-    decoder = json.JSONDecoder()
-    stripped = text.lstrip()
-    if not stripped.startswith("{"):
-        raise RecognitionOutputFormatError("LLM response does not start with a JSON object")
-
-    try:
-        result, end_index = decoder.raw_decode(stripped)
-    except json.JSONDecodeError as exc:
-        raise RecognitionOutputFormatError(
-            "LLM response does not contain a complete top-level JSON object"
-        ) from exc
-
-    if not isinstance(result, dict):
-        raise RecognitionOutputFormatError("LLM response top-level JSON must be an object")
-
-    trailing = stripped[end_index:].strip()
-    if trailing:
-        raise RecognitionOutputFormatError("LLM response contains unexpected trailing content")
-
-    return result
 
 
 def _looks_like_session_summary(payload: dict) -> bool:
@@ -140,8 +105,11 @@ def _sanitize_recognition_payload(payload: dict) -> dict:
 
 
 def parse_video_recognition_output(raw_text: str) -> RecognitionResultDTO:
-    text = _strip_code_block(raw_text)
-    raw_payload = _extract_json_object(text)
+    text = strip_code_block(raw_text)
+    try:
+        raw_payload = extract_json_object(text, strict=True)
+    except ValueError as exc:
+        raise RecognitionOutputFormatError(str(exc)) from exc
 
     validation_errors: list[str] = []
     for payload in _normalize_recognition_payload(raw_payload):

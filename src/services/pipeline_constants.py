@@ -1,16 +1,19 @@
-class SourceType:
+from enum import Enum
+
+
+class SourceType(str, Enum):
     LOCAL_DIRECTORY = "local_directory"
 
 
 SUPPORTED_SCAN_SOURCE_TYPES = {SourceType.LOCAL_DIRECTORY}
 
 
-class ValidationStatus:
+class ValidationStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
 
 
-class TaskType:
+class TaskType(str, Enum):
     SESSION_BUILD = "session_build"
     SESSION_ANALYSIS = "session_analysis"
     VIDEO_PIPELINE_ALERT = "video_pipeline_alert"
@@ -18,12 +21,12 @@ class TaskType:
     WEBHOOK_PUSH = "webhook_push"
 
 
-class ScanMode:
+class ScanMode(str, Enum):
     HOT = "hot"
     FULL = "full"
 
 
-class TaskStatus:
+class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"
@@ -33,7 +36,7 @@ class TaskStatus:
     CANCELLED = "cancelled"
 
 
-class SessionAnalysisStatus:
+class SessionAnalysisStatus(str, Enum):
     OPEN = "open"
     SEALED = "sealed"
     ANALYZING = "analyzing"
@@ -41,12 +44,12 @@ class SessionAnalysisStatus:
     FAILED = "failed"
 
 
-class AnalysisPriority:
+class AnalysisPriority(str, Enum):
     HOT = "hot"
     FULL = "full"
 
 
-class PipelineStatus:
+class PipelineStatus(str, Enum):
     IDLE = "idle"
     BUILDING = "building"
     ANALYZING = "analyzing"

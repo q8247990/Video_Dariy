@@ -1,10 +1,13 @@
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
+
+if TYPE_CHECKING:
+    from src.models.video_source import VideoSource
 
 
 class VideoSourceRuntimeState(Base):
@@ -20,5 +23,7 @@ class VideoSourceRuntimeState(Base):
     latency_alert_last_notified_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )
+
+    source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="runtime_state")
 
     __table_args__ = (Index("idx_video_source_runtime_state_source", "source_id", unique=True),)

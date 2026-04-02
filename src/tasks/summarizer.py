@@ -1057,7 +1057,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         return {"cancelled": True, "summary_date": str(target_date)}
 
     except Exception as e:
-        logger.exception(f"Failed to generate summary for {target_date}")
+        logger.exception("Failed to generate summary for %s", target_date)
         db.rollback()
         finalize_task_log(task_log, TaskStatus.FAILED, str(e))
         db.commit()

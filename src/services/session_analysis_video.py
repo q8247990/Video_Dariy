@@ -1,12 +1,10 @@
 import base64
-import os
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from src.services.ffmpeg_utils import run_ffmpeg_concat_to_bytes
 from src.services.session_video import get_session_video_files
 
 
@@ -102,73 +100,7 @@ def _resolve_file_duration_seconds(video_file) -> int:
 
 
 def _concat_video_files_to_mp4_bytes(file_paths: list[str]) -> bytes:
-    concat_payload = _build_concat_payload(file_paths)
-    with tempfile.NamedTemporaryFile(mode="wb", suffix=".txt", delete=False) as temp_file:
-        temp_file.write(concat_payload)
-        concat_file_path = temp_file.name
-
-    try:
-        copy_cmd = [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file_path,
-            "-c",
-            "copy",
-            "-movflags",
-            "frag_keyframe+empty_moov",
-            "-f",
-            "mp4",
-            "pipe:1",
-        ]
-        copy_result = subprocess.run(copy_cmd, capture_output=True)
-        if copy_result.returncode == 0 and copy_result.stdout:
-            return copy_result.stdout
-
-        reencode_cmd = [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file_path,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "frag_keyframe+empty_moov",
-            "-f",
-            "mp4",
-            "pipe:1",
-        ]
-        reencode_result = subprocess.run(reencode_cmd, capture_output=True)
-        if reencode_result.returncode != 0 or not reencode_result.stdout:
-            copy_stderr = (copy_result.stderr or b"")[-1000:].decode("utf-8", errors="ignore")
-            reencode_stderr = (reencode_result.stderr or b"")[-1000:].decode(
-                "utf-8", errors="ignore"
-            )
-            raise ValueError(
-                "Failed to build chunk video bytes with ffmpeg. "
-                f"copy_error={copy_stderr}; reencode_error={reencode_stderr}"
-            )
-
-        return reencode_result.stdout
-    finally:
-        if os.path.exists(concat_file_path):
-            os.unlink(concat_file_path)
+    return run_ffmpeg_concat_to_bytes(file_paths)
 
 
 def _build_concat_payload(file_paths: list[str]) -> bytes:

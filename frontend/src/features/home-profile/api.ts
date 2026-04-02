@@ -57,3 +57,22 @@ export async function getHomeOptions(): Promise<HomeOptions> {
   const response = await apiClient.get('/home-profile/options')
   return unwrapApi<HomeOptions>(response)
 }
+
+export async function uploadEntityImage(id: number, file: File): Promise<HomeEntity> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await apiClient.post(`/home-profile/entities/${id}/image`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return unwrapApi<HomeEntity>(response)
+}
+
+export async function deleteEntityImage(id: number): Promise<HomeEntity> {
+  const response = await apiClient.delete(`/home-profile/entities/${id}/image`)
+  return unwrapApi<HomeEntity>(response)
+}
+
+export async function generateEntityAppearance(id: number): Promise<HomeEntity> {
+  const response = await apiClient.post(`/home-profile/entities/${id}/generate-appearance`)
+  return unwrapApi<HomeEntity>(response)
+}

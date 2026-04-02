@@ -8,8 +8,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 123456
       POSTGRES_DB: home_monitor
-    ports:
-      - "5432:5432"
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,8 +23,6 @@ services:
     image: redis:alpine
     container_name: hm_redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:

@@ -1,10 +1,14 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import DECIMAL, JSON, DateTime, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
+
+if TYPE_CHECKING:
+    from src.models.video_session import VideoSession
+    from src.models.video_source import VideoSource
 
 
 class EventRecord(Base):
@@ -30,6 +34,9 @@ class EventRecord(Base):
     observed_actions_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     interpreted_state_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     raw_result: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+
+    source: Mapped["VideoSource"] = relationship("VideoSource")
+    session: Mapped["VideoSession"] = relationship("VideoSession", back_populates="events")
 
     __table_args__ = (
         Index("idx_event_source_start", "source_id", "event_start_time"),

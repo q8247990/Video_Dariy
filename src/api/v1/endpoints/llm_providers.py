@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter
 from sqlalchemy.exc import IntegrityError
 
+from src.api.common import reset_other_default_providers
 from src.api.deps import DB, CurrentUser
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.llm_provider import LLMProvider
@@ -121,19 +122,7 @@ def create_provider(db: DB, current_user: CurrentUser, data: LLMProviderCreate) 
     provider = LLMProvider(**dump)
     db.add(provider)
     db.flush()
-
-    if provider.is_default_vision:
-        db.query(LLMProvider).filter(
-            LLMProvider.supports_vision.is_(True),
-            LLMProvider.id != provider.id,
-        ).update({"is_default_vision": False})
-
-    if provider.is_default_qa:
-        db.query(LLMProvider).filter(
-            LLMProvider.supports_qa.is_(True),
-            LLMProvider.id != provider.id,
-        ).update({"is_default_qa": False})
-
+    reset_other_default_providers(db, provider)
     db.commit()
     db.refresh(provider)
     return BaseResponse(data=LLMProviderResponse.model_validate(provider))
@@ -188,18 +177,7 @@ def update_provider(  # noqa: C901
         setattr(provider, key, value)
 
     db.flush()
-    if provider.is_default_vision:
-        db.query(LLMProvider).filter(
-            LLMProvider.supports_vision.is_(True),
-            LLMProvider.id != provider.id,
-        ).update({"is_default_vision": False})
-
-    if provider.is_default_qa:
-        db.query(LLMProvider).filter(
-            LLMProvider.supports_qa.is_(True),
-            LLMProvider.id != provider.id,
-        ).update({"is_default_qa": False})
-
+    reset_other_default_providers(db, provider)
     db.commit()
     db.refresh(provider)
     return BaseResponse(data=LLMProviderResponse.model_validate(provider))

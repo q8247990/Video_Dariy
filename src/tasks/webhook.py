@@ -53,8 +53,7 @@ def send_webhook_task(self, event_type: str, payload: dict) -> dict:
                     response.raise_for_status()
                     sent_count += 1
             except Exception as e:
-                logger.error(f"Webhook {hook.name} failed: {e}")
-                # We could implement granular retries here, but for simplicity we log the error
+                logger.error("Webhook %s failed: %s", hook.name, e)
 
         finalize_task_log(task_log, TaskStatus.SUCCESS, f"Sent to {sent_count} webhooks")
         db.commit()

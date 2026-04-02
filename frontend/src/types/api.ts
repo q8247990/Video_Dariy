@@ -417,6 +417,7 @@ export type HomeEntity = {
   note: string | null
   sort_order: number
   is_enabled: boolean
+  image_url: string | null
   created_at: string
   updated_at: string
 }

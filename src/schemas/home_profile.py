@@ -134,6 +134,7 @@ class HomeEntityResponse(BaseModel):
     note: Optional[str] = None
     sort_order: int
     is_enabled: bool
+    image_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

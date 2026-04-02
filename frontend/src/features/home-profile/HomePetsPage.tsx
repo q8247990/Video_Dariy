@@ -1,12 +1,21 @@
-import { useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
 import { StatusTag } from '../../components/common/StatusTag'
 import type { HomeEntity, PetPayload } from '../../types/api'
-import { createPet, disableEntity, getHomeOptions, listHomeEntities, updateEntity } from './api'
+import {
+  createPet,
+  deleteEntityImage,
+  disableEntity,
+  generateEntityAppearance,
+  getHomeOptions,
+  listHomeEntities,
+  updateEntity,
+  uploadEntityImage,
+} from './api'
 import { petRoleLabel } from './labels'
 
 type PetFormProps = {
@@ -42,7 +51,14 @@ function getInitialState(roles: string[], initialValue?: HomeEntity): FormState 
 }
 
 function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormProps) {
+  const queryClient = useQueryClient()
   const [form, setForm] = useState<FormState>(() => getInitialState(roles, initialValue))
+  const [currentEntity, setCurrentEntity] = useState<HomeEntity | undefined>(initialValue)
+  const [imageMessage, setImageMessage] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const submitLabel = useMemo(() => (initialValue ? '保存修改' : '新增宠物'), [initialValue])
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -59,8 +75,122 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
     })
   }
 
+  const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file || !currentEntity) return
+    setUploading(true)
+    setImageMessage('')
+    try {
+      const updated = await uploadEntityImage(currentEntity.id, file)
+      setCurrentEntity(updated)
+      queryClient.invalidateQueries({ queryKey: ['home-pets'] })
+    } catch (error) {
+      setImageMessage((error as Error).message)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleDeleteImage = async () => {
+    if (!currentEntity) return
+    setDeleting(true)
+    setImageMessage('')
+    try {
+      const updated = await deleteEntityImage(currentEntity.id)
+      setCurrentEntity(updated)
+      queryClient.invalidateQueries({ queryKey: ['home-pets'] })
+    } catch (error) {
+      setImageMessage((error as Error).message)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const handleGenerate = async () => {
+    if (!currentEntity) return
+    setGenerating(true)
+    setImageMessage('')
+    try {
+      const updated = await generateEntityAppearance(currentEntity.id)
+      setCurrentEntity(updated)
+      setForm((old) => ({ ...old, appearance_desc: updated.appearance_desc ?? '' }))
+      queryClient.invalidateQueries({ queryKey: ['home-pets'] })
+    } catch (error) {
+      setImageMessage((error as Error).message)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   return (
     <form className="dialog-form" onSubmit={handleSubmit}>
+      {currentEntity && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          {currentEntity.image_url ? (
+            <img
+              src={`${currentEntity.image_url}?t=${currentEntity.updated_at}`}
+              alt={currentEntity.name}
+              style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8 }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 120,
+                height: 120,
+                border: '2px dashed #ccc',
+                borderRadius: 8,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#999',
+                fontSize: 12,
+              }}
+            >
+              暂无图片
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleUpload}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            {currentEntity.image_url ? (
+              <>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploading ? '上传中...' : '重新上传'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={deleting}
+                  onClick={handleDeleteImage}
+                >
+                  {deleting ? '删除中...' : '删除'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="ghost"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploading ? '上传中...' : '上传图片'}
+              </button>
+            )}
+          </div>
+          {imageMessage && <div style={{ color: '#e53e3e', fontSize: 12 }}>{imageMessage}</div>}
+        </div>
+      )}
       <label>
         名字
         <input value={form.name} required onChange={(event) => setForm((old) => ({ ...old, name: event.target.value }))} />
@@ -81,7 +211,24 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
       </label>
       <label>
         外观特征
-        <textarea value={form.appearance_desc} onChange={(event) => setForm((old) => ({ ...old, appearance_desc: event.target.value }))} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <textarea
+            style={{ flex: 1 }}
+            value={form.appearance_desc}
+            onChange={(event) => setForm((old) => ({ ...old, appearance_desc: event.target.value }))}
+          />
+          {currentEntity && (
+            <button
+              type="button"
+              className="ghost"
+              disabled={generating}
+              onClick={handleGenerate}
+              style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              {generating ? '生成中...' : '✨ AI 生成'}
+            </button>
+          )}
+        </div>
       </label>
       <label>
         性格 / 日常风格
