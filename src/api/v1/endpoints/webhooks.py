@@ -4,10 +4,8 @@ from typing import Any
 from fastapi import APIRouter
 from kombu.exceptions import OperationalError
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Orchestrator
 from src.application.pipeline.commands import SendWebhookCommand
-from src.application.pipeline.orchestrator import PipelineOrchestrator
-from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.webhook_config import WebhookConfig
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.schemas.webhook import WebhookCreate, WebhookResponse, WebhookUpdate
@@ -44,7 +42,6 @@ def _normalize_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_pipeline_orchestrator = PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
 
 
 @router.get("", response_model=PaginatedResponse[WebhookResponse])
@@ -96,7 +93,7 @@ def delete_webhook(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/{id}/test", response_model=BaseResponse[dict])
-def test_webhook(db: DB, current_user: CurrentUser, id: int) -> Any:
+def test_webhook(db: DB, current_user: CurrentUser, orchestrator: Orchestrator, id: int) -> Any:
     hook = db.query(WebhookConfig).filter(WebhookConfig.id == id).first()
     if not hook:
         return BaseResponse(code=4002, message="Webhook not found")
@@ -107,9 +104,7 @@ def test_webhook(db: DB, current_user: CurrentUser, id: int) -> Any:
     )
 
     try:
-        _pipeline_orchestrator.dispatch_webhook(
-            SendWebhookCommand(event_type="test_event", payload=payload)
-        )
+        orchestrator.dispatch_webhook(SendWebhookCommand(event_type="test_event", payload=payload))
     except OperationalError as e:
         logger.exception("Failed to enqueue test webhook task for webhook_id=%s", id)
         return BaseResponse(code=5001, message=f"Task queue unavailable: {e}")

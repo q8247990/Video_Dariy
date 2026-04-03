@@ -21,7 +21,7 @@ from src.application.prompt.contracts import (
 )
 from src.core.celery_app import celery_app
 from src.core.config import settings
-from src.db.session import SessionLocal
+from src.db.session import task_db_session
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
@@ -302,202 +302,200 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
     Dispatched to analysis_hot or analysis_full queue by the caller.
     Worker concurrency on these queues controls parallelism (max 2).
     """
-    db: Session = SessionLocal()
-    session = None
-    last_chunk_index: int | None = None
-    last_prompt_text: str | None = None
-    last_response_text: str | None = None
-    last_raw_response_text: str | None = None
-    queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
-    task_log = bind_or_create_running_task_log(
-        db,
-        queue_task_id=queue_task_id or None,
-        task_type=TaskType.SESSION_ANALYSIS,
-        task_target_id=session_id,
-        detail_json={"priority": priority},
-    )
-    db.commit()
-
-    try:
-        ensure_task_not_cancelled(
-            db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
-        )
-        session, skip_reason = _claim_session_for_analysis(db, session_id)
-        if skip_reason is not None:
-            return _skip_analysis_task(db, task_log, session_id, skip_reason, priority)
-        if session is None:
-            return _skip_analysis_task(db, task_log, session_id, "not_found", priority)
-
-        source = db.query(VideoSource).filter(VideoSource.id == session.source_id).first()
-        if not source:
-            raise ValueError(f"Video source {session.source_id} not found")
-
-        home_context = build_home_context(db)
-        chunks = build_session_video_chunks(
+    with task_db_session() as db:
+        session = None
+        last_chunk_index: int | None = None
+        last_prompt_text: str | None = None
+        last_response_text: str | None = None
+        last_raw_response_text: str | None = None
+        queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
+        task_log = bind_or_create_running_task_log(
             db,
-            session.id,
-            chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
+            queue_task_id=queue_task_id or None,
+            task_type=TaskType.SESSION_ANALYSIS,
+            task_target_id=session_id,
+            detail_json={"priority": priority},
         )
-        client, provider = _build_provider_client(db)
+        db.commit()
 
-        parse_modes: list[str] = []
-        events_to_persist: list[EventRecord] = []
-        structured_results: list[tuple[int, RecognitionResultDTO]] = []
-        for chunk in chunks:
+        try:
             ensure_task_not_cancelled(
-                db,
-                task_log.id,
-                default_message=f"Analysis cancelled for session {session_id}",
+                db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
             )
-            last_chunk_index = chunk.chunk_index
-            video_data_url = build_chunk_video_data_url(chunk)
-            system_prompt, user_prompt = _build_prompts(source, home_context, session, chunk)
-            last_prompt_text = user_prompt
-            enforce_token_quota(db, provider)
+            session, skip_reason = _claim_session_for_analysis(db, session_id)
+            if skip_reason is not None:
+                return _skip_analysis_task(db, task_log, session_id, skip_reason, priority)
+            if session is None:
+                return _skip_analysis_task(db, task_log, session_id, "not_found", priority)
 
-            response_text = client.chat_completion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "video_url", "video_url": {"url": video_data_url}},
-                            {"type": "text", "text": user_prompt},
-                        ],
-                    },
-                ],
-                temperature=0,
-                max_tokens=8192,
-                response_format={"type": "json_object"},
-            )
-            last_response_text = response_text
-            last_raw_response_text = client.get_last_raw_response_text()
-            record_token_usage(
-                db,
-                provider_id=provider.id,
-                provider_name_snapshot=provider.provider_name,
-                scene="video_analysis",
-                usage=client.get_last_usage(),
-            )
+            source = db.query(VideoSource).filter(VideoSource.id == session.source_id).first()
+            if not source:
+                raise ValueError(f"Video source {session.source_id} not found")
 
-            if not response_text:
-                raise ValueError(
-                    f"Empty response from vision provider for chunk {chunk.chunk_index}"
+            home_context = build_home_context(db)
+            chunks = build_session_video_chunks(
+                db,
+                session.id,
+                chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
+            )
+            client, provider = _build_provider_client(db)
+
+            parse_modes: list[str] = []
+            events_to_persist: list[EventRecord] = []
+            structured_results: list[tuple[int, RecognitionResultDTO]] = []
+            for chunk in chunks:
+                ensure_task_not_cancelled(
+                    db,
+                    task_log.id,
+                    default_message=f"Analysis cancelled for session {session_id}",
+                )
+                last_chunk_index = chunk.chunk_index
+                video_data_url = build_chunk_video_data_url(chunk)
+                system_prompt, user_prompt = _build_prompts(source, home_context, session, chunk)
+                last_prompt_text = user_prompt
+                enforce_token_quota(db, provider)
+
+                response_text = client.chat_completion(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "video_url", "video_url": {"url": video_data_url}},
+                                {"type": "text", "text": user_prompt},
+                            ],
+                        },
+                    ],
+                    temperature=0,
+                    max_tokens=8192,
+                    response_format={"type": "json_object"},
+                )
+                last_response_text = response_text
+                last_raw_response_text = client.get_last_raw_response_text()
+                record_token_usage(
+                    db,
+                    provider_id=provider.id,
+                    provider_name_snapshot=provider.provider_name,
+                    scene="video_analysis",
+                    usage=client.get_last_usage(),
                 )
 
-            recognition_result = parse_video_recognition_output(response_text)
-            parse_modes.append("new")
-            structured_results.append((chunk.chunk_index, recognition_result))
-            for item in recognition_result.events:
-                events_to_persist.append(
-                    build_event_record_from_recognized_event(
-                        session,
-                        item,
-                        base_offset_seconds=chunk.start_offset_seconds,
+                if not response_text:
+                    raise ValueError(
+                        f"Empty response from vision provider for chunk {chunk.chunk_index}"
                     )
-                )
 
-        ensure_task_not_cancelled(
-            db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
-        )
-        _aggregate_session_fields(session, structured_results, events_to_persist)
-        replaced_deleted_count = _replace_session_events(db, session_id, events_to_persist)
+                recognition_result = parse_video_recognition_output(response_text)
+                parse_modes.append("new")
+                structured_results.append((chunk.chunk_index, recognition_result))
+                for item in recognition_result.events:
+                    events_to_persist.append(
+                        build_event_record_from_recognized_event(
+                            session,
+                            item,
+                            base_offset_seconds=chunk.start_offset_seconds,
+                        )
+                    )
 
-        session.analysis_status = SessionAnalysisStatus.SUCCESS
-        session.last_analyzed_at = datetime.now()
+            ensure_task_not_cancelled(
+                db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
+            )
+            _aggregate_session_fields(session, structured_results, events_to_persist)
+            replaced_deleted_count = _replace_session_events(db, session_id, events_to_persist)
 
-        finalize_task_log(
-            task_log,
-            TaskStatus.SUCCESS,
-            f"Analyzed session in {len(chunks)} chunks, created {len(events_to_persist)} events.",
-            {
-                "session_id": session_id,
-                "events_created": len(events_to_persist),
-                "events_replaced_deleted": replaced_deleted_count,
-                "chunk_count": len(chunks),
-                "chunk_seconds": settings.ANALYZER_SEGMENT_SECONDS,
-                "parse_modes": parse_modes,
-                "priority": priority,
-            },
-        )
-        db.commit()
-        return {
-            "events_created": len(events_to_persist),
-            "chunk_count": len(chunks),
-        }
+            session.analysis_status = SessionAnalysisStatus.SUCCESS
+            session.last_analyzed_at = datetime.now()
 
-    except TaskCancellationRequested as exc:
-        logger.info("Analysis task cancelled for session %s", session_id)
-        db.rollback()
-        refreshed_task_log = get_task_log_for_update(db, task_log.id)
-        if refreshed_task_log is None:
-            raise
-
-        refreshed_session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-        if (
-            refreshed_session is not None
-            and refreshed_session.analysis_status == SessionAnalysisStatus.ANALYZING
-        ):
-            refreshed_session.analysis_status = SessionAnalysisStatus.SEALED
-
-        finalize_cancelled_task_log(
-            refreshed_task_log,
-            str(exc),
-            {
-                "session_id": session_id,
-                "cancelled": True,
-                "failed_chunk_index": last_chunk_index,
-                "priority": priority,
-            },
-        )
-        db.commit()
-        return {
-            "cancelled": True,
-            "session_id": session_id,
-            "chunk_index": last_chunk_index,
-        }
-
-    except Exception as e:
-        logger.exception(
-            "Failed to analyze session %s, chunk=%s, prompt=%r, raw_response=%r",
-            session_id,
-            last_chunk_index,
-            truncate_text(last_prompt_text, 4000),
-            truncate_text(last_raw_response_text, 16000)
-            or truncate_text(last_response_text, 16000),
-        )
-        db.rollback()
-
-        if _is_deadlock_operational_error(e) and self.request.retries < DEADLOCK_MAX_RETRIES:
-            countdown = 2**self.request.retries
-            _mark_session_sealed_for_retry(db, session_id)
-            task_log.retry_count = self.request.retries + 1
-            task_log.message = (
-                f"Deadlock detected, retry {self.request.retries + 1}/"
-                f"{DEADLOCK_MAX_RETRIES} in {countdown}s"
+            finalize_task_log(
+                task_log,
+                TaskStatus.SUCCESS,
+                f"Analyzed session in {len(chunks)} chunks, created {len(events_to_persist)} events.",
+                {
+                    "session_id": session_id,
+                    "events_created": len(events_to_persist),
+                    "events_replaced_deleted": replaced_deleted_count,
+                    "chunk_count": len(chunks),
+                    "chunk_seconds": settings.ANALYZER_SEGMENT_SECONDS,
+                    "parse_modes": parse_modes,
+                    "priority": priority,
+                },
             )
             db.commit()
-            raise self.retry(exc=e, countdown=countdown) from e
+            return {
+                "events_created": len(events_to_persist),
+                "chunk_count": len(chunks),
+            }
 
-        finalize_task_log(
-            task_log,
-            TaskStatus.FAILED,
-            truncate_text(str(e), 500) or str(e),
-            {
+        except TaskCancellationRequested as exc:
+            logger.info("Analysis task cancelled for session %s", session_id)
+            db.rollback()
+            refreshed_task_log = get_task_log_for_update(db, task_log.id)
+            if refreshed_task_log is None:
+                raise
+
+            refreshed_session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
+            if (
+                refreshed_session is not None
+                and refreshed_session.analysis_status == SessionAnalysisStatus.ANALYZING
+            ):
+                refreshed_session.analysis_status = SessionAnalysisStatus.SEALED
+
+            finalize_cancelled_task_log(
+                refreshed_task_log,
+                str(exc),
+                {
+                    "session_id": session_id,
+                    "cancelled": True,
+                    "failed_chunk_index": last_chunk_index,
+                    "priority": priority,
+                },
+            )
+            db.commit()
+            return {
+                "cancelled": True,
                 "session_id": session_id,
-                "failed_chunk_index": last_chunk_index,
-                "error_type": type(e).__name__,
-                "prompt_text": truncate_text(last_prompt_text, 4000),
-                "raw_response_excerpt": truncate_text(last_response_text, 1500),
-                "raw_response_full": truncate_text(last_response_text, 16000),
-                "raw_llm_response_excerpt": truncate_text(last_raw_response_text, 1500),
-                "raw_llm_response_full": truncate_text(last_raw_response_text, 16000),
-                "priority": priority,
-            },
-        )
-        if session:
-            session.analysis_status = SessionAnalysisStatus.FAILED
-        db.commit()
-        raise
-    finally:
-        db.close()
+                "chunk_index": last_chunk_index,
+            }
+
+        except Exception as e:
+            logger.exception(
+                "Failed to analyze session %s, chunk=%s, prompt=%r, raw_response=%r",
+                session_id,
+                last_chunk_index,
+                truncate_text(last_prompt_text, 4000),
+                truncate_text(last_raw_response_text, 16000)
+                or truncate_text(last_response_text, 16000),
+            )
+            db.rollback()
+
+            if _is_deadlock_operational_error(e) and self.request.retries < DEADLOCK_MAX_RETRIES:
+                countdown = 2**self.request.retries
+                _mark_session_sealed_for_retry(db, session_id)
+                task_log.retry_count = self.request.retries + 1
+                task_log.message = (
+                    f"Deadlock detected, retry {self.request.retries + 1}/"
+                    f"{DEADLOCK_MAX_RETRIES} in {countdown}s"
+                )
+                db.commit()
+                raise self.retry(exc=e, countdown=countdown) from e
+
+            finalize_task_log(
+                task_log,
+                TaskStatus.FAILED,
+                truncate_text(str(e), 500) or str(e),
+                {
+                    "session_id": session_id,
+                    "failed_chunk_index": last_chunk_index,
+                    "error_type": type(e).__name__,
+                    "prompt_text": truncate_text(last_prompt_text, 4000),
+                    "raw_response_excerpt": truncate_text(last_response_text, 1500),
+                    "raw_response_full": truncate_text(last_response_text, 16000),
+                    "raw_llm_response_excerpt": truncate_text(last_raw_response_text, 1500),
+                    "raw_llm_response_full": truncate_text(last_raw_response_text, 16000),
+                    "priority": priority,
+                },
+            )
+            if session:
+                session.analysis_status = SessionAnalysisStatus.FAILED
+            db.commit()
+            raise

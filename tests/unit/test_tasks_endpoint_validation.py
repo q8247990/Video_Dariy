@@ -1,5 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -39,7 +40,11 @@ def test_trigger_full_build_rejects_disabled_source() -> None:
         db.add(source)
         db.commit()
 
-        resp = trigger_full_build(db=db, current_user=_current_user(), id=source.id)
+        mock_orchestrator = MagicMock()
+
+        resp = trigger_full_build(
+            db=db, current_user=_current_user(), id=source.id, orchestrator=mock_orchestrator
+        )
         assert resp.code == 4004
         assert "disabled" in str(resp.message).lower()
     finally:
@@ -71,14 +76,21 @@ def test_trigger_analyze_rejects_open_session() -> None:
         db.add(session)
         db.commit()
 
-        resp = trigger_analyze(db=db, current_user=_current_user(), session_id=session.id)
+        mock_orchestrator = MagicMock()
+
+        resp = trigger_analyze(
+            db=db,
+            current_user=_current_user(),
+            session_id=session.id,
+            orchestrator=mock_orchestrator,
+        )
         assert resp.code == 4004
         assert "cannot be analyzed" in str(resp.message)
     finally:
         db.close()
 
 
-def test_trigger_analyze_allows_paused_source_session(monkeypatch) -> None:
+def test_trigger_analyze_allows_paused_source_session() -> None:
     db = _new_db_session()
     try:
         source = VideoSource(
@@ -103,12 +115,15 @@ def test_trigger_analyze_allows_paused_source_session(monkeypatch) -> None:
         db.add(session)
         db.commit()
 
-        monkeypatch.setattr(
-            "src.api.v1.endpoints.tasks._pipeline_orchestrator.dispatch_analyze_session",
-            lambda command: "task-123",
-        )
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.dispatch_analyze_session.return_value = "task-123"
 
-        resp = trigger_analyze(db=db, current_user=_current_user(), session_id=session.id)
+        resp = trigger_analyze(
+            db=db,
+            current_user=_current_user(),
+            session_id=session.id,
+            orchestrator=mock_orchestrator,
+        )
         assert resp.code == 0
         assert resp.data["task_id"] == "task-123"
     finally:

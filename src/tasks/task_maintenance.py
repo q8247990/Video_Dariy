@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from src.core.celery_app import celery_app
 from src.core.config import settings
-from src.db.session import SessionLocal
+from src.db.session import task_db_session
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -175,33 +175,31 @@ def _cleanup_old_task_logs(db: Session) -> int:
 @celery_app.task(bind=True)
 def heartbeat(self) -> dict:
     """Main heartbeat: runs every 60s via Celery Beat."""
-    db: Session = SessionLocal()
-    now = datetime.now()
-    try:
-        # 1. Dispatch hot builds for all enabled sources
-        dispatched_hot = _dispatch_hot_builds(db)
+    with task_db_session() as db:
+        now = datetime.now()
+        try:
+            # 1. Dispatch hot builds for all enabled sources
+            dispatched_hot = _dispatch_hot_builds(db)
 
-        # 2. Recover timed-out tasks
-        timeout_count = _recover_timed_out_tasks(db, now)
+            # 2. Recover timed-out tasks
+            timeout_count = _recover_timed_out_tasks(db, now)
 
-        # 3. Recover orphan pending tasks
-        pending_recovered = _recover_orphan_pending_tasks(db, now)
+            # 3. Recover orphan pending tasks
+            pending_recovered = _recover_orphan_pending_tasks(db, now)
 
-        # 4. Cleanup old logs (only run once per hour approximately)
-        logs_deleted = 0
-        if now.minute == 0:
-            logs_deleted = _cleanup_old_task_logs(db)
+            # 4. Cleanup old logs (only run once per hour approximately)
+            logs_deleted = 0
+            if now.minute == 0:
+                logs_deleted = _cleanup_old_task_logs(db)
 
-        db.commit()
-        return {
-            "dispatched_hot": len(dispatched_hot),
-            "timed_out": timeout_count,
-            "pending_recovered": pending_recovered,
-            "logs_deleted": logs_deleted,
-        }
-    except Exception:
-        db.rollback()
-        logger.exception("Heartbeat failed")
-        raise
-    finally:
-        db.close()
+            db.commit()
+            return {
+                "dispatched_hot": len(dispatched_hot),
+                "timed_out": timeout_count,
+                "pending_recovered": pending_recovered,
+                "logs_deleted": logs_deleted,
+            }
+        except Exception:
+            db.rollback()
+            logger.exception("Heartbeat failed")
+            raise

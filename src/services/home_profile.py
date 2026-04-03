@@ -34,7 +34,7 @@ def get_or_create_home_profile(db: Session) -> HomeProfile:
         home_note="",
     )
     db.add(profile)
-    db.commit()
+    db.flush()
     db.refresh(profile)
     return profile
 
@@ -48,7 +48,7 @@ def save_home_profile(db: Session, payload: HomeProfileUpsert) -> HomeProfile:
     profile.style_preference_text = payload.style_preference_text
     profile.assistant_name = payload.assistant_name
     profile.home_note = payload.home_note
-    db.commit()
+    db.flush()
     db.refresh(profile)
     return profile
 
@@ -75,7 +75,7 @@ def create_member(db: Session, payload: dict[str, Any]) -> HomeEntityProfile:
     _validate_age_group(payload.get("age_group"))
     entity = HomeEntityProfile(entity_type="member", **payload)
     db.add(entity)
-    db.commit()
+    db.flush()
     db.refresh(entity)
     return entity
 
@@ -85,7 +85,7 @@ def create_pet(db: Session, payload: dict[str, Any]) -> HomeEntityProfile:
     _validate_age_group(payload.get("age_group"))
     entity = HomeEntityProfile(entity_type="pet", **payload)
     db.add(entity)
-    db.commit()
+    db.flush()
     db.refresh(entity)
     return entity
 
@@ -111,7 +111,7 @@ def update_entity(
     for key, value in update_data.items():
         setattr(entity, key, value)
 
-    db.commit()
+    db.flush()
     db.refresh(entity)
     return entity
 
@@ -121,7 +121,7 @@ def disable_entity(db: Session, entity_id: int) -> bool:
     if entity is None:
         return False
     entity.is_enabled = False
-    db.commit()
+    db.flush()
     return True
 
 

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from src.core.celery_app import celery_app
-from src.db.session import SessionLocal
+from src.db.session import task_db_session
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import (
@@ -104,228 +104,226 @@ def _dispatch_analysis_for_sealed(
 @celery_app.task(bind=True, time_limit=3600)
 def hot_build_task(self, source_id: int) -> dict:
     """Hot session build: scan recent files, merge into sessions."""
-    db: Session = SessionLocal()
-    queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
-    task_log = bind_or_create_running_task_log(
-        db,
-        queue_task_id=queue_task_id or None,
-        task_type=TaskType.SESSION_BUILD,
-        task_target_id=source_id,
-        detail_json={"scan_mode": ScanMode.HOT, "source_id": source_id},
-    )
-    db.commit()
-
-    try:
-        cancel_check = _make_cancel_check(db, task_log.id, source_id)
-        cancel_check()
-        source = db.query(VideoSource).filter(VideoSource.id == source_id).first()
-        if not source:
-            raise ValueError(f"Video source {source_id} not found")
-        if source.source_paused:
-            finalize_task_log(task_log, TaskStatus.SUCCESS, "Video source paused, build skipped")
-            db.commit()
-            return {"skipped": True, "reason": "paused"}
-
-        if source.source_type != SourceType.LOCAL_DIRECTORY:
-            raise ValueError(f"Unsupported source type: {source.source_type}")
-
-        config = source.config_json or {}
-        root_path = config.get("root_path")
-        if not root_path:
-            raise ValueError(f"root_path not configured for source {source_id}")
-
-        now = datetime.now()
-        scan_start = _compute_hot_scan_start(db, source_id, now)
-
-        build_result = _session_builder.build(
-            db=db,
-            source_id=source_id,
-            root_path=root_path,
-            scan_mode=ScanMode.HOT,
-            scan_start=scan_start,
-            scan_end=now,
-            cancel_check=cancel_check,
+    with task_db_session() as db:
+        queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
+        task_log = bind_or_create_running_task_log(
+            db,
+            queue_task_id=queue_task_id or None,
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=source_id,
+            detail_json={"scan_mode": ScanMode.HOT, "source_id": source_id},
         )
+        db.commit()
 
-        source.last_scan_at = now
+        try:
+            cancel_check = _make_cancel_check(db, task_log.id, source_id)
+            cancel_check()
+            source = db.query(VideoSource).filter(VideoSource.id == source_id).first()
+            if not source:
+                raise ValueError(f"Video source {source_id} not found")
+            if source.source_paused:
+                finalize_task_log(
+                    task_log, TaskStatus.SUCCESS, "Video source paused, build skipped"
+                )
+                db.commit()
+                return {"skipped": True, "reason": "paused"}
 
-        finalize_task_log(
-            task_log,
-            TaskStatus.SUCCESS,
-            (
-                f"Hot build: found {build_result.files_found}, "
-                f"inserted {build_result.files_inserted}, "
-                f"skipped {build_result.files_skipped}, "
-                f"created {build_result.sessions_created} sessions, "
-                f"sealed {build_result.sessions_sealed}"
-            ),
-            {
-                "scan_mode": ScanMode.HOT,
-                "source_id": source_id,
-                "scan_start": scan_start.isoformat(),
-                "scan_end": now.isoformat(),
+            if source.source_type != SourceType.LOCAL_DIRECTORY:
+                raise ValueError(f"Unsupported source type: {source.source_type}")
+
+            config = source.config_json or {}
+            root_path = config.get("root_path")
+            if not root_path:
+                raise ValueError(f"root_path not configured for source {source_id}")
+
+            now = datetime.now()
+            scan_start = _compute_hot_scan_start(db, source_id, now)
+
+            build_result = _session_builder.build(
+                db=db,
+                source_id=source_id,
+                root_path=root_path,
+                scan_mode=ScanMode.HOT,
+                scan_start=scan_start,
+                scan_end=now,
+                cancel_check=cancel_check,
+            )
+
+            source.last_scan_at = now
+
+            finalize_task_log(
+                task_log,
+                TaskStatus.SUCCESS,
+                (
+                    f"Hot build: found {build_result.files_found}, "
+                    f"inserted {build_result.files_inserted}, "
+                    f"skipped {build_result.files_skipped}, "
+                    f"created {build_result.sessions_created} sessions, "
+                    f"sealed {build_result.sessions_sealed}"
+                ),
+                {
+                    "scan_mode": ScanMode.HOT,
+                    "source_id": source_id,
+                    "scan_start": scan_start.isoformat(),
+                    "scan_end": now.isoformat(),
+                    "files_found": build_result.files_found,
+                    "files_inserted": build_result.files_inserted,
+                    "files_skipped": build_result.files_skipped,
+                    "sessions_created": build_result.sessions_created,
+                    "sessions_sealed": build_result.sessions_sealed,
+                },
+            )
+            db.commit()
+
+            # Dispatch analysis for sealed sessions
+            dispatched = _dispatch_analysis_for_sealed(build_result.sealed_sessions)
+
+            return {
                 "files_found": build_result.files_found,
                 "files_inserted": build_result.files_inserted,
-                "files_skipped": build_result.files_skipped,
                 "sessions_created": build_result.sessions_created,
                 "sessions_sealed": build_result.sessions_sealed,
-            },
-        )
-        db.commit()
+                "analysis_dispatched": len(dispatched),
+            }
 
-        # Dispatch analysis for sealed sessions
-        dispatched = _dispatch_analysis_for_sealed(build_result.sealed_sessions)
+        except TaskCancellationRequested as exc:
+            logger.info("Hot build task cancelled for source %s", source_id)
+            db.rollback()
+            refreshed_task_log = get_task_log_for_update(db, task_log.id)
+            if refreshed_task_log is None:
+                raise
+            finalize_cancelled_task_log(
+                refreshed_task_log,
+                str(exc),
+                {"scan_mode": ScanMode.HOT, "source_id": source_id, "cancelled": True},
+            )
+            db.commit()
+            return {"cancelled": True, "source_id": source_id, "scan_mode": ScanMode.HOT}
 
-        return {
-            "files_found": build_result.files_found,
-            "files_inserted": build_result.files_inserted,
-            "sessions_created": build_result.sessions_created,
-            "sessions_sealed": build_result.sessions_sealed,
-            "analysis_dispatched": len(dispatched),
-        }
-
-    except TaskCancellationRequested as exc:
-        logger.info("Hot build task cancelled for source %s", source_id)
-        db.rollback()
-        refreshed_task_log = get_task_log_for_update(db, task_log.id)
-        if refreshed_task_log is None:
+        except Exception as e:
+            logger.exception("Failed hot build for source %s", source_id)
+            db.rollback()
+            finalize_task_log(task_log, TaskStatus.FAILED, str(e))
+            db.commit()
             raise
-        finalize_cancelled_task_log(
-            refreshed_task_log,
-            str(exc),
-            {"scan_mode": ScanMode.HOT, "source_id": source_id, "cancelled": True},
-        )
-        db.commit()
-        return {"cancelled": True, "source_id": source_id, "scan_mode": ScanMode.HOT}
-
-    except Exception as e:
-        logger.exception("Failed hot build for source %s", source_id)
-        db.rollback()
-        finalize_task_log(task_log, TaskStatus.FAILED, str(e))
-        db.commit()
-        raise
-    finally:
-        db.close()
 
 
 @celery_app.task(bind=True, time_limit=259200)  # 3 days
 def full_build_task(self, source_id: int) -> dict:
     """Full session build: scan entire history up to hot boundary."""
-    db: Session = SessionLocal()
-    queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
-    task_log = bind_or_create_running_task_log(
-        db,
-        queue_task_id=queue_task_id or None,
-        task_type=TaskType.SESSION_BUILD,
-        task_target_id=source_id,
-        detail_json={"scan_mode": ScanMode.FULL, "source_id": source_id},
-    )
-    db.commit()
+    with task_db_session() as db:
+        queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
+        task_log = bind_or_create_running_task_log(
+            db,
+            queue_task_id=queue_task_id or None,
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=source_id,
+            detail_json={"scan_mode": ScanMode.FULL, "source_id": source_id},
+        )
+        db.commit()
 
-    try:
-        cancel_check = _make_cancel_check(db, task_log.id, source_id)
-        cancel_check()
-        source = db.query(VideoSource).filter(VideoSource.id == source_id).first()
-        if not source:
-            raise ValueError(f"Video source {source_id} not found")
+        try:
+            cancel_check = _make_cancel_check(db, task_log.id, source_id)
+            cancel_check()
+            source = db.query(VideoSource).filter(VideoSource.id == source_id).first()
+            if not source:
+                raise ValueError(f"Video source {source_id} not found")
 
-        if source.source_type != SourceType.LOCAL_DIRECTORY:
-            raise ValueError(f"Unsupported source type: {source.source_type}")
+            if source.source_type != SourceType.LOCAL_DIRECTORY:
+                raise ValueError(f"Unsupported source type: {source.source_type}")
 
-        config = source.config_json or {}
-        root_path = config.get("root_path")
-        if not root_path:
-            raise ValueError(f"root_path not configured for source {source_id}")
+            config = source.config_json or {}
+            root_path = config.get("root_path")
+            if not root_path:
+                raise ValueError(f"root_path not configured for source {source_id}")
 
-        from src.adapters.xiaomi_parser import XiaomiDirectoryParser
+            from src.adapters.xiaomi_parser import XiaomiDirectoryParser
 
-        parser = XiaomiDirectoryParser(root_path)
-        earliest_folder_time, _ = parser.get_directory_time_bounds()
-        if not earliest_folder_time:
-            finalize_task_log(task_log, TaskStatus.SUCCESS, "No video directories found")
-            db.commit()
-            return {"skipped": True, "reason": "no_directories"}
+            parser = XiaomiDirectoryParser(root_path)
+            earliest_folder_time, _ = parser.get_directory_time_bounds()
+            if not earliest_folder_time:
+                finalize_task_log(task_log, TaskStatus.SUCCESS, "No video directories found")
+                db.commit()
+                return {"skipped": True, "reason": "no_directories"}
 
-        now = datetime.now()
-        hot_boundary = _compute_full_scan_end(now)
+            now = datetime.now()
+            hot_boundary = _compute_full_scan_end(now)
 
-        # Full scans from earliest to hot boundary
-        scan_start = earliest_folder_time - timedelta(hours=1)
-        scan_end = hot_boundary
+            # Full scans from earliest to hot boundary
+            scan_start = earliest_folder_time - timedelta(hours=1)
+            scan_end = hot_boundary
 
-        if scan_start >= scan_end:
+            if scan_start >= scan_end:
+                finalize_task_log(
+                    task_log,
+                    TaskStatus.SUCCESS,
+                    "Full build: no time range to scan (hot already covers all)",
+                )
+                db.commit()
+                return {"skipped": True, "reason": "no_range"}
+
+            build_result = _session_builder.build(
+                db=db,
+                source_id=source_id,
+                root_path=root_path,
+                scan_mode=ScanMode.FULL,
+                scan_start=scan_start,
+                scan_end=scan_end,
+                cancel_check=cancel_check,
+            )
+
             finalize_task_log(
                 task_log,
                 TaskStatus.SUCCESS,
-                "Full build: no time range to scan (hot already covers all)",
+                (
+                    f"Full build: found {build_result.files_found}, "
+                    f"inserted {build_result.files_inserted}, "
+                    f"skipped {build_result.files_skipped}, "
+                    f"created {build_result.sessions_created} sessions, "
+                    f"sealed {build_result.sessions_sealed}"
+                ),
+                {
+                    "scan_mode": ScanMode.FULL,
+                    "source_id": source_id,
+                    "scan_start": scan_start.isoformat(),
+                    "scan_end": scan_end.isoformat(),
+                    "files_found": build_result.files_found,
+                    "files_inserted": build_result.files_inserted,
+                    "files_skipped": build_result.files_skipped,
+                    "sessions_created": build_result.sessions_created,
+                    "sessions_sealed": build_result.sessions_sealed,
+                },
             )
             db.commit()
-            return {"skipped": True, "reason": "no_range"}
 
-        build_result = _session_builder.build(
-            db=db,
-            source_id=source_id,
-            root_path=root_path,
-            scan_mode=ScanMode.FULL,
-            scan_start=scan_start,
-            scan_end=scan_end,
-            cancel_check=cancel_check,
-        )
+            # Dispatch analysis for sealed sessions
+            dispatched = _dispatch_analysis_for_sealed(build_result.sealed_sessions)
 
-        finalize_task_log(
-            task_log,
-            TaskStatus.SUCCESS,
-            (
-                f"Full build: found {build_result.files_found}, "
-                f"inserted {build_result.files_inserted}, "
-                f"skipped {build_result.files_skipped}, "
-                f"created {build_result.sessions_created} sessions, "
-                f"sealed {build_result.sessions_sealed}"
-            ),
-            {
-                "scan_mode": ScanMode.FULL,
-                "source_id": source_id,
-                "scan_start": scan_start.isoformat(),
-                "scan_end": scan_end.isoformat(),
+            return {
                 "files_found": build_result.files_found,
                 "files_inserted": build_result.files_inserted,
-                "files_skipped": build_result.files_skipped,
                 "sessions_created": build_result.sessions_created,
                 "sessions_sealed": build_result.sessions_sealed,
-            },
-        )
-        db.commit()
+                "analysis_dispatched": len(dispatched),
+            }
 
-        # Dispatch analysis for sealed sessions
-        dispatched = _dispatch_analysis_for_sealed(build_result.sealed_sessions)
+        except TaskCancellationRequested as exc:
+            logger.info("Full build task cancelled for source %s", source_id)
+            db.rollback()
+            refreshed_task_log = get_task_log_for_update(db, task_log.id)
+            if refreshed_task_log is None:
+                raise
+            finalize_cancelled_task_log(
+                refreshed_task_log,
+                str(exc),
+                {"scan_mode": ScanMode.FULL, "source_id": source_id, "cancelled": True},
+            )
+            db.commit()
+            return {"cancelled": True, "source_id": source_id, "scan_mode": ScanMode.FULL}
 
-        return {
-            "files_found": build_result.files_found,
-            "files_inserted": build_result.files_inserted,
-            "sessions_created": build_result.sessions_created,
-            "sessions_sealed": build_result.sessions_sealed,
-            "analysis_dispatched": len(dispatched),
-        }
-
-    except TaskCancellationRequested as exc:
-        logger.info("Full build task cancelled for source %s", source_id)
-        db.rollback()
-        refreshed_task_log = get_task_log_for_update(db, task_log.id)
-        if refreshed_task_log is None:
+        except Exception as e:
+            logger.exception("Failed full build for source %s", source_id)
+            db.rollback()
+            finalize_task_log(task_log, TaskStatus.FAILED, str(e))
+            db.commit()
             raise
-        finalize_cancelled_task_log(
-            refreshed_task_log,
-            str(exc),
-            {"scan_mode": ScanMode.FULL, "source_id": source_id, "cancelled": True},
-        )
-        db.commit()
-        return {"cancelled": True, "source_id": source_id, "scan_mode": ScanMode.FULL}
-
-    except Exception as e:
-        logger.exception("Failed full build for source %s", source_id)
-        db.rollback()
-        finalize_task_log(task_log, TaskStatus.FAILED, str(e))
-        db.commit()
-        raise
-    finally:
-        db.close()

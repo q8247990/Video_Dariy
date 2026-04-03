@@ -6,9 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.api.common import reset_other_default_providers
 from src.api.deps import DB, CurrentUser
-from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.llm_provider import LLMProvider
-from src.providers.openai_client import OpenAIClient
 from src.schemas.llm_provider import (
     LLMProviderCreate,
     LLMProviderResponse,
@@ -16,6 +14,7 @@ from src.schemas.llm_provider import (
     LLMProviderUsageDailyItem,
 )
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
+from src.services.llm_provider_tester import check_provider_connectivity
 from src.services.llm_qos import get_daily_usage_stats, provider_availability
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
@@ -287,65 +286,20 @@ def test_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
     if not provider:
         return BaseResponse(code=4002, message="Provider not found")
 
-    test_status = "failed"
-    test_message = ""
-    vision_result = False
-    tool_calling_result = False
+    result = check_provider_connectivity(provider)
 
-    client = OpenAIClient(
-        api_base_url=provider.api_base_url,
-        api_key=provider.api_key,
-        model_name=provider.model_name,
-        timeout=provider.timeout_seconds,
-    )
-
-    # 1. 连通性测试
-    try:
-        gateway = OpenAICompatGatewayFactory().build(
-            api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
-            model_name=provider.model_name,
-            timeout_seconds=provider.timeout_seconds,
-        )
-        _ = gateway.chat_completion(
-            messages=[
-                {"role": "system", "content": "You are a connectivity test assistant."},
-                {"role": "user", "content": "Reply with 'pong'."},
-            ],
-            temperature=0,
-        )
-        test_status = "success"
-        test_message = "provider reachable"
-    except Exception as e:
-        test_message = str(e)[:512]
-
-    # 2. 连通性通过后，探测视觉和 tool_calling 能力
-    if test_status == "success":
-        vision_result = client.probe_vision()
-        tool_calling_result = client.probe_tool_calling()
-
-        # 自动回写能力字段
-        provider.supports_vision = vision_result
-        provider.supports_tool_calling = tool_calling_result
-
-        capabilities = []
-        if vision_result:
-            capabilities.append("视觉")
-        if tool_calling_result:
-            capabilities.append("工具调用")
-        cap_text = "、".join(capabilities) if capabilities else "无"
-        test_message = f"连通性正常，检测到能力：{cap_text}"
-
-    provider.last_test_status = test_status
-    provider.last_test_message = test_message
+    provider.supports_vision = result.supports_vision
+    provider.supports_tool_calling = result.supports_tool_calling
+    provider.last_test_status = "success" if result.success else "failed"
+    provider.last_test_message = result.message
     provider.last_test_at = datetime.utcnow()
     db.commit()
     db.refresh(provider)
 
     return BaseResponse(
         data={
-            "success": test_status == "success",
-            "message": test_message,
+            "success": result.success,
+            "message": result.message,
             "last_test_status": provider.last_test_status,
             "last_test_message": provider.last_test_message,
             "last_test_at": provider.last_test_at,

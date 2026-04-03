@@ -1,5 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -101,7 +102,7 @@ def test_get_daily_summary_contains_detail_text() -> None:
         db.close()
 
 
-def test_generate_all_daily_summaries_dispatches_full_date_range(monkeypatch) -> None:
+def test_generate_all_daily_summaries_dispatches_full_date_range() -> None:
     db = _new_db_session()
     try:
         db.add_all(
@@ -125,13 +126,17 @@ def test_generate_all_daily_summaries_dispatches_full_date_range(monkeypatch) ->
         db.commit()
 
         dispatched_dates: list[str] = []
-        monkeypatch.setattr(
-            "src.api.v1.endpoints.daily_summaries._pipeline_orchestrator.dispatch_generate_daily_summary",
-            lambda command: dispatched_dates.append(str(command.target_date_str))
-            or f"task-{command.target_date_str}",
-        )
+        mock_orchestrator = MagicMock()
 
-        response = generate_all_daily_summaries(db=db, current_user=SimpleNamespace(id=1))
+        def _mock_dispatch(command):
+            dispatched_dates.append(str(command.target_date_str))
+            return f"task-{command.target_date_str}"
+
+        mock_orchestrator.dispatch_generate_daily_summary.side_effect = _mock_dispatch
+
+        response = generate_all_daily_summaries(
+            db=db, current_user=SimpleNamespace(id=1), orchestrator=mock_orchestrator
+        )
 
         assert response.code == 0
         assert response.data["earliest_date"] == "2026-03-10"
@@ -143,7 +148,7 @@ def test_generate_all_daily_summaries_dispatches_full_date_range(monkeypatch) ->
         db.close()
 
 
-def test_generate_all_daily_summaries_skips_active_dates(monkeypatch) -> None:
+def test_generate_all_daily_summaries_skips_active_dates() -> None:
     db = _new_db_session()
     try:
         db.add_all(
@@ -175,12 +180,14 @@ def test_generate_all_daily_summaries_skips_active_dates(monkeypatch) -> None:
         )
         db.commit()
 
-        monkeypatch.setattr(
-            "src.api.v1.endpoints.daily_summaries._pipeline_orchestrator.dispatch_generate_daily_summary",
-            lambda command: f"task-{command.target_date_str}",
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.dispatch_generate_daily_summary.side_effect = lambda command: (
+            f"task-{command.target_date_str}"
         )
 
-        response = generate_all_daily_summaries(db=db, current_user=SimpleNamespace(id=1))
+        response = generate_all_daily_summaries(
+            db=db, current_user=SimpleNamespace(id=1), orchestrator=mock_orchestrator
+        )
 
         assert response.code == 0
         assert response.data["queued_count"] == 1

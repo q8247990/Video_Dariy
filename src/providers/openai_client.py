@@ -1,9 +1,14 @@
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+_MAX_RETRIES = 3
+_BASE_DELAY = 1.0
 
 
 class OpenAIClient:
@@ -23,12 +28,48 @@ class OpenAIClient:
         self.timeout = timeout
         self.last_usage: dict[str, int] | None = None
         self.last_raw_response_text: str | None = None
+        self._http_client = httpx.Client(timeout=self.timeout)
 
     def _build_default_request_extras(self) -> dict[str, Any]:
         model_name = self.model_name.strip().lower()
         if "qwen" in model_name:
             return {"chat_template_kwargs": {"enable_thinking": False}}
         return {}
+
+    def _request_with_retry(self, url: str, headers: dict, payload: dict) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = self._http_client.post(url, headers=headers, json=payload)
+                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < _MAX_RETRIES:
+                    delay = _BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Retryable status %s from %s, retry %d/%d in %.1fs",
+                        response.status_code,
+                        url,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                return response
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    delay = _BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Request to %s failed (%s), retry %d/%d in %.1fs",
+                        url,
+                        type(exc).__name__,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+        raise last_exc  # type: ignore[misc]
 
     def chat_completion(
         self,
@@ -47,13 +88,15 @@ class OpenAIClient:
             payload["response_format"] = response_format
 
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(url, headers=headers, json=payload)
-                self.last_raw_response_text = response.text
-                response.raise_for_status()
-                data = response.json()
-                self._extract_usage(data)
-                return data["choices"][0]["message"]["content"]
+            response = self._request_with_retry(url, headers, payload)
+            self.last_raw_response_text = response.text
+            response.raise_for_status()
+            data = response.json()
+            self._extract_usage(data)
+            choices = data.get("choices")
+            if not choices:
+                raise ValueError(f"OpenAI API returned no choices: {data}")
+            return choices[0]["message"]["content"]
         except Exception as e:
             logger.error("Error calling OpenAI API: %s", e)
             raise
@@ -79,16 +122,18 @@ class OpenAIClient:
             payload["max_tokens"] = max_tokens
 
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(url, headers=headers, json=payload)
-                self.last_raw_response_text = response.text
-                response.raise_for_status()
-                data = response.json()
-                self._extract_usage(data)
-                message = data["choices"][0]["message"]
-                content = message.get("content")
-                tool_calls = message.get("tool_calls")
-                return content, tool_calls
+            response = self._request_with_retry(url, headers, payload)
+            self.last_raw_response_text = response.text
+            response.raise_for_status()
+            data = response.json()
+            self._extract_usage(data)
+            choices = data.get("choices")
+            if not choices:
+                raise ValueError(f"OpenAI API returned no choices: {data}")
+            message = choices[0]["message"]
+            content = message.get("content")
+            tool_calls = message.get("tool_calls")
+            return content, tool_calls
         except Exception as e:
             logger.error("Error calling OpenAI API with tools: %s", e)
             raise

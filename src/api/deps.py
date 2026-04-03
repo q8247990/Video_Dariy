@@ -5,9 +5,11 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
+from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.config import settings
 from src.core.security import ALGORITHM
 from src.db.session import get_db
+from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.admin_user import AdminUser
 from src.schemas.auth import TokenData
 
@@ -43,3 +45,10 @@ def get_current_user(
 
 CurrentUser = Annotated[AdminUser, Depends(get_current_user)]
 DB = Annotated[Session, Depends(get_db)]
+
+
+def get_pipeline_orchestrator() -> PipelineOrchestrator:
+    return PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
+
+
+Orchestrator = Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)]

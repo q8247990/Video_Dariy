@@ -31,6 +31,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "integration: 需要真实外部依赖（如 LLM）的集成测试",
 ]

@@ -64,6 +64,7 @@ def _build_entity_response(entity: HomeEntityProfile) -> HomeEntityResponse:
 @router.get("", response_model=BaseResponse[HomeProfileResponse])
 def get_home_profile(db: DB, current_user: CurrentUser) -> Any:
     profile = get_or_create_home_profile(db)
+    db.commit()
     data = HomeProfileResponse.model_validate(
         {
             "id": profile.id,
@@ -129,6 +130,7 @@ def get_home_entities(
 def create_home_member(db: DB, current_user: CurrentUser, payload: MemberCreate) -> Any:
     try:
         entity = create_member(db, payload.model_dump())
+        db.commit()
     except ValueError as exc:
         return BaseResponse(code=4001, message=str(exc))
     return BaseResponse(data=_build_entity_response(entity))
@@ -138,6 +140,7 @@ def create_home_member(db: DB, current_user: CurrentUser, payload: MemberCreate)
 def create_home_pet(db: DB, current_user: CurrentUser, payload: PetCreate) -> Any:
     try:
         entity = create_pet(db, payload.model_dump())
+        db.commit()
     except ValueError as exc:
         return BaseResponse(code=4001, message=str(exc))
     return BaseResponse(data=_build_entity_response(entity))
@@ -152,6 +155,7 @@ def update_home_entity(
 ) -> Any:
     try:
         entity = update_entity(db, entity_id, payload)
+        db.commit()
     except ValueError as exc:
         return BaseResponse(code=4001, message=str(exc))
 
@@ -163,6 +167,7 @@ def update_home_entity(
 @router.delete("/entities/{entity_id}", response_model=BaseResponse[dict])
 def delete_home_entity(db: DB, current_user: CurrentUser, entity_id: int) -> Any:
     ok = disable_entity(db, entity_id)
+    db.commit()
     if not ok:
         return BaseResponse(code=4002, message="entity not found")
     return BaseResponse(data={})
@@ -302,6 +307,7 @@ def generate_entity_appearance(entity_id: int, db: DB, current_user: CurrentUser
 @router.get("/context", response_model=BaseResponse[HomeContextResponse])
 def get_home_context(db: DB, current_user: CurrentUser) -> Any:
     context = build_home_context(db)
+    db.commit()
     return BaseResponse(data=HomeContextResponse.model_validate(context))
 
 

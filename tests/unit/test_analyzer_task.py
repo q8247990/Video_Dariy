@@ -92,7 +92,17 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
         def get_last_raw_response_text(self):
             return '{"choices":[{"message":{"content":null,"reasoning":"debug"}}]}'
 
-    monkeypatch.setattr("src.tasks.analyzer.SessionLocal", session_factory)
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _fake_task_db_session():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _fake_task_db_session)
     monkeypatch.setattr(
         "src.tasks.analyzer.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [

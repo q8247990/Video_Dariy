@@ -1,8 +1,9 @@
 # 以此项目纪念我亲爱的糖糖，愿你在喵星，也能看到家里，看到你的栗子哥哥，和永远爱你的爸爸妈妈。
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.api.v1.api import api_router
 from src.core.celery_app import celery_app  # noqa: F401
@@ -31,6 +32,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    return JSONResponse(
+        status_code=200,
+        content={"code": 4000, "message": str(exc), "data": None},
+    )
+
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(mcp_router)

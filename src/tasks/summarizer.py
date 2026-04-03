@@ -12,7 +12,7 @@ from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.application.prompt.compiler import compile_daily_summary_prompt
 from src.application.prompt.contracts import DailySummaryPromptInput
 from src.core.celery_app import celery_app
-from src.db.session import SessionLocal
+from src.db.session import task_db_session
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.daily_summary import DailySummary
@@ -58,7 +58,9 @@ WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED = "daily_summary_generated"
 DISPATCH_GUARD_STATE_KEY_PREFIX = "daily_summary_dispatch_guard"
 SERIAL_SPLIT_PROMPT_THRESHOLD = 28000
 
-_pipeline_orchestrator = PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
+
+def _get_pipeline_orchestrator() -> PipelineOrchestrator:
+    return PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
 
 
 def _summary_title(target_date: date) -> str:
@@ -795,50 +797,51 @@ def _mark_dispatch_guard(db: Session, now: datetime, target_date: date, task_id:
 
 @celery_app.task(bind=True)
 def dispatch_scheduled_daily_summary_task(self) -> dict:
-    db: Session = SessionLocal()
-    now = datetime.now()
+    with task_db_session() as db:
+        now = datetime.now()
 
-    try:
-        schedule_text = _get_daily_schedule(db)
-        hour, minute = _parse_schedule_time(schedule_text)
-    except ValueError as exc:
-        logger.warning("Invalid daily summary schedule, skip dispatch: %s", exc)
-        db.close()
-        return {"scheduled": False, "reason": "invalid_schedule"}
+        try:
+            schedule_text = _get_daily_schedule(db)
+            hour, minute = _parse_schedule_time(schedule_text)
+        except ValueError as exc:
+            logger.warning("Invalid daily summary schedule, skip dispatch: %s", exc)
+            return {"scheduled": False, "reason": "invalid_schedule"}
 
-    try:
-        scheduled_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now < scheduled_at:
-            return {"scheduled": False, "reason": "before_schedule"}
+        try:
+            scheduled_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now < scheduled_at:
+                return {"scheduled": False, "reason": "before_schedule"}
 
-        target_date = (now - timedelta(days=1)).date()
-        if _has_dispatch_guard(db, target_date):
+            target_date = (now - timedelta(days=1)).date()
+            if _has_dispatch_guard(db, target_date):
+                return {
+                    "scheduled": False,
+                    "reason": "dispatch_guard_blocked",
+                    "target_date": str(target_date),
+                }
+
+            if _has_existing_summary_or_task(db, target_date):
+                return {
+                    "scheduled": False,
+                    "reason": "already_exists",
+                    "target_date": str(target_date),
+                }
+
+            task_id = _get_pipeline_orchestrator().dispatch_generate_daily_summary(
+                GenerateDailySummaryCommand(target_date_str=str(target_date))
+            )
+            _mark_dispatch_guard(db, now, target_date, str(task_id))
+            db.commit()
+            return {"scheduled": True, "target_date": str(target_date), "task_id": task_id}
+        except Exception as exc:
+            db.rollback()
+            logger.exception("Failed to dispatch scheduled daily summary for %s", now.date())
             return {
                 "scheduled": False,
-                "reason": "dispatch_guard_blocked",
-                "target_date": str(target_date),
+                "reason": "dispatch_failed",
+                "error": str(exc),
+                "target_date": str((now - timedelta(days=1)).date()),
             }
-
-        if _has_existing_summary_or_task(db, target_date):
-            return {"scheduled": False, "reason": "already_exists", "target_date": str(target_date)}
-
-        task_id = _pipeline_orchestrator.dispatch_generate_daily_summary(
-            GenerateDailySummaryCommand(target_date_str=str(target_date))
-        )
-        _mark_dispatch_guard(db, now, target_date, str(task_id))
-        db.commit()
-        return {"scheduled": True, "target_date": str(target_date), "task_id": task_id}
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Failed to dispatch scheduled daily summary for %s", now.date())
-        return {
-            "scheduled": False,
-            "reason": "dispatch_failed",
-            "error": str(exc),
-            "target_date": str((now - timedelta(days=1)).date()),
-        }
-    finally:
-        db.close()
 
 
 @celery_app.task(bind=True)
@@ -847,220 +850,217 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
     Generate daily summary for a given date (YYYY-MM-DD).
     Defaults to yesterday.
     """
-    db: Session = SessionLocal()
+    with task_db_session() as db:
+        if target_date_str:
+            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+        else:
+            target_date = datetime.now().date() - timedelta(days=1)
 
-    if target_date_str:
-        target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-    else:
-        target_date = datetime.now().date() - timedelta(days=1)
-
-    queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
-    task_log = bind_or_create_running_task_log(
-        db,
-        queue_task_id=queue_task_id or None,
-        task_type=TaskType.DAILY_SUMMARY_GENERATION,
-        task_target_id=None,
-        detail_json={"target_date": str(target_date)},
-    )
-    db.commit()
-
-    try:
-        ensure_task_not_cancelled(
+        queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
+        task_log = bind_or_create_running_task_log(
             db,
-            task_log.id,
-            default_message=f"Daily summary cancelled for {target_date}",
+            queue_task_id=queue_task_id or None,
+            task_type=TaskType.DAILY_SUMMARY_GENERATION,
+            task_target_id=None,
+            detail_json={"target_date": str(target_date)},
         )
-        provider = find_required_enabled_provider(db, PROVIDER_TYPE_QA)
-        enforce_token_quota(db, provider)
+        db.commit()
 
-        # Get events for the target date
-        start_dt = datetime.combine(target_date, datetime.min.time())
-        end_dt = datetime.combine(target_date, datetime.max.time())
-
-        events = (
-            db.query(EventRecord)
-            .filter(
-                EventRecord.event_start_time >= start_dt, EventRecord.event_start_time <= end_dt
+        try:
+            ensure_task_not_cancelled(
+                db,
+                task_log.id,
+                default_message=f"Daily summary cancelled for {target_date}",
             )
-            .order_by(EventRecord.event_start_time.asc())
-            .all()
-        )
+            provider = find_required_enabled_provider(db, PROVIDER_TYPE_QA)
+            enforce_token_quota(db, provider)
 
-        event_count = len(events)
-        ensure_task_not_cancelled(
-            db,
-            task_log.id,
-            default_message=f"Daily summary cancelled for {target_date}",
-        )
-        home_context = build_home_context(db)
-        known_subjects = build_known_subjects(home_context)
-        subject_sections, missing_subjects, mapped_event_ids = build_subject_event_mapping(
-            events,
-            known_subjects,
-        )
-        attention_candidates = extract_attention_candidates(events, mapped_event_ids)
+            # Get events for the target date
+            start_dt = datetime.combine(target_date, datetime.min.time())
+            end_dt = datetime.combine(target_date, datetime.max.time())
 
-        subject_sections_payload = [item.model_dump() for item in subject_sections]
-        attention_candidates_payload = [item.model_dump() for item in attention_candidates]
-        single_pass_prompt = compile_daily_summary_prompt(
-            DailySummaryPromptInput(
-                home_context=home_context,
-                summary_date=target_date,
-                time_range_start=start_dt.isoformat(),
-                time_range_end=end_dt.isoformat(),
-                subject_sections=subject_sections_payload,
-                missing_subjects=missing_subjects,
-                attention_candidates=attention_candidates_payload,
+            events = (
+                db.query(EventRecord)
+                .filter(
+                    EventRecord.event_start_time >= start_dt, EventRecord.event_start_time <= end_dt
+                )
+                .order_by(EventRecord.event_start_time.asc())
+                .all()
             )
-        )
 
-        client = OpenAICompatGatewayFactory().build(
-            api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
-            model_name=provider.model_name,
-            timeout_seconds=provider.timeout_seconds,
-        )
-
-        summary_title = _summary_title(target_date)
-        (
-            overall_summary,
-            structured_subject_sections,
-            structured_attention_items,
-            prompt_chars_total,
-            parse_retried,
-        ) = (
-            _generate_serial_summary_payload(
-                db=db,
-                client=client,
-                provider_id=provider.id,
-                provider_name_snapshot=provider.provider_name,
-                target_date=target_date,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                events=events,
-                home_context=home_context,
-                known_subjects=known_subjects,
-                subject_sections_payload=subject_sections_payload,
-                missing_subjects=missing_subjects,
-                attention_candidates_payload=attention_candidates_payload,
+            event_count = len(events)
+            ensure_task_not_cancelled(
+                db,
+                task_log.id,
+                default_message=f"Daily summary cancelled for {target_date}",
             )
-            if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
-            else _generate_single_pass_summary_payload(
-                db=db,
-                client=client,
-                provider_id=provider.id,
-                provider_name_snapshot=provider.provider_name,
-                events=events,
-                prompt=single_pass_prompt,
-                known_subjects=known_subjects,
-                subject_sections_payload=subject_sections_payload,
+            home_context = build_home_context(db)
+            known_subjects = build_known_subjects(home_context)
+            subject_sections, missing_subjects, mapped_event_ids = build_subject_event_mapping(
+                events,
+                known_subjects,
             )
-        )
+            attention_candidates = extract_attention_candidates(events, mapped_event_ids)
 
-        summary_mode = (
-            "split_serial"
-            if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
-            else "single_pass"
-        )
+            subject_sections_payload = [item.model_dump() for item in subject_sections]
+            attention_candidates_payload = [item.model_dump() for item in attention_candidates]
+            single_pass_prompt = compile_daily_summary_prompt(
+                DailySummaryPromptInput(
+                    home_context=home_context,
+                    summary_date=target_date,
+                    time_range_start=start_dt.isoformat(),
+                    time_range_end=end_dt.isoformat(),
+                    subject_sections=subject_sections_payload,
+                    missing_subjects=missing_subjects,
+                    attention_candidates=attention_candidates_payload,
+                )
+            )
 
-        ensure_task_not_cancelled(
-            db,
-            task_log.id,
-            default_message=f"Daily summary cancelled for {target_date}",
-        )
+            client = OpenAICompatGatewayFactory().build(
+                api_base_url=provider.api_base_url,
+                api_key=provider.api_key,
+                model_name=provider.model_name,
+                timeout_seconds=provider.timeout_seconds,
+            )
 
-        overall_summary, structured_subject_sections, structured_attention_items = (
-            _clamp_summary_payload(
+            summary_title = _summary_title(target_date)
+            (
                 overall_summary,
                 structured_subject_sections,
                 structured_attention_items,
-            )
-        )
-
-        _upsert_daily_summary(
-            db,
-            target_date=target_date,
-            summary_title=summary_title,
-            overall_summary=overall_summary,
-            structured_subject_sections=structured_subject_sections,
-            structured_attention_items=structured_attention_items,
-            event_count=event_count,
-            provider_id=provider.id,
-            provider_name_snapshot=provider.provider_name,
-        )
-
-        ensure_task_not_cancelled(
-            db,
-            task_log.id,
-            default_message=f"Daily summary cancelled for {target_date}",
-        )
-
-        if _has_subscribed_webhook(db, WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED):
-            payload = build_webhook_event_payload(
-                WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-                {
-                    "date": str(target_date),
-                    "summary_title": summary_title,
-                    "overall_summary": overall_summary,
-                    "subject_sections": structured_subject_sections,
-                    "attention_items": structured_attention_items,
-                    "event_count": event_count,
-                },
-                generated_at=datetime.now(),
-            )
-            try:
-                _pipeline_orchestrator.dispatch_webhook(
-                    SendWebhookCommand(
-                        event_type=WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-                        payload=payload,
-                    )
+                prompt_chars_total,
+                parse_retried,
+            ) = (
+                _generate_serial_summary_payload(
+                    db=db,
+                    client=client,
+                    provider_id=provider.id,
+                    provider_name_snapshot=provider.provider_name,
+                    target_date=target_date,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    events=events,
+                    home_context=home_context,
+                    known_subjects=known_subjects,
+                    subject_sections_payload=subject_sections_payload,
+                    missing_subjects=missing_subjects,
+                    attention_candidates_payload=attention_candidates_payload,
                 )
-            except Exception:
-                logger.exception("Failed to enqueue daily summary webhook task")
+                if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
+                else _generate_single_pass_summary_payload(
+                    db=db,
+                    client=client,
+                    provider_id=provider.id,
+                    provider_name_snapshot=provider.provider_name,
+                    events=events,
+                    prompt=single_pass_prompt,
+                    known_subjects=known_subjects,
+                    subject_sections_payload=subject_sections_payload,
+                )
+            )
 
-        detail: dict[str, Any] = {}
-        raw_detail = task_log.detail_json
-        if isinstance(raw_detail, dict):
-            detail = {str(key): value for key, value in raw_detail.items()}
-        detail.update(
-            {
-                "prompt_chars": prompt_chars_total,
-                "single_pass_prompt_chars": len(single_pass_prompt[1]),
-                "summary_mode": summary_mode,
-                "split_threshold": SERIAL_SPLIT_PROMPT_THRESHOLD,
-                "subject_sections_count": len(subject_sections),
-                "attention_candidates_count": len(attention_candidates),
-                "parse_retried": parse_retried,
-            }
-        )
-        finalize_task_log(
-            task_log,
-            TaskStatus.SUCCESS,
-            f"Generated summary for {target_date} with {event_count} events.",
-            detail,
-        )
-        db.commit()
-        return {"summary_date": str(target_date), "event_count": event_count}
+            summary_mode = (
+                "split_serial"
+                if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
+                else "single_pass"
+            )
 
-    except TaskCancellationRequested as exc:
-        logger.info("Daily summary task cancelled for %s", target_date)
-        db.rollback()
-        refreshed_task_log = get_task_log_for_update(db, task_log.id)
-        if refreshed_task_log is None:
-            raise
-        finalize_cancelled_task_log(
-            refreshed_task_log,
-            str(exc),
-            {"target_date": str(target_date), "cancelled": True},
-        )
-        db.commit()
-        return {"cancelled": True, "summary_date": str(target_date)}
+            ensure_task_not_cancelled(
+                db,
+                task_log.id,
+                default_message=f"Daily summary cancelled for {target_date}",
+            )
 
-    except Exception as e:
-        logger.exception("Failed to generate summary for %s", target_date)
-        db.rollback()
-        finalize_task_log(task_log, TaskStatus.FAILED, str(e))
-        db.commit()
-        raise e
-    finally:
-        db.close()
+            overall_summary, structured_subject_sections, structured_attention_items = (
+                _clamp_summary_payload(
+                    overall_summary,
+                    structured_subject_sections,
+                    structured_attention_items,
+                )
+            )
+
+            _upsert_daily_summary(
+                db,
+                target_date=target_date,
+                summary_title=summary_title,
+                overall_summary=overall_summary,
+                structured_subject_sections=structured_subject_sections,
+                structured_attention_items=structured_attention_items,
+                event_count=event_count,
+                provider_id=provider.id,
+                provider_name_snapshot=provider.provider_name,
+            )
+
+            ensure_task_not_cancelled(
+                db,
+                task_log.id,
+                default_message=f"Daily summary cancelled for {target_date}",
+            )
+
+            if _has_subscribed_webhook(db, WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED):
+                payload = build_webhook_event_payload(
+                    WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
+                    {
+                        "date": str(target_date),
+                        "summary_title": summary_title,
+                        "overall_summary": overall_summary,
+                        "subject_sections": structured_subject_sections,
+                        "attention_items": structured_attention_items,
+                        "event_count": event_count,
+                    },
+                    generated_at=datetime.now(),
+                )
+                try:
+                    _get_pipeline_orchestrator().dispatch_webhook(
+                        SendWebhookCommand(
+                            event_type=WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
+                            payload=payload,
+                        )
+                    )
+                except Exception:
+                    logger.exception("Failed to enqueue daily summary webhook task")
+
+            detail: dict[str, Any] = {}
+            raw_detail = task_log.detail_json
+            if isinstance(raw_detail, dict):
+                detail = {str(key): value for key, value in raw_detail.items()}
+            detail.update(
+                {
+                    "prompt_chars": prompt_chars_total,
+                    "single_pass_prompt_chars": len(single_pass_prompt[1]),
+                    "summary_mode": summary_mode,
+                    "split_threshold": SERIAL_SPLIT_PROMPT_THRESHOLD,
+                    "subject_sections_count": len(subject_sections),
+                    "attention_candidates_count": len(attention_candidates),
+                    "parse_retried": parse_retried,
+                }
+            )
+            finalize_task_log(
+                task_log,
+                TaskStatus.SUCCESS,
+                f"Generated summary for {target_date} with {event_count} events.",
+                detail,
+            )
+            db.commit()
+            return {"summary_date": str(target_date), "event_count": event_count}
+
+        except TaskCancellationRequested as exc:
+            logger.info("Daily summary task cancelled for %s", target_date)
+            db.rollback()
+            refreshed_task_log = get_task_log_for_update(db, task_log.id)
+            if refreshed_task_log is None:
+                raise
+            finalize_cancelled_task_log(
+                refreshed_task_log,
+                str(exc),
+                {"target_date": str(target_date), "cancelled": True},
+            )
+            db.commit()
+            return {"cancelled": True, "summary_date": str(target_date)}
+
+        except Exception as e:
+            logger.exception("Failed to generate summary for %s", target_date)
+            db.rollback()
+            finalize_task_log(task_log, TaskStatus.FAILED, str(e))
+            db.commit()
+            raise e

@@ -1,38 +1,21 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import type { VideoSession } from '../../types/api'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { StatusTag } from '../../components/common/StatusTag'
 import { SessionPlaybackModal } from '../../components/common/SessionPlaybackModal'
+import { usePagination } from '../../hooks/usePagination'
 import { getSessions } from '../sessions/api'
-import { getSessionEvents, triggerSessionAnalyze } from './api'
-
-function formatSessionStartTime(value: string | null): string {
-  if (!value) {
-    return '-'
-  }
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-
-  return `${year}-${month}-${day}:${hour}:${minute}`
-}
+import { triggerSessionAnalyze } from './api'
+import { EventsFilterBar } from './EventsFilterBar'
+import { SessionEventsRow, formatSessionStartTime } from './SessionEventsRow'
+import { Pager } from './Pager'
 
 export function EventsPage() {
   const navigate = useNavigate()
-  const [page, setPage] = useState(1)
-  const [pageInput, setPageInput] = useState('1')
+  const pagination = usePagination()
   const [sourceId, setSourceId] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState('')
   const [startTime, setStartTime] = useState('')
@@ -44,15 +27,15 @@ export function EventsPage() {
   const queryClient = useQueryClient()
 
   const queryKey = useMemo(
-    () => ['events', { page, sourceId, analysisStatus, startTime, endTime }],
-    [page, sourceId, analysisStatus, startTime, endTime],
+    () => ['events', { page: pagination.page, sourceId, analysisStatus, startTime, endTime }],
+    [pagination.page, sourceId, analysisStatus, startTime, endTime],
   )
 
   const query = useQuery({
     queryKey,
     queryFn: () =>
         getSessions({
-          page,
+          page: pagination.page,
           pageSize: 20,
           sourceId,
           analysisStatus,
@@ -107,76 +90,34 @@ export function EventsPage() {
   const total = data?.pagination.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / 20))
 
-  const jumpToPage = () => {
-    const nextPage = Number(pageInput)
-    if (!Number.isFinite(nextPage)) {
-      setPageInput(String(page))
-      return
-    }
-    const normalizedPage = Math.min(totalPages, Math.max(1, Math.trunc(nextPage)))
-    setPage(normalizedPage)
-    setPageInput(String(normalizedPage))
-  }
-
   return (
     <div>
       <PageHeader title="事件与回放" subtitle="按 Session 归并查看事件，再展开查看具体明细" />
 
       {message ? <div className="api-ok">{message}</div> : null}
 
-      <div className="card tool-row tool-row-inline">
-        <label>
-          视频源编号（可选）
-          <input
-            value={sourceId}
-            onChange={(event) => {
-              setPage(1)
-              setSourceId(event.target.value)
-            }}
-            placeholder="按视频源ID筛选"
-          />
-        </label>
-        <label>
-          分析状态
-          <select
-            value={analysisStatus}
-            onChange={(event) => {
-              setPage(1)
-              setAnalysisStatus(event.target.value)
-            }}
-          >
-            <option value="">全部</option>
-            <option value="sealed">待识别</option>
-            <option value="analyzing">分析中</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
-          </select>
-        </label>
-        <label>
-          开始时间
-          <input
-            type="datetime-local"
-            value={startTime}
-            onChange={(event) => {
-              setPage(1)
-              setPageInput('1')
-              setStartTime(event.target.value)
-            }}
-          />
-        </label>
-        <label>
-          结束时间
-          <input
-            type="datetime-local"
-            value={endTime}
-            onChange={(event) => {
-              setPage(1)
-              setPageInput('1')
-              setEndTime(event.target.value)
-            }}
-          />
-        </label>
-      </div>
+      <EventsFilterBar
+        sourceId={sourceId}
+        analysisStatus={analysisStatus}
+        startTime={startTime}
+        endTime={endTime}
+        onSourceIdChange={(value) => {
+          pagination.resetPage()
+          setSourceId(value)
+        }}
+        onAnalysisStatusChange={(value) => {
+          pagination.resetPage()
+          setAnalysisStatus(value)
+        }}
+        onStartTimeChange={(value) => {
+          pagination.resetPage()
+          setStartTime(value)
+        }}
+        onEndTimeChange={(value) => {
+          pagination.resetPage()
+          setEndTime(value)
+        }}
+      />
 
       <div className="card">
         <table className="table">
@@ -242,49 +183,16 @@ export function EventsPage() {
           </tbody>
         </table>
 
-        <div className="pager">
-          <button
-            className="ghost"
-            disabled={page <= 1}
-            onClick={() => {
-              const nextPage = Math.max(1, page - 1)
-              setPage(nextPage)
-              setPageInput(String(nextPage))
-            }}
-          >
-            上一页
-          </button>
-          <span>
-            第 {page} / {totalPages} 页，共 {total} 条
-          </span>
-          <input
-            className="pager-input"
-            type="number"
-            min={1}
-            max={totalPages}
-            value={pageInput}
-            onChange={(event) => setPageInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                jumpToPage()
-              }
-            }}
-          />
-          <button className="ghost" onClick={jumpToPage}>
-            跳转
-          </button>
-          <button
-            className="ghost"
-            disabled={page >= totalPages}
-            onClick={() => {
-              const nextPage = Math.min(totalPages, page + 1)
-              setPage(nextPage)
-              setPageInput(String(nextPage))
-            }}
-          >
-            下一页
-          </button>
-        </div>
+        <Pager
+          page={pagination.page}
+          totalPages={totalPages}
+          total={total}
+          pageInput={pagination.pageInput}
+          onPageInputChange={pagination.setPageInput}
+          onJumpToPage={() => pagination.jumpToPage(totalPages)}
+          onPrev={pagination.goToPrev}
+          onNext={() => pagination.goToNext(totalPages)}
+        />
       </div>
 
       <SessionPlaybackModal
@@ -317,61 +225,4 @@ function formatDurationMinutes(seconds: number | null): string {
 
   const minutes = (seconds / 60).toFixed(1).replace(/\.0$/, '')
   return `${minutes} 分钟`
-}
-
-type SessionEventsRowProps = {
-  session: VideoSession
-  onOpenEventDetail: (eventId: number) => void
-}
-
-function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRowProps) {
-  const eventsQuery = useQuery({
-    queryKey: ['session-events', session.id],
-    queryFn: () => getSessionEvents(session.id, 'asc'),
-  })
-
-  return (
-    <tr>
-      <td colSpan={6}>
-        <div className="session-events-wrap">
-          {eventsQuery.isLoading ? <LoadingBlock text="加载事件中" /> : null}
-          {eventsQuery.error ? <ApiErrorAlert message={(eventsQuery.error as Error).message} /> : null}
-
-          {!eventsQuery.isLoading && !eventsQuery.error ? (
-            <table className="table table-sub">
-              <thead>
-                <tr>
-                  <th>发生时间</th>
-                  <th>事件</th>
-                  <th>重要性</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(eventsQuery.data ?? []).map((event) => (
-                  <tr key={event.id}>
-                    <td>{formatSessionStartTime(event.event_start_time)}</td>
-                    <td>{event.title ?? event.summary ?? event.description}</td>
-                    <td>{event.importance_level ?? '-'}</td>
-                    <td>
-                      <button className="ghost" onClick={() => onOpenEventDetail(event.id)}>
-                        事件详情
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {(eventsQuery.data ?? []).length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="empty-cell">
-                      该 Session 暂无事件
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          ) : null}
-        </div>
-      </td>
-    </tr>
-  )
 }

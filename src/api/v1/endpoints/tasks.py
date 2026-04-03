@@ -5,15 +5,13 @@ from typing import Any
 from fastapi import APIRouter
 from kombu.exceptions import OperationalError
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Orchestrator
 from src.application.pipeline.commands import (
     AnalyzeSessionCommand,
     GenerateDailySummaryCommand,
     SessionBuildCommand,
 )
-from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.celery_app import celery_app
-from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -25,16 +23,11 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
-from src.services.task_dispatch_control import (
-    build_dedupe_key,
-    ensure_dict_detail,
-    find_duplicate_active_task,
-    is_singleton_task_running,
-)
+from src.services.task_dispatch_control import is_singleton_task_running
+from src.services.task_retry import retry_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_pipeline_orchestrator = PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
 
 
 @router.get("/logs", response_model=PaginatedResponse[TaskLogResponse])
@@ -112,75 +105,29 @@ def stop_task_log(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/logs/{id}/retry", response_model=BaseResponse[dict])
-def retry_task_log(db: DB, current_user: CurrentUser, id: int) -> Any:  # noqa: C901
+def retry_task_log(db: DB, current_user: CurrentUser, orchestrator: Orchestrator, id: int) -> Any:
     row = db.query(TaskLog).filter(TaskLog.id == id).first()
     if not row:
         return BaseResponse(code=4002, message="Task log not found")
-    if row.status not in {TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED}:
-        return BaseResponse(code=4004, message="Only failed/timeout/cancelled tasks can be retried")
-
-    detail = ensure_dict_detail(row.detail_json)
-    dedupe_key = row.dedupe_key or build_dedupe_key(row.task_type, row.task_target_id, detail)
-    duplicate = find_duplicate_active_task(db, row.task_type, row.task_target_id, dedupe_key)
-    if duplicate:
-        return BaseResponse(
-            code=4004,
-            message="A task with same target/action is already running",
-            data={"task_id": duplicate.queue_task_id or str(duplicate.id)},
-        )
 
     try:
-        if row.task_type == TaskType.SESSION_BUILD:
-            if row.task_target_id is None:
-                return BaseResponse(code=4004, message="Invalid build task target")
-            source = db.query(VideoSource).filter(VideoSource.id == row.task_target_id).first()
-            if source is None:
-                return BaseResponse(code=4002, message="Source not found")
-            if not source.enabled:
-                return BaseResponse(code=4004, message="Source is disabled")
-
-            scan_mode = str(detail.get("scan_mode") or ScanMode.HOT.value)
-            task_id = _pipeline_orchestrator.dispatch_session_build(
-                SessionBuildCommand(source_id=row.task_target_id, scan_mode=scan_mode)
-            )
-        elif row.task_type == TaskType.SESSION_ANALYSIS:
-            if row.task_target_id is None:
-                return BaseResponse(code=4004, message="Invalid analysis task target")
-            session = db.query(VideoSession).filter(VideoSession.id == row.task_target_id).first()
-            if session is None:
-                return BaseResponse(code=4002, message="Session not found")
-            if session.analysis_status == SessionAnalysisStatus.OPEN:
-                return BaseResponse(code=4004, message="Session is open and cannot be analyzed yet")
-
-            if session.analysis_status in (
-                SessionAnalysisStatus.FAILED,
-                SessionAnalysisStatus.SUCCESS,
-            ):
-                session.analysis_status = SessionAnalysisStatus.SEALED
-                db.commit()
-
-            priority = str(detail.get("priority") or session.analysis_priority or "hot")
-            task_id = _pipeline_orchestrator.dispatch_analyze_session(
-                AnalyzeSessionCommand(session_id=row.task_target_id, priority=priority)
-            )
-        elif row.task_type == TaskType.DAILY_SUMMARY_GENERATION:
-            target_date = detail.get("target_date")
-            task_id = _pipeline_orchestrator.dispatch_generate_daily_summary(
-                GenerateDailySummaryCommand(
-                    target_date_str=str(target_date) if target_date is not None else None
-                )
-            )
-        else:
-            return BaseResponse(code=4004, message="Task type does not support retry")
+        result = retry_task(db, row, orchestrator)
     except OperationalError as exc:
         logger.exception("Failed to retry task log id=%s", id)
         return BaseResponse(code=5001, message=f"Task queue unavailable: {exc}")
 
-    return BaseResponse(data={"task_id": task_id})
+    if not result.success:
+        data = {"task_id": result.task_id} if result.task_id else None
+        return BaseResponse(code=result.error_code, message=result.error_message, data=data)
+
+    db.commit()
+    return BaseResponse(data={"task_id": result.task_id})
 
 
 @router.post("/{id}/build/full", response_model=BaseResponse[dict])
-def trigger_full_build(db: DB, current_user: CurrentUser, id: int) -> Any:
+def trigger_full_build(
+    db: DB, current_user: CurrentUser, orchestrator: Orchestrator, id: int
+) -> Any:
     """Trigger a full session build for a video source."""
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if source is None:
@@ -192,7 +139,7 @@ def trigger_full_build(db: DB, current_user: CurrentUser, id: int) -> Any:
         return BaseResponse(code=4004, message="Full build is already running for this source")
 
     try:
-        task_id = _pipeline_orchestrator.dispatch_session_build(
+        task_id = orchestrator.dispatch_session_build(
             SessionBuildCommand(source_id=id, scan_mode=ScanMode.FULL)
         )
     except OperationalError as e:
@@ -202,7 +149,9 @@ def trigger_full_build(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/analyze/{session_id}", response_model=BaseResponse[dict])
-def trigger_analyze(db: DB, current_user: CurrentUser, session_id: int) -> Any:
+def trigger_analyze(
+    db: DB, current_user: CurrentUser, orchestrator: Orchestrator, session_id: int
+) -> Any:
     """Trigger AI analysis for a sealed video session."""
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if session is None:
@@ -219,7 +168,7 @@ def trigger_analyze(db: DB, current_user: CurrentUser, session_id: int) -> Any:
 
     priority = session.analysis_priority or "hot"
     try:
-        task_id = _pipeline_orchestrator.dispatch_analyze_session(
+        task_id = orchestrator.dispatch_analyze_session(
             AnalyzeSessionCommand(session_id=session_id, priority=priority)
         )
     except OperationalError as e:
@@ -229,10 +178,12 @@ def trigger_analyze(db: DB, current_user: CurrentUser, session_id: int) -> Any:
 
 
 @router.post("/summarize", response_model=BaseResponse[dict])
-def trigger_summarize(db: DB, current_user: CurrentUser, target_date: str | None = None) -> Any:
+def trigger_summarize(
+    db: DB, current_user: CurrentUser, orchestrator: Orchestrator, target_date: str | None = None
+) -> Any:
     """Trigger daily summary generation. Date format: YYYY-MM-DD"""
     try:
-        task_id = _pipeline_orchestrator.dispatch_generate_daily_summary(
+        task_id = orchestrator.dispatch_generate_daily_summary(
             GenerateDailySummaryCommand(target_date_str=target_date)
         )
     except OperationalError as e:

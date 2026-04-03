@@ -4,22 +4,17 @@ from typing import Any
 from fastapi import APIRouter
 from sqlalchemy.exc import OperationalError
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Orchestrator
 from src.application.daily_summary import to_daily_summary_response
 from src.application.pipeline.commands import GenerateDailySummaryCommand
-from src.application.pipeline.orchestrator import PipelineOrchestrator
-from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.daily_summary import DailySummary
-from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.schemas.daily_summary import DailySummaryResponse
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
-from src.services.task_dispatch_control import build_dedupe_key, ensure_dict_detail
+from src.services.pipeline_constants import SessionAnalysisStatus, TaskType
+from src.services.task_dispatch_control import build_dedupe_key, find_duplicate_active_task
 
 router = APIRouter()
-
-_pipeline_orchestrator = PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
 
 
 def _has_active_daily_summary_task(db: DB, target_date: date) -> bool:
@@ -28,24 +23,10 @@ def _has_active_daily_summary_task(db: DB, target_date: date) -> bool:
         None,
         {"target_date": str(target_date)},
     )
-    active_logs = (
-        db.query(TaskLog)
-        .filter(
-            TaskLog.task_type == TaskType.DAILY_SUMMARY_GENERATION,
-            TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
-        )
-        .order_by(TaskLog.created_at.desc())
-        .all()
+    return (
+        find_duplicate_active_task(db, TaskType.DAILY_SUMMARY_GENERATION, None, dedupe_key)
+        is not None
     )
-    for item in active_logs:
-        if item.dedupe_key == dedupe_key:
-            return True
-        detail = ensure_dict_detail(item.detail_json)
-        if str(detail.get("dedupe_key") or "") == dedupe_key:
-            return True
-        if str(detail.get("target_date") or "") == str(target_date):
-            return True
-    return False
 
 
 @router.get("", response_model=PaginatedResponse[DailySummaryResponse])
@@ -68,7 +49,9 @@ def get_daily_summaries(
 
 
 @router.post("/generate-all", response_model=BaseResponse[dict])
-def generate_all_daily_summaries(db: DB, current_user: CurrentUser) -> Any:
+def generate_all_daily_summaries(
+    db: DB, current_user: CurrentUser, orchestrator: Orchestrator
+) -> Any:
     session_end_times = (
         db.query(VideoSession.session_end_time)
         .filter(VideoSession.analysis_status == SessionAnalysisStatus.SUCCESS)
@@ -92,7 +75,7 @@ def generate_all_daily_summaries(db: DB, current_user: CurrentUser) -> Any:
             if _has_active_daily_summary_task(db, current_date):
                 skipped_dates.append(str(current_date))
             else:
-                task_id = _pipeline_orchestrator.dispatch_generate_daily_summary(
+                task_id = orchestrator.dispatch_generate_daily_summary(
                     GenerateDailySummaryCommand(target_date_str=str(current_date))
                 )
                 queued_task_ids.append(str(task_id))

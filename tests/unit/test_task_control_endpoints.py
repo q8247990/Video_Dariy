@@ -1,5 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -72,7 +73,7 @@ def test_stop_analysis_task_marks_cancel_requested_without_resetting_session(mon
         db.close()
 
 
-def test_retry_task_log_rejects_duplicate_running(monkeypatch) -> None:
+def test_retry_task_log_rejects_duplicate_running() -> None:
     db = _new_db_session()
     try:
         source = VideoSource(
@@ -110,19 +111,18 @@ def test_retry_task_log_rejects_duplicate_running(monkeypatch) -> None:
         db.add_all([failed, running])
         db.commit()
 
-        monkeypatch.setattr(
-            "src.api.v1.endpoints.tasks._pipeline_orchestrator.dispatch_session_build",
-            lambda command: (_ for _ in ()).throw(RuntimeError("should not dispatch")),
-        )
+        mock_orchestrator = MagicMock()
 
-        resp = retry_task_log(db=db, current_user=_current_user(), id=failed.id)
+        resp = retry_task_log(
+            db=db, current_user=_current_user(), id=failed.id, orchestrator=mock_orchestrator
+        )
         assert resp.code == 4004
         assert "already running" in str(resp.message)
     finally:
         db.close()
 
 
-def test_retry_analysis_task_resets_failed_session_to_sealed(monkeypatch) -> None:
+def test_retry_analysis_task_resets_failed_session_to_sealed() -> None:
     db = _new_db_session()
     try:
         source = VideoSource(
@@ -157,12 +157,12 @@ def test_retry_analysis_task_resets_failed_session_to_sealed(monkeypatch) -> Non
         db.add(failed)
         db.commit()
 
-        monkeypatch.setattr(
-            "src.api.v1.endpoints.tasks._pipeline_orchestrator.dispatch_analyze_session",
-            lambda command: "analysis-task-1",
-        )
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.dispatch_analyze_session.return_value = "analysis-task-1"
 
-        resp = retry_task_log(db=db, current_user=_current_user(), id=failed.id)
+        resp = retry_task_log(
+            db=db, current_user=_current_user(), id=failed.id, orchestrator=mock_orchestrator
+        )
 
         assert resp.code == 0
         assert resp.data["task_id"] == "analysis-task-1"

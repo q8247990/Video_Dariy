@@ -157,7 +157,7 @@ def create_pending_task_log(
             .returning(TaskLog.id)
         )
         inserted_id = db.execute(stmt).scalar_one_or_none()
-        db.commit()
+        db.flush()
         if inserted_id is None:
             existing = find_duplicate_active_task(db, task_type, task_target_id, dedupe_key)
             if existing is None:
@@ -179,7 +179,7 @@ def create_pending_task_log(
         detail_json=detail_payload,
     )
     db.add(task_log)
-    db.commit()
+    db.flush()
     db.refresh(task_log)
     return task_log, True
 

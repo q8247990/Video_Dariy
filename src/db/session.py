@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -13,6 +15,20 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def task_db_session():
+    """Context manager for Celery task DB sessions.
+
+    Handles session creation and guaranteed cleanup.
+    Commit/rollback is the caller's responsibility.
+    """
     db = SessionLocal()
     try:
         yield db
