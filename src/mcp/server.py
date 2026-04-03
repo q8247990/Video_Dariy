@@ -1,5 +1,4 @@
 import secrets
-from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from fastapi import APIRouter, Header, Request, Response
@@ -17,30 +16,6 @@ from src.mcp.tools import (
 router = APIRouter()
 
 JSONRPC_VERSION = "2.0"
-SESSION_TTL_HOURS = 12
-
-_sessions: dict[str, datetime] = {}
-
-
-def _cleanup_sessions() -> None:
-    now = datetime.utcnow()
-    expired = [session_id for session_id, expires_at in _sessions.items() if expires_at <= now]
-    for session_id in expired:
-        _sessions.pop(session_id, None)
-
-
-def _create_session() -> str:
-    session_id = secrets.token_urlsafe(24)
-    _sessions[session_id] = datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)
-    return session_id
-
-
-def _touch_session(session_id: str) -> bool:
-    _cleanup_sessions()
-    if session_id not in _sessions:
-        return False
-    _sessions[session_id] = datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)
-    return True
 
 
 def _jsonrpc_result(result: dict[str, Any], request_id: Any) -> dict[str, Any]:
@@ -53,10 +28,6 @@ def _jsonrpc_error(code: int, message: str, request_id: Any = None) -> dict[str,
         "id": request_id,
         "error": {"code": code, "message": message},
     }
-
-
-def _require_session(method: str) -> bool:
-    return method not in {"initialize", "notifications/initialized"}
 
 
 def _validate_protocol_header(protocol_version: Optional[str]) -> Optional[JSONResponse]:
@@ -118,24 +89,6 @@ def _extract_request_fields(
     return request_id, method, params, None
 
 
-def _validate_session(
-    method: str, session_id: Optional[str], request_id: Any
-) -> Optional[JSONResponse]:
-    if not _require_session(method):
-        return None
-    if not session_id:
-        return JSONResponse(
-            status_code=400,
-            content=_jsonrpc_error(-32002, "missing Mcp-Session-Id", request_id),
-        )
-    if not _touch_session(session_id):
-        return JSONResponse(
-            status_code=404,
-            content=_jsonrpc_error(-32003, "session not found", request_id),
-        )
-    return None
-
-
 def _handle_initialize(request_id: Any, params: dict[str, Any]) -> JSONResponse:
     client_version = params.get("protocolVersion")
     if not isinstance(client_version, str):
@@ -144,7 +97,7 @@ def _handle_initialize(request_id: Any, params: dict[str, Any]) -> JSONResponse:
             content=_jsonrpc_error(-32602, "unsupported protocolVersion", request_id),
         )
     negotiated_version = negotiate_protocol_version(client_version)
-    session_id = _create_session()
+    session_id = secrets.token_urlsafe(24)
     return JSONResponse(
         content=_jsonrpc_result(
             {
@@ -192,10 +145,7 @@ def _handle_tools_call(
     return JSONResponse(content=_jsonrpc_result(result, request_id))
 
 
-def _handle_delete(session_id: Optional[str]) -> Response:
-    if not session_id:
-        return Response(status_code=400)
-    _sessions.pop(session_id, None)
+def _handle_delete() -> Response:
     return Response(status_code=204)
 
 
@@ -248,10 +198,6 @@ async def _handle_post(
     if request_error is not None:
         return request_error
 
-    session_error = _validate_session(method, session_id, request_id)
-    if session_error is not None:
-        return session_error
-
     return _dispatch_method(db, request, request_id, method, params, source, session_id)
 
 
@@ -265,9 +211,9 @@ async def mcp_endpoint(
     mcp_protocol_version: Optional[str] = Header(default=None, alias="MCP-Protocol-Version"),
 ) -> Response:
     if request.method == "GET":
-        return Response(status_code=405)
+        return Response(status_code=200, content="", media_type="text/event-stream")
     if request.method == "DELETE":
-        return _handle_delete(mcp_session_id)
+        return _handle_delete()
     return await _handle_post(
         request=request,
         db=db,

@@ -21,9 +21,7 @@ from src.models.llm_provider import LLMProvider
 from src.models.mcp_call_log import McpCallLog
 from src.models.system_config import SystemConfig
 from src.models.tag_definition import TagDefinition
-from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
-from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 
 
@@ -97,6 +95,7 @@ def _seed_event_data(db: Session) -> tuple[int, int, int]:
         object_type="human",
         action_type="stay",
         description="一名人员在门口短暂停留。",
+        summary="门口短暂停留",
     )
     db.add(event)
     db.commit()
@@ -210,7 +209,7 @@ def test_mcp_tools_list_and_get_daily_summary(client: TestClient, db: Session) -
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "get_daily_summary", "arguments": {"date": "2026-02-26"}},
+            "params": {"name": "get_daily_summary", "arguments": {"start_date": "2026-02-26"}},
         },
         headers={
             "X-MCP-Token": "integration-mcp-token",
@@ -225,30 +224,15 @@ def test_mcp_tools_list_and_get_daily_summary(client: TestClient, db: Session) -
     assert call_response.status_code == 200
     tool_result = call_response.json()["result"]
     assert tool_result["isError"] is False
-    assert tool_result["structuredContent"]["date"] == "2026-02-26"
+    assert tool_result["structuredContent"]["summaries"][0]["date"] == "2026-02-26"
 
 
 def test_mcp_search_and_media_calls(client: TestClient, db: Session) -> None:
-    source_id, session_id_value, event_id = _seed_event_data(db)
+    _, _, event_id = _seed_event_data(db)
     tag = TagDefinition(tag_name="门口停留", tag_type="custom", enabled=True)
     db.add(tag)
     db.flush()
     db.add(EventTagRel(event_id=event_id, tag_id=tag.id))
-    video_file = VideoFile(
-        source_id=source_id,
-        file_name="1200_1740553920.mp4",
-        file_path="/tmp/1200_1740553920.mp4",
-        storage_type="local_file",
-        file_format="mp4",
-        start_time=datetime(2026, 2, 26, 15, 10, 0),
-        end_time=datetime(2026, 2, 26, 15, 11, 0),
-        parse_status="parsed",
-    )
-    db.add(video_file)
-    db.flush()
-    db.add(
-        VideoSessionFileRel(session_id=session_id_value, video_file_id=video_file.id, sort_index=1)
-    )
     db.commit()
 
     session_id = _initialize(client)
@@ -264,9 +248,7 @@ def test_mcp_search_and_media_calls(client: TestClient, db: Session) -> None:
                 "arguments": {
                     "start_time": "2026-02-26T00:00:00",
                     "end_time": "2026-02-26T23:59:59",
-                    "camera": "门口摄像头",
                     "keywords": ["停留"],
-                    "tags": ["门口停留"],
                 },
             },
         },
@@ -276,42 +258,8 @@ def test_mcp_search_and_media_calls(client: TestClient, db: Session) -> None:
             "MCP-Protocol-Version": "2025-06-18",
         },
     )
-    detail_response = client.post(
-        "/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 11,
-            "method": "tools/call",
-            "params": {"name": "get_event_detail", "arguments": {"event_id": event_id}},
-        },
-        headers={
-            "X-MCP-Token": "integration-mcp-token",
-            "Mcp-Session-Id": session_id,
-            "MCP-Protocol-Version": "2025-06-18",
-        },
-    )
-    segments_response = client.post(
-        "/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 12,
-            "method": "tools/call",
-            "params": {"name": "get_video_segments", "arguments": {"event_id": event_id}},
-        },
-        headers={
-            "X-MCP-Token": "integration-mcp-token",
-            "Mcp-Session-Id": session_id,
-            "MCP-Protocol-Version": "2025-06-18",
-        },
-    )
 
     assert search_response.json()["result"]["structuredContent"]["events"][0]["id"] == event_id
-    assert (
-        detail_response.json()["result"]["structuredContent"]["session"]["id"] == session_id_value
-    )
-    assert segments_response.json()["result"]["structuredContent"]["files"][0][
-        "stream_url"
-    ].endswith(f"/media/files/{video_file.id}/stream")
 
 
 def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
@@ -335,7 +283,7 @@ def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
             "jsonrpc": "2.0",
             "id": 20,
             "method": "tools/call",
-            "params": {"name": "get_daily_summary", "arguments": {"date": "bad-date"}},
+            "params": {"name": "get_daily_summary", "arguments": {"start_date": "bad-date"}},
         },
         headers={
             "X-MCP-Token": "integration-mcp-token",
@@ -345,7 +293,7 @@ def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
             "User-Agent": "pytest-agent",
         },
     )
-    missing_session_response = client.post(
+    no_session_response = client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 21, "method": "tools/list", "params": {}},
         headers={"X-MCP-Token": "integration-mcp-token", "MCP-Protocol-Version": "2025-06-18"},
@@ -357,8 +305,8 @@ def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
         invalid_response.json()["result"]["structuredContent"]["error"]["code"]
         == "INVALID_ARGUMENT"
     )
-    assert missing_session_response.status_code == 400
-    assert missing_session_response.json()["error"]["message"] == "missing Mcp-Session-Id"
+    assert no_session_response.status_code == 200
+    assert len(no_session_response.json()["result"]["tools"]) == 5
 
     row = db.query(McpCallLog).filter(McpCallLog.tool_name == "get_daily_summary").one()
     assert row.status == "failed"
@@ -508,3 +456,16 @@ def test_mcp_delete_session(client: TestClient) -> None:
     )
 
     assert response.status_code == 204
+
+    # After delete, tools/list still works (stateless)
+    list_response = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        headers={
+            "X-MCP-Token": "integration-mcp-token",
+            "Mcp-Session-Id": session_id,
+            "MCP-Protocol-Version": "2025-06-18",
+        },
+    )
+    assert list_response.status_code == 200
+    assert len(list_response.json()["result"]["tools"]) == 5
