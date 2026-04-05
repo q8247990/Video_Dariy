@@ -1,66 +1,162 @@
-# 家庭监控视频分析系统
+# Video Diary — 家庭监控视频 AI 分析系统
 
-这是一个面向家庭场景的离线监控视频分析系统。项目以 NAS/目录中的摄像头录像为输入，自动完成视频扫描、会话合并、AI 事件识别、家庭日报生成，并提供 Web 管理后台、自然语言问答、Webhook 与 MCP 对外能力。
-对接LLM可自由选择，推荐本地搭建多模态大模型，开发者本地环境是3090ti，vllm部署。推荐模型：
+> 家里装了摄像头，NAS 里攒了一堆录像，但从来没人看？
+>
+> Video Diary 帮你自动看完每一段录像，告诉你今天家里发生了什么。
 
-1. [MiniCPM-v 4.5 int4量化](https://modelscope.cn/models/OpenBMB/MiniCPM-V-4_5-int4)
-2. [MiniCPM-o 4.5 int4量化](https://modelscope.cn/models/OpenBMB/MiniCPM-o-4_5-awq)
-3. [qwen3.5-9b](https://modelscope.cn/models/Qwen/Qwen3.5-9B)
+![仪表盘](image.png)
 
-已知对接公网大模型限制：
+![事件与回放](image-1.png)
 
-- 调用百炼平台时，上传超过1分钟视频需要使用公网可访问url进行上传，目前不支持。
+---
 
-本地部署注意：
+## 它能做什么
 
-- ollama不支持video参数，可以不用尝试了。
+- **自动扫描录像** — 指向你的 NAS 视频目录，系统自动发现新录像、去重入库、按时间合并为完整事件
+- **AI 识别关键事件** — 调用本地或云端多模态大模型，识别"猫跳上桌子"、"快递员来访"、"孩子放学回家"等场景
+- **每日家庭日报** — 每天自动生成一份日报，汇总当天所有事件，提炼重点对象和关注事项
+- **自然语言问答** — 直接问"昨天晚上门口有没有人停留超过 5 分钟？"，系统检索事件并回答
+- **Webhook / MCP 对外能力** — 接入微信 Bot、Home Assistant、Claude Desktop 等外部系统
+- **Web 管理后台** — 视频源、事件回放、日报、家庭画像、模型配置，全部可视化管理
 
-## 项目能做什么
+## 快速开始
 
-- 自动扫描视频目录，识别新增录像并去重入库
-- 将连续视频片段合并为可理解的 `Session`（事件）
-- 调用兼容 OpenAI 接口的视觉模型识别关键事件并落库
-- 生成按天汇总的家庭日报，提炼重点对象与关注事项
-- 提供自然语言问答能力，支持围绕事件、会话、日报检索回答
-- 提供 Webhook 订阅与 MCP 工具接口，方便接入 Bot / Agent / 外部系统
-- 提供前端管理后台，覆盖视频源、事件、会话、任务、模型配置、家庭画像等功能
+**前置条件**：Docker + Docker Compose
 
-## 核心链路
+```bash
+# 1. 克隆项目
+git clone <repo-url> && cd video_dairy
 
-```text
-视频目录 -> VideoSource -> VideoFile -> VideoSession -> EventRecord -> DailySummary
-                                                    -> Chat / MCP / Webhook
+# 2. 修改视频目录挂载（docker-compose.yml 顶部）
+#    将 ./xiaomi_video 替换为你的摄像头录像目录
+
+# 3. 启动
+docker compose up --build -d
+
+# 4. 打开浏览器
+#    http://localhost:8226
 ```
 
-系统的主流程如下：
+默认管理员账号通过环境变量配置（见下方"配置参考"）。启动后进入引导流程，配置视频源和模型连接即可开始使用。
 
-1. `heartbeat` 定时任务每 60 秒为启用中的视频源派发热扫描
-2. 扫描任务读取目录，解析录像时间，按文件路径哈希去重写入 `video_file`
+## 本地部署 LLM
+
+系统兼容所有 OpenAI API 格式的模型服务。推荐使用 vLLM 在本地部署多模态大模型，完全离线运行，数据不出局域网。
+
+### 硬件要求
+
+| 显卡 | 显存 | 推荐模型 |
+|------|------|----------|
+| RTX 3090 / 3090 Ti | 24GB | MiniCPM-V 4.5 int4、MiniCPM-o 4.5 AWQ |
+| RTX 4090 | 24GB | 同上，或 Qwen3.5-9B |
+| 双卡 / 更高显存 | 48GB+ | 可尝试更大参数模型 |
+
+### 推荐模型
+
+| 模型 | 用途 | 链接 |
+|------|------|------|
+| MiniCPM-V 4.5 int4 | 视频理解（主力推荐） | [ModelScope](https://modelscope.cn/models/OpenBMB/MiniCPM-V-4_5-int4) |
+| MiniCPM-o 4.5 AWQ | 视频理解（备选） | [ModelScope](https://modelscope.cn/models/OpenBMB/MiniCPM-o-4_5-awq) |
+| Qwen3.5-9B | 文本摘要 / 日报生成 | [ModelScope](https://modelscope.cn/models/Qwen/Qwen3.5-9B) |
+
+### vLLM 启动示例
+
+```bash
+# 安装 vLLM
+pip install vllm
+
+# 启动视觉模型（以 MiniCPM-V 4.5 int4 为例）
+vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
+  --trust-remote-code \
+  --port 8000 \
+  --max-model-len 4096
+```
+
+启动后，在系统"设置 → 模型连接"中填入：
+
+- API 地址：`http://<你的IP>:8000/v1`
+- 模型名称：与 vLLM 启动时一致
+
+### 已知限制
+
+- **Ollama**：不支持 video 参数，无法用于视频分析
+- **百炼平台**：上传超过 1 分钟的视频需要公网可访问 URL，当前不支持
+
+## 部署方式
+
+### Docker Compose 全栈部署（推荐）
+
+`docker-compose.yml` 包含以下服务：
+
+| 服务 | 说明 |
+|------|------|
+| postgres | 业务数据库 |
+| redis | Celery 消息队列 |
+| backend | FastAPI 后端 |
+| celery_worker | 异步任务执行 |
+| celery_beat | 定时任务调度 |
+| frontend | React 前端 + Nginx 反代 |
+
+```bash
+docker compose up --build -d    # 启动
+docker compose ps               # 查看状态
+docker compose logs -f backend   # 查看后端日志
+docker compose down              # 停止
+```
+
+### 离线交付打包
+
+适合 NAS / 内网环境，构建镜像并导出交付包：
+
+```bash
+bash scripts/package_release.sh --tag v1.0.0
+```
+
+输出位于 `output/<tag>/`，包含镜像包和精简版 `docker-compose.yml`，用户只需修改一处视频目录挂载即可运行。
+
+### 配置参考
+
+| 变量 | 说明 | 是否必改 |
+|------|------|----------|
+| `VIDEO_ROOT_PATH` | 视频录像目录（容器内路径） | 通过 docker-compose 挂载 |
+| `SECRET_KEY` | JWT 签名密钥 | 生产环境必改 |
+| `DEFAULT_ADMIN_USERNAME` | 默认管理员用户名 | 建议修改 |
+| `DEFAULT_ADMIN_PASSWORD` | 默认管理员密码 | 建议修改 |
+| `DATABASE_URL` | PostgreSQL 连接串 | Docker 部署保持默认即可 |
+| `REDIS_URL` | Redis 连接串 | Docker 部署保持默认即可 |
+| `PLAYBACK_CACHE_ROOT` | HLS 播放缓存目录 | Docker 部署保持默认即可 |
+| `MCP_TOKEN` | MCP 接口鉴权 Token | 需要 MCP 时配置 |
+
+### 默认访问地址
+
+- 前端：`http://localhost:8226`
+- 健康检查：`http://localhost:8226/health`
+- MCP 入口：`http://localhost:8226/mcp`
+
+---
+
+<details>
+<summary><strong>开发者参考</strong></summary>
+
+### 技术栈
+
+**后端**：FastAPI / Celery / SQLAlchemy + Alembic / PostgreSQL / Redis / httpx / ffmpeg
+
+**前端**：React 19 + TypeScript + Vite / React Router / @tanstack/react-query / Zustand / hls.js / Nginx
+
+### 核心链路
+
+```text
+视频目录 → VideoSource → VideoFile → VideoSession → EventRecord → DailySummary
+                                                  → Chat / MCP / Webhook
+```
+
+1. `heartbeat` 每 60 秒为启用中的视频源派发热扫描
+2. 扫描目录、解析时间、按文件哈希去重写入 `video_file`
 3. 连续片段按时间间隔合并为 `video_session`
-4. 已封口的 Session 被派发到 AI 分析队列，生成 `event_record`
+4. 封口后的 Session 派发 AI 分析，生成 `event_record`
 5. 定时或手动生成 `daily_summary`
-6. 前端、问答、MCP、Webhook 基于这些结构化结果提供能力
-
-## 架构总览
-
-### 后端
-
-- `FastAPI`：管理端 API、媒体接口、MCP 入口
-- `Celery`：扫描、分析、日报、Webhook、运维任务
-- `SQLAlchemy + Alembic`：数据模型与数据库迁移
-- `PostgreSQL`：核心业务数据
-- `Redis`：Celery Broker / Result Backend
-- `httpx`：调用 OpenAI 兼容模型接口与 Webhook 推送
-- `ffmpeg`：Session 合并与 HLS 播放缓存生成
-
-### 前端
-
-- `React 19 + TypeScript + Vite`
-- `React Router`
-- `@tanstack/react-query`
-- `Zustand`
-- `hls.js`
-- `Nginx` 托管并反向代理 `/api`、`/mcp`、`/health`
+6. 前端、问答、MCP、Webhook 基于结构化结果提供能力
 
 ### 目录结构
 
@@ -80,214 +176,68 @@
 ├── frontend/                 # 前端工程
 ├── alembic/                  # 数据库迁移
 ├── tests/                    # 单元测试 / 集成测试
-├── docker-compose.yml        # 推荐部署方式
-└── Dockerfile                # 后端镜像
+├── docker-compose.yml
+└── Dockerfile
 ```
 
-更完整的架构说明见根目录 `ARCHITECTURE.md`。
+更完整的架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-## 主要功能模块
-
-### 1. 视频源与扫描
-
-- 支持视频源配置、路径校验、启停、暂停处理
-- 当前代码内置了小米摄像头 NAS 目录解析器：`src/adapters/xiaomi_parser.py`
-- 通过 `src/services/session_builder.py` 将目录扫描、文件入库、Session 合并整合为一条链路
-
-### 2. Session 分析
-
-- `src/tasks/analyzer.py` 将封口后的 Session 按片段切分后送入视觉模型
-- 输出结构化事件，写入 `event_record`
-- 同时回写 Session 级摘要、活跃度、主体、重要标记等字段
-
-### 3. 家庭日报
-
-- `src/tasks/summarizer.py` 支持手动生成与定时生成
-- 以事件为基础，结合家庭画像生成整体总结、对象分栏和关注事项
-- 当输入过长时自动切换为串行摘要模式
-
-### 4. 自然语言问答
-
-- API：`POST /api/v1/chat/ask`
-- 基于 `src/application/qa/` 实现意图识别、检索规划、证据压缩、答案生成
-- 支持引用日报、事件、Session 作为回答依据
-
-### 5. Webhook 与 MCP
-
-- Webhook：支持事件订阅、异步发送、测试推送
-- MCP：提供 `get_daily_summary`、`search_events`、`get_event_detail`、`get_video_segments`、`ask_home_monitor` 等工具
-
-### 6. 前端管理后台
-
-- 已实现登录、仪表盘、视频源、会话、事件、日报、任务、模型配置、Webhook、家庭画像、系统配置、问答、引导流程等页面
-
-## 部署方式
-
-### 推荐方式：Docker Compose 全栈部署
-
-项目默认通过 `docker-compose.yml` 启动以下服务：
-
-- `postgres`
-- `redis`
-- `backend`
-- `celery_worker`
-- `celery_beat`
-- `frontend`
-
-启动：
+### 本地开发
 
 ```bash
-docker compose up --build -d
-```
-
-查看状态：
-
-```bash
-docker compose ps
-```
-
-查看日志：
-
-```bash
-docker compose logs -f backend
-docker compose logs -f celery_worker
-docker compose logs -f celery_beat
-docker compose logs -f frontend
-```
-
-停止服务：
-
-```bash
-docker compose down
-```
-
-### 本地开发运行
-
-后端：
-
-```bash
+# 后端（需自备 PostgreSQL + Redis）
 pip install -r requirements.txt
 python -m src.main
-```
 
-前端：
-
-```bash
+# 前端
 cd frontend
 npm ci
 npm run dev
 ```
 
-如果本地运行后端，需要自行准备 PostgreSQL、Redis，并通过环境变量覆盖：
+Python 版本：3.10
 
-- `DATABASE_URL`
-- `REDIS_URL`
-- `SECRET_KEY`
-- `VIDEO_ROOT_PATH`
-- `PLAYBACK_CACHE_ROOT`
-- `DEFAULT_ADMIN_USERNAME`
-- `DEFAULT_ADMIN_PASSWORD`
+### 关键接口
 
-### 离线交付打包
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/auth/login` | 登录 |
+| GET | `/api/v1/dashboard/overview` | 仪表盘统计 |
+| GET | `/api/v1/video-sources` | 视频源列表 |
+| POST | `/api/v1/tasks/{id}/build/full` | 全量构建 |
+| POST | `/api/v1/tasks/analyze/{session_id}` | 手动分析 |
+| POST | `/api/v1/tasks/summarize` | 手动生成日报 |
+| POST | `/api/v1/chat/ask` | 自然语言问答 |
+| GET | `/api/v1/daily-summaries` | 日报列表 |
+| GET | `/api/v1/events` | 事件列表 |
+| POST | `/mcp` | MCP JSON-RPC 入口 |
 
-项目提供 `scripts/package_release.sh`，可构建镜像并导出交付包：
-
-```bash
-bash scripts/package_release.sh --tag v1.0.0
-```
-
-输出目录位于 `output/<tag>/`，包含镜像包、`docker-compose.yml` 与交付 README，适合 NAS/内网环境部署。
-
-打包后的交付 `docker-compose.yml` 已收敛为“单点修改视频目录”的形式，用户只需修改顶部一处视频挂载配置即可运行。
-
-## 默认访问地址
-
-- 前端：`http://localhost:8226`
-- 前端反代健康检查：`http://localhost:8226/health`
-- MCP：`http://localhost:8226/mcp`
-
-## 初始化与运行说明
-
-- 应用启动时会执行 Alembic 迁移，并自动确保默认管理员存在
-- 当前迁移策略以 `20260320_0001` 作为正式数据库基线快照，后续结构演进通过增量 revision 管理
-- 默认管理员用户名密码来自环境变量：`DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD`
-- 后端会等待 PostgreSQL 可用后再初始化，可通过下列变量调整重试窗口：
+### 常用命令
 
 ```bash
-DB_INIT_MAX_RETRIES=180
-DB_INIT_RETRY_INTERVAL_SECONDS=2
-```
-
-## 数据与挂载目录
-
-`docker-compose.yml` 默认使用以下挂载：
-
-- `./xiaomi_video:/data/videos`：原始监控视频目录
-- `./data:/data`：播放缓存、HLS 文件等运行数据
-- `./postgres_data:/var/lib/postgresql/data`
-- `./redis_data:/data`
-
-关键环境变量：
-
-```bash
-DATABASE_URL=postgresql+psycopg://postgres:123456@postgres:5432/home_monitor
-REDIS_URL=redis://redis:6379/0
-VIDEO_ROOT_PATH=/data/videos
-PLAYBACK_CACHE_ROOT=/data/hls
-SECRET_KEY=supersecretkey_please_change_in_production
-MCP_TOKEN=change_me_mcp_token
-```
-
-其中 `MCP_TOKEN` 属于可选覆盖项；如果未显式配置，系统会使用 `src/core/config.py` 中的默认值。
-
-## 常用运维命令
-
-重置扫描、Session、事件与任务数据：
-
-```bash
+# 重置扫描/Session/事件/任务数据
 docker compose exec backend python -m src.reset_pipeline_data
-```
 
-运行测试：
-
-```bash
-pytest
+# 测试
 pytest -v
-```
 
-代码检查：
-
-```bash
+# 代码检查
 ruff check .
 ruff format .
 mypy .
 ```
 
-## 开发环境
+</details>
 
-- 后端运行、lint、mypy 与迁移基线统一使用 Python 3.10
+---
 
-## 关键接口概览
-
-- `POST /api/v1/auth/login`：登录
-- `GET /api/v1/dashboard/overview`：仪表盘统计
-- `GET /api/v1/video-sources`：视频源列表
-- `POST /api/v1/tasks/{id}/build/full`：对指定视频源执行全量构建
-- `POST /api/v1/tasks/analyze/{session_id}`：手动触发 Session 分析
-- `POST /api/v1/tasks/summarize`：手动生成日报
-- `POST /api/v1/chat/ask`：自然语言问答
-- `GET /api/v1/daily-summaries`：日报列表
-- `GET /api/v1/events`：事件列表
-- `POST /mcp`：MCP JSON-RPC 入口
-
-## 界面示意
-
-![首页](image.png)
-
-![事件页面](image-1.png)
+<details>
+<summary><strong>更多截图</strong></summary>
 
 ![宠物档案](image-2.png)
 
 ![问答页面](image-3.png)
 
 ![家庭画像](image-4.png)
+
+</details>
