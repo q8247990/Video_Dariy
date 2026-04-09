@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { askQuestion, getChatHistory } from './api'
 
 export function ChatPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [question, setQuestion] = useState('')
   const [latestError, setLatestError] = useState('')
@@ -44,7 +46,7 @@ export function ChatPage() {
 
   return (
     <div>
-      <PageHeader title="问答中心" subtitle="按自然语言检索安防事件" />
+      <PageHeader title={t('chat.title')} subtitle="按自然语言检索安防事件" />
 
       <div className="card chat-ask-card">
         <form onSubmit={handleSubmit}>
@@ -53,13 +55,13 @@ export function ChatPage() {
             <textarea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
-              placeholder="例如：昨天晚上门口有没有人停留超过5分钟？"
+              placeholder={t('chat.input_placeholder')}
               required
             />
           </label>
           <div className="dialog-actions">
             <button type="submit" disabled={askMutation.isPending}>
-              {askMutation.isPending ? '分析中...' : '提交问题'}
+              {askMutation.isPending ? '分析中...' : t('chat.send')}
             </button>
           </div>
         </form>

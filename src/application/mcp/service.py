@@ -48,7 +48,12 @@ class MCPToolService:
 
     def get_data_availability(self) -> dict:
         result = self._query_service.get_data_availability()
-        return dataclasses.asdict(result)
+        payload = dataclasses.asdict(result)
+        if result.earliest_event_date is not None:
+            payload["earliest_event_date"] = str(result.earliest_event_date)
+        if result.latest_event_date is not None:
+            payload["latest_event_date"] = str(result.latest_event_date)
+        return payload
 
     # ------------------------------------------------------------------
     # search_events
@@ -151,7 +156,7 @@ class MCPToolService:
     # ask_home_monitor
     # ------------------------------------------------------------------
 
-    def ask_home_monitor(self, question: str) -> dict:
+    def ask_home_monitor(self, question: str, locale: str | None = None) -> dict:
         clean_question = question.strip()
         if not clean_question:
             raise MCPInvalidArgumentError("question is required")
@@ -167,6 +172,7 @@ class MCPToolService:
                 timezone="Asia/Shanghai",
                 write_query_log=False,
                 request_source="mcp",
+                locale=locale or "zh-CN",
             )
         )
 

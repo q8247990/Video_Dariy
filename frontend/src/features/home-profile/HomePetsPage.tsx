@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -51,6 +52,7 @@ function getInitialState(roles: string[], initialValue?: HomeEntity): FormState 
 }
 
 function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormProps) {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [form, setForm] = useState<FormState>(() => getInitialState(roles, initialValue))
   const [currentEntity, setCurrentEntity] = useState<HomeEntity | undefined>(initialValue)
@@ -59,7 +61,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
   const [deleting, setDeleting] = useState(false)
   const [generating, setGenerating] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const submitLabel = useMemo(() => (initialValue ? '保存修改' : '新增宠物'), [initialValue])
+  const submitLabel = useMemo(() => (initialValue ? t('home_profile.save_changes', '保存修改') : t('home_profile.add_pet', '新增宠物')), [initialValue, t])
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -147,7 +149,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
                 fontSize: 12,
               }}
             >
-              暂无图片
+              {t('home_profile.no_image', '暂无图片')}
             </div>
           )}
           <input
@@ -166,7 +168,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
                   disabled={uploading}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {uploading ? '上传中...' : '重新上传'}
+                  {uploading ? t('home_profile.uploading', '上传中...') : t('home_profile.re_upload', '重新上传')}
                 </button>
                 <button
                   type="button"
@@ -174,7 +176,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
                   disabled={deleting}
                   onClick={handleDeleteImage}
                 >
-                  {deleting ? '删除中...' : '删除'}
+                  {deleting ? t('home_profile.deleting', '删除中...') : t('home_profile.delete', '删除')}
                 </button>
               </>
             ) : (
@@ -184,7 +186,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
                 disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
               >
-                {uploading ? '上传中...' : '上传图片'}
+                {uploading ? t('home_profile.uploading', '上传中...') : t('home_profile.upload_image', '上传图片')}
               </button>
             )}
           </div>
@@ -192,11 +194,11 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
         </div>
       )}
       <label>
-        名字
+        {t('home_profile.field_name_pet', '名字')}
         <input value={form.name} required onChange={(event) => setForm((old) => ({ ...old, name: event.target.value }))} />
       </label>
       <label>
-        宠物类型
+        {t('home_profile.field_role_pet', '宠物类型')}
         <select value={form.role_type} onChange={(event) => setForm((old) => ({ ...old, role_type: event.target.value }))}>
           {roles.map((role) => (
             <option key={role} value={role}>
@@ -206,11 +208,11 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
         </select>
       </label>
       <label>
-        品种
+        {t('home_profile.field_breed', '品种')}
         <input value={form.breed} onChange={(event) => setForm((old) => ({ ...old, breed: event.target.value }))} />
       </label>
       <label>
-        外观特征
+        {t('home_profile.field_appearance', '外观特征')}
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <textarea
             style={{ flex: 1 }}
@@ -225,35 +227,35 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
               onClick={handleGenerate}
               style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
             >
-              {generating ? '生成中...' : '✨ AI 生成'}
+              {generating ? t('home_profile.generating', '生成中...') : t('home_profile.generate_ai', '✨ AI 生成')}
             </button>
           )}
         </div>
       </label>
       <label>
-        性格 / 日常风格
+        {t('home_profile.field_personality', '性格 / 日常风格')}
         <textarea value={form.personality_desc} onChange={(event) => setForm((old) => ({ ...old, personality_desc: event.target.value }))} />
       </label>
       <label>
-        宠物补充说明
+        {t('home_profile.field_note_pet', '宠物补充说明')}
         <textarea value={form.note} onChange={(event) => setForm((old) => ({ ...old, note: event.target.value }))} />
       </label>
       <div className="inline-fields">
         <label>
-          展示排序
+          {t('home_profile.field_sort', '展示排序')}
           <input type="number" min={0} value={form.sort_order} onChange={(event) => setForm((old) => ({ ...old, sort_order: event.target.value }))} />
         </label>
         <label className="checkbox-field">
           <input type="checkbox" checked={form.is_enabled} onChange={(event) => setForm((old) => ({ ...old, is_enabled: event.target.checked }))} />
-          启用宠物
+          {t('home_profile.enable_pet', '启用宠物')}
         </label>
       </div>
       <div className="dialog-actions">
         <button type="button" className="ghost" onClick={onCancel}>
-          取消
+          {t('home_profile.cancel', '取消')}
         </button>
         <button type="submit" disabled={pending}>
-          {pending ? '处理中...' : submitLabel}
+          {pending ? t('home_profile.processing', '处理中...') : submitLabel}
         </button>
       </div>
     </form>
@@ -261,6 +263,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
 }
 
 export function HomePetsPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [message, setMessage] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -277,7 +280,7 @@ export function HomePetsPage() {
     mutationFn: createPet,
     onSuccess: () => {
       setShowCreate(false)
-      setMessage('宠物已创建')
+      setMessage(t('home_profile.pet_created', '宠物已创建'))
       queryClient.invalidateQueries({ queryKey: ['home-pets'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -287,7 +290,7 @@ export function HomePetsPage() {
     mutationFn: ({ id, payload }: { id: number; payload: Partial<PetPayload> }) => updateEntity(id, payload),
     onSuccess: () => {
       setEditing(null)
-      setMessage('宠物已更新')
+      setMessage(t('home_profile.pet_updated', '宠物已更新'))
       queryClient.invalidateQueries({ queryKey: ['home-pets'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -296,14 +299,14 @@ export function HomePetsPage() {
   const disableMutation = useMutation({
     mutationFn: disableEntity,
     onSuccess: () => {
-      setMessage('宠物已停用')
+      setMessage(t('home_profile.pet_disabled', '宠物已停用'))
       queryClient.invalidateQueries({ queryKey: ['home-pets'] })
     },
     onError: (error) => setMessage((error as Error).message),
   })
 
   if (optionsQuery.isLoading || listQuery.isLoading) {
-    return <LoadingBlock text="加载宠物档案中" />
+    return <LoadingBlock text={t('home_profile.loading_pets', '加载宠物档案中')} />
   }
 
   if (optionsQuery.error) {
@@ -317,15 +320,15 @@ export function HomePetsPage() {
   const rows = listQuery.data ?? []
   const options = optionsQuery.data
   if (!options) {
-    return <ApiErrorAlert message="未获取到宠物选项" />
+    return <ApiErrorAlert message={t('home_profile.no_options_pets', '未获取到宠物选项')} />
   }
 
   return (
     <div>
       <PageHeader
-        title="宠物档案"
-        subtitle="维护宠物名称、类型和个体特征"
-        actions={<button onClick={() => setShowCreate(true)}>新增宠物</button>}
+        title={t('home_profile.hub_pets_title', '宠物档案')}
+        subtitle={t('home_profile.hub_pets_desc_sub', '维护宠物名称、类型和个体特征')}
+        actions={<button onClick={() => setShowCreate(true)}>{t('home_profile.add_pet', '新增宠物')}</button>}
       />
 
       {message ? <div className="api-ok">{message}</div> : null}
@@ -337,7 +340,7 @@ export function HomePetsPage() {
             checked={includeDisabled}
             onChange={(event) => setIncludeDisabled(event.target.checked)}
           />
-          显示已停用宠物
+          {t('home_profile.show_disabled_pets', '显示已停用宠物')}
         </label>
       </div>
 
@@ -346,12 +349,12 @@ export function HomePetsPage() {
           <thead>
             <tr>
               <th>ID</th>
-              <th>名字</th>
-              <th>类型</th>
-              <th>品种</th>
-              <th>状态</th>
-              <th>排序</th>
-              <th>操作</th>
+              <th>{t('home_profile.col_name_pet', '名字')}</th>
+              <th>{t('home_profile.col_role_pet', '类型')}</th>
+              <th>{t('home_profile.col_breed', '品种')}</th>
+              <th>{t('home_profile.col_status', '状态')}</th>
+              <th>{t('home_profile.col_sort', '排序')}</th>
+              <th>{t('home_profile.col_actions', '操作')}</th>
             </tr>
           </thead>
           <tbody>
@@ -368,18 +371,18 @@ export function HomePetsPage() {
                 <td>
                   <div className="row-actions">
                     <button className="ghost" onClick={() => setEditing(item)}>
-                      编辑
+                      {t('home_profile.edit', '编辑')}
                     </button>
                     <button
                       className="ghost"
                       onClick={() => {
-                        const confirmed = window.confirm(`确认停用宠物「${item.name}」吗？`)
+                        const confirmed = window.confirm(t('home_profile.confirm_disable_pet', '确认停用宠物「{{name}}」吗？', { name: item.name }))
                         if (confirmed) {
                           disableMutation.mutate(item.id)
                         }
                       }}
                     >
-                      停用
+                      {t('home_profile.disable', '停用')}
                     </button>
                   </div>
                 </td>
@@ -392,7 +395,7 @@ export function HomePetsPage() {
       {(showCreate || editing) && (
         <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
-            <h3>{editing ? '编辑宠物' : '新增宠物'}</h3>
+            <h3>{editing ? t('home_profile.edit_pet', '编辑宠物') : t('home_profile.add_pet', '新增宠物')}</h3>
             <PetForm
               roles={options.pet_roles}
               initialValue={editing ?? undefined}

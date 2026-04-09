@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import type { VideoSession } from '../../types/api'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -29,6 +30,7 @@ type SessionEventsRowProps = {
 }
 
 export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRowProps) {
+  const { t } = useTranslation()
   const eventsQuery = useQuery({
     queryKey: ['session-events', session.id],
     queryFn: () => getSessionEvents(session.id, 'asc'),
@@ -38,17 +40,17 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
     <tr>
       <td colSpan={6}>
         <div className="session-events-wrap">
-          {eventsQuery.isLoading ? <LoadingBlock text="加载事件中" /> : null}
+          {eventsQuery.isLoading ? <LoadingBlock text={t('events.loading_session_events', '加载事件中')} /> : null}
           {eventsQuery.error ? <ApiErrorAlert message={(eventsQuery.error as Error).message} /> : null}
 
           {!eventsQuery.isLoading && !eventsQuery.error ? (
             <table className="table table-sub">
               <thead>
                 <tr>
-                  <th>发生时间</th>
-                  <th>事件</th>
-                  <th>重要性</th>
-                  <th>操作</th>
+                  <th>{t('events.col_event_time', '发生时间')}</th>
+                  <th>{t('events.col_event_title', '事件')}</th>
+                  <th>{t('events.col_importance', '重要性')}</th>
+                  <th>{t('events.col_actions', '操作')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -59,7 +61,7 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
                     <td>{event.importance_level ?? '-'}</td>
                     <td>
                       <button className="ghost" onClick={() => onOpenEventDetail(event.id)}>
-                        事件详情
+                        {t('events.view_detail', '事件详情')}
                       </button>
                     </td>
                   </tr>
@@ -67,7 +69,7 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
                 {(eventsQuery.data ?? []).length === 0 ? (
                   <tr>
                     <td colSpan={4} className="empty-cell">
-                      该 Session 暂无事件
+                      {t('events.empty_session_events', '该 Session 暂无事件')}
                     </td>
                   </tr>
                 ) : null}

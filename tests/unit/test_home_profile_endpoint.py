@@ -98,6 +98,7 @@ def test_home_entity_crud_and_context() -> None:
         list_members = get_home_entities(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             entity_type="member",
             include_disabled=False,
         )
@@ -109,6 +110,7 @@ def test_home_entity_crud_and_context() -> None:
         update_resp = update_home_entity(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             entity_id=member_resp.data.id,
             payload=HomeEntityUpdate(name="小米米", note="更新备注"),
         )
@@ -119,6 +121,7 @@ def test_home_entity_crud_and_context() -> None:
         disable_resp = delete_home_entity(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             entity_id=pet_resp.data.id,
         )
         assert disable_resp.code == 0
@@ -126,6 +129,7 @@ def test_home_entity_crud_and_context() -> None:
         list_pets = get_home_entities(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             entity_type="pet",
             include_disabled=False,
         )

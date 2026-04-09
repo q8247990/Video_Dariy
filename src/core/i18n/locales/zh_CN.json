@@ -1,0 +1,110 @@
+{
+  "ok": "ok",
+
+  "dashboard.title.basic_not_ready": "未完成基础配置",
+  "dashboard.title.basic_ready": "基础可运行",
+  "dashboard.title.full_ready": "完整可运行",
+
+  "dashboard.desc.basic_not_ready": "尚未完成基础配置，系统暂不能进行完整分析",
+  "dashboard.desc.basic_ready": "系统已可开始分析，建议继续完善家庭信息与风格设置",
+  "dashboard.desc.full_ready": "系统已完成主要配置，正在持续分析家庭监控视频",
+
+  "dashboard.label.video_source": "视频源",
+  "dashboard.label.provider": "Provider",
+  "dashboard.label.daily_summary": "日报",
+  "dashboard.label.home_profile": "家庭档案",
+
+  "dashboard.action.continue_init": "继续完成初始化",
+  "dashboard.action.complete_profile": "完善家庭配置",
+  "dashboard.action.view_status": "查看状态详情",
+
+  "dashboard.alert.basic_not_ready.title": "尚未完成基础配置",
+  "dashboard.alert.basic_not_ready.desc": "系统暂不能进行完整分析，建议继续完成初始化配置",
+  "dashboard.alert.provider_error.title": "Provider 异常",
+  "dashboard.alert.provider_error.desc": "当前模型服务不可用，可能影响分析与日报生成",
+  "dashboard.alert.provider_error.action": "去检查 Provider",
+  "dashboard.alert.video_source_error.title": "视频源异常",
+  "dashboard.alert.video_source_error.desc": "视频源配置未完成或校验失败，可能无法继续扫描分析",
+  "dashboard.alert.video_source_error.action": "去检查视频源",
+  "dashboard.alert.daily_summary_error.title": "日报任务异常",
+  "dashboard.alert.daily_summary_error.desc": "最近一次日报生成失败，建议检查日志并重试",
+  "dashboard.alert.daily_summary_error.action": "查看任务日志",
+  "dashboard.alert.analysis_task_error.title": "分析任务异常",
+  "dashboard.alert.analysis_task_error.desc": "最近24小时有 {count} 个分析任务失败",
+  "dashboard.alert.analysis_task_error.action": "查看任务日志",
+
+  "dashboard.event.unnamed": "未命名事件",
+
+  "onboarding.default_home_name": "我的家庭",
+  "onboarding.default_assistant_name": "家庭助手",
+
+  "provider.capability_required": "Provider 至少需要开启一种能力",
+  "provider.not_found": "Provider not found",
+  "provider.cannot_disable_default": "Cannot disable default provider",
+  "provider.cannot_delete_default": "Cannot delete default provider",
+  "provider.in_use": "Provider is currently in use by: {roles}",
+  "provider.has_references": "Provider has historical references and cannot be deleted",
+  "provider.not_support_vision": "Provider does not support vision",
+  "provider.not_support_qa": "Provider does not support QA",
+  "provider.test.reachable": "连通性正常，检测到能力：{capabilities}",
+  "provider.test.cap_vision": "视觉",
+  "provider.test.cap_tool_calling": "工具调用",
+  "provider.test.cap_none": "无",
+
+  "entity.not_found": "entity not found",
+  "entity.invalid_entity_type": "invalid entity_type",
+  "entity.no_image": "no image uploaded",
+  "entity.unsupported_image_format": "不支持的图片格式，请上传 JPG/PNG/WebP",
+  "entity.image_too_large": "图片大小不能超过 10MB",
+  "entity.image_process_failed": "图片处理失败，请重试",
+  "entity.upload_image_first": "请先上传图片再生成外观描述",
+  "entity.no_vision_provider": "未配置可用的视觉模型，请先在 LLM 设置中配置",
+  "entity.image_read_failed": "读取图片失败，请重试",
+  "entity.ai_generate_failed": "AI 生成失败：{error}",
+  "entity.ai_no_result": "AI 未返回有效描述，请重试",
+
+  "entity.role_type_required": "role_type is required",
+  "entity.invalid_member_role": "invalid member role_type",
+  "entity.invalid_pet_role": "invalid pet role_type",
+  "entity.member_no_breed": "member does not support breed",
+  "entity.invalid_age_group": "invalid age_group",
+
+  "source.not_found": "Source not found",
+  "source.has_running_task": "Source has running task: {task_type}",
+  "source.invalid_id": "Invalid source id: {id}",
+
+  "auth.admin_already_init": "Admin already initialized",
+  "auth.invalid_credentials": "Invalid username or password",
+  "auth.incorrect_old_password": "Incorrect old password",
+  "auth.could_not_validate": "Could not validate credentials",
+
+  "session.not_found": "Session not found",
+  "session.is_analyzing": "Session is analyzing",
+  "session.is_open": "Session is open and cannot be analyzed yet",
+
+  "task.log_not_found": "Task log not found",
+  "task.cannot_delete_active": "Running or pending task cannot be deleted",
+  "task.only_active_can_stop": "Only pending or running tasks can be stopped",
+  "task.stop_failed": "Failed to stop task: {error}",
+  "task.cancelled_before_exec": "Task cancelled before execution",
+  "task.cancel_requested": "Cancellation requested by user",
+  "task.queue_unavailable": "Task queue unavailable: {error}",
+  "task.source_disabled": "Source is disabled",
+  "task.full_build_running": "Full build is already running for this source",
+
+  "event.not_found": "Event not found",
+  "tag.not_found": "Tag not found",
+  "webhook.not_found": "Webhook not found",
+
+  "summary.not_found": "Summary not found",
+  "summary.no_sessions": "No analyzed sessions found",
+  "summary.invalid_date": "Invalid date format. Use YYYY-MM-DD",
+
+  "chat.no_qa_provider": "No QA provider configured",
+
+  "media.video_file_not_found": "Video file not found",
+  "media.physical_file_not_found": "Physical file not found on disk",
+  "media.hls_manifest_not_found": "Session HLS manifest not found",
+  "media.hls_read_failed": "Failed to read HLS manifest: {error}",
+  "media.merged_video_not_found": "Session merged video not found"
+}

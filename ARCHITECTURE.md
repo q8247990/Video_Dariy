@@ -1,3 +1,5 @@
+> **English version**: [ARCHITECTURE.en.md](ARCHITECTURE.en.md)
+
 # 架构文档
 
 ## 1. 文档目标

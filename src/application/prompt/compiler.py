@@ -53,7 +53,8 @@ def compile_daily_summary_prompt(input_data: DailySummaryPromptInput) -> tuple[s
             "subject_sections": input_data.subject_sections,
             "missing_subjects": input_data.missing_subjects,
             "attention_candidates": input_data.attention_candidates,
-        }
+        },
+        locale=input_data.locale,
     )
 
 
@@ -73,4 +74,5 @@ def compile_qa_answer_prompt(input_data: QAAnswerPromptInput) -> tuple[str, str]
         timezone=input_data.timezone,
         home_context_text=input_data.home_context_text,
         evidence=input_data.evidence,
+        locale=input_data.locale,
     )

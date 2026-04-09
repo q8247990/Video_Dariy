@@ -4,8 +4,9 @@ from typing import Any
 from fastapi import APIRouter
 from kombu.exceptions import OperationalError
 
-from src.api.deps import DB, CurrentUser, Orchestrator
+from src.api.deps import DB, CurrentUser, Locale, Orchestrator
 from src.application.pipeline.commands import SendWebhookCommand
+from src.core.i18n import t
 from src.models.webhook_config import WebhookConfig
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.schemas.webhook import WebhookCreate, WebhookResponse, WebhookUpdate
@@ -69,10 +70,12 @@ def create_webhook(db: DB, current_user: CurrentUser, data: WebhookCreate) -> An
 
 
 @router.put("/{id}", response_model=BaseResponse[WebhookResponse])
-def update_webhook(db: DB, current_user: CurrentUser, id: int, data: WebhookUpdate) -> Any:
+def update_webhook(
+    db: DB, current_user: CurrentUser, locale: Locale, id: int, data: WebhookUpdate
+) -> Any:
     hook = db.query(WebhookConfig).filter(WebhookConfig.id == id).first()
     if not hook:
-        return BaseResponse(code=4002, message="Webhook not found")
+        return BaseResponse(code=4002, message=t("webhook.not_found", locale))
 
     updates = _normalize_webhook_payload(data.model_dump(exclude_unset=True))
     for key, value in updates.items():
@@ -93,10 +96,12 @@ def delete_webhook(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/{id}/test", response_model=BaseResponse[dict])
-def test_webhook(db: DB, current_user: CurrentUser, orchestrator: Orchestrator, id: int) -> Any:
+def test_webhook(
+    db: DB, current_user: CurrentUser, locale: Locale, orchestrator: Orchestrator, id: int
+) -> Any:
     hook = db.query(WebhookConfig).filter(WebhookConfig.id == id).first()
     if not hook:
-        return BaseResponse(code=4002, message="Webhook not found")
+        return BaseResponse(code=4002, message=t("webhook.not_found", locale))
 
     payload = build_webhook_event_payload(
         "test_event",
@@ -107,5 +112,5 @@ def test_webhook(db: DB, current_user: CurrentUser, orchestrator: Orchestrator, 
         orchestrator.dispatch_webhook(SendWebhookCommand(event_type="test_event", payload=payload))
     except OperationalError as e:
         logger.exception("Failed to enqueue test webhook task for webhook_id=%s", id)
-        return BaseResponse(code=5001, message=f"Task queue unavailable: {e}")
+        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     return BaseResponse(data={"success": True, "message": "Test webhook scheduled."})

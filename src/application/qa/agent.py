@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.application.qa.tools import QA_TOOLS, execute_tool
 from src.application.query.service import HomeQueryService
+from src.core.i18n.locale_directive import get_language_directive, get_tone_directive
 from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.video_analysis.enums import EVENT_TYPE_DEFINITIONS
@@ -34,8 +35,8 @@ def _build_agent_system_prompt(
     timezone: str,
     home_context: dict[str, Any],
     data_availability: dict[str, Any],
+    locale: str | None = None,
 ) -> str:
-    """构建 agent 的 system prompt，包含家庭上下文和数据可用范围。"""
     home_profile = home_context.get("home_profile", {})
     members = home_context.get("members", [])
     pets = home_context.get("pets", [])
@@ -47,6 +48,9 @@ def _build_agent_system_prompt(
     subject_names += [p.get("name", "") for p in pets if p.get("name")]
 
     event_type_lines = [f"  - {item['type']}: {item['desc']}" for item in EVENT_TYPE_DEFINITIONS]
+
+    lang_directive = get_language_directive(locale)
+    tone_directive = get_tone_directive(locale)
 
     return f"""你是家庭安防问答助手。根据用户问题，使用工具查询数据，然后基于查询结果回答。
 
@@ -76,7 +80,7 @@ def _build_agent_system_prompt(
 2. 时间参数使用 ISO 8601 格式，基于上方"当前时间"计算。
 3. subjects 参数只能从"已知主体"中选取。
 4. 如果第一次查询结果为空或不够，可以调整参数再查一次。
-5. 回答时使用中文，语气自然亲切，像家人之间的对话。
+5. {lang_directive}{tone_directive}
 6. 如果确实没有相关数据，如实告知用户。"""
 
 
@@ -116,9 +120,8 @@ class QAAgent:
         question: str,
         now: datetime,
         timezone: str,
+        locale: str | None = None,
     ) -> QAAgentResult:
-        """执行 agentic loop，返回最终回答。"""
-        # 1. 获取家庭上下文和数据可用范围
         home_context = build_home_context(self.db)
         query_service = HomeQueryService(self.db)
         availability = query_service.get_data_availability()
@@ -127,12 +130,12 @@ class QAAgent:
 
         availability_dict = dataclasses.asdict(availability)
 
-        # 2. 构建 system prompt
         system_prompt = _build_agent_system_prompt(
             now=now,
             timezone=timezone,
             home_context=home_context,
             data_availability=availability_dict,
+            locale=locale,
         )
 
         # 3. 初始化 messages

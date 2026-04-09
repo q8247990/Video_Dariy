@@ -27,6 +27,7 @@ class SystemConfigUpdate(BaseModel):
     mcp_enabled: Optional[bool] = None
     mcp_token: Optional[str] = None
     home_profile_initialized: Optional[bool] = None
+    default_locale: Optional[str] = None
 
 
 class SystemConfigResponse(SystemConfigBase):

@@ -47,6 +47,7 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:123456@postgres:5432/home_monitor
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: supersecretkey_please_change_in_production
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-zh-CN}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
@@ -90,6 +91,7 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:123456@postgres:5432/home_monitor
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: supersecretkey_please_change_in_production
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-zh-CN}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
@@ -121,6 +123,7 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:123456@postgres:5432/home_monitor
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: supersecretkey_please_change_in_production
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-zh-CN}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}

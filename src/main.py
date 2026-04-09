@@ -1,15 +1,32 @@
 # 以此项目纪念我亲爱的糖糖，愿你在喵星，也能看到家里，看到你的栗子哥哥，和永远爱你的爸爸妈妈。
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from src.api.v1.api import api_router
 from src.core.celery_app import celery_app  # noqa: F401
 from src.core.config import settings
+from src.core.i18n import get_system_default_locale, normalize_locale
 from src.db.init_db import get_current_alembic_revision, get_registered_table_names, init_db
 from src.mcp.server import router as mcp_router
+
+
+class LocaleMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        x_locale = (request.headers.get("X-Locale") or "").strip()
+        accept_lang = (request.headers.get("Accept-Language") or "").strip()
+        raw = x_locale or (accept_lang.split(",")[0].strip() if accept_lang else "")
+        if raw:
+            locale = normalize_locale(raw)
+        else:
+            locale = get_system_default_locale()
+        request.state.locale = locale
+        response = await call_next(request)
+        response.headers["Content-Language"] = locale
+        return response
 
 
 @asynccontextmanager
@@ -24,7 +41,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Set all CORS enabled origins
+app.add_middleware(LocaleMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

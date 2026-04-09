@@ -4,9 +4,10 @@ from typing import Any
 from fastapi import APIRouter
 from sqlalchemy.exc import OperationalError
 
-from src.api.deps import DB, CurrentUser, Orchestrator
+from src.api.deps import DB, CurrentUser, Locale, Orchestrator
 from src.application.daily_summary import to_daily_summary_response
 from src.application.pipeline.commands import GenerateDailySummaryCommand
+from src.core.i18n import t
 from src.models.daily_summary import DailySummary
 from src.models.video_session import VideoSession
 from src.schemas.daily_summary import DailySummaryResponse
@@ -31,14 +32,14 @@ def _has_active_daily_summary_task(db: DB, target_date: date) -> bool:
 
 @router.get("", response_model=PaginatedResponse[DailySummaryResponse])
 def get_daily_summaries(
-    db: DB, current_user: CurrentUser, page: int = 1, page_size: int = 20
+    db: DB, current_user: CurrentUser, locale: Locale, page: int = 1, page_size: int = 20
 ) -> Any:
     query = db.query(DailySummary).order_by(DailySummary.summary_date.desc())
 
     total = query.count()
     summaries = query.offset((page - 1) * page_size).limit(page_size).all()
 
-    payload = [to_daily_summary_response(summary) for summary in summaries]
+    payload = [to_daily_summary_response(summary, locale) for summary in summaries]
 
     return PaginatedResponse(
         data=PaginatedData(
@@ -50,7 +51,7 @@ def get_daily_summaries(
 
 @router.post("/generate-all", response_model=BaseResponse[dict])
 def generate_all_daily_summaries(
-    db: DB, current_user: CurrentUser, orchestrator: Orchestrator
+    db: DB, current_user: CurrentUser, locale: Locale, orchestrator: Orchestrator
 ) -> Any:
     session_end_times = (
         db.query(VideoSession.session_end_time)
@@ -59,11 +60,11 @@ def generate_all_daily_summaries(
         .all()
     )
     if not session_end_times:
-        return BaseResponse(code=4004, message="No analyzed sessions found")
+        return BaseResponse(code=4004, message=t("summary.no_sessions", locale))
 
     target_dates = sorted({item[0].date() for item in session_end_times if item[0] is not None})
     if not target_dates:
-        return BaseResponse(code=4004, message="No analyzed sessions found")
+        return BaseResponse(code=4004, message=t("summary.no_sessions", locale))
 
     earliest_date = target_dates[0]
     latest_date = target_dates[-1]
@@ -80,7 +81,7 @@ def generate_all_daily_summaries(
                 )
                 queued_task_ids.append(str(task_id))
     except OperationalError as exc:
-        return BaseResponse(code=5001, message=f"Task queue unavailable: {exc}")
+        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=exc))
 
     return BaseResponse(
         data={
@@ -96,15 +97,15 @@ def generate_all_daily_summaries(
 
 
 @router.get("/{date_str}", response_model=BaseResponse[DailySummaryResponse])
-def get_daily_summary(db: DB, current_user: CurrentUser, date_str: str) -> Any:
+def get_daily_summary(db: DB, current_user: CurrentUser, locale: Locale, date_str: str) -> Any:
     try:
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
-        return BaseResponse(code=4000, message="Invalid date format. Use YYYY-MM-DD")
+        return BaseResponse(code=4000, message=t("summary.invalid_date", locale))
 
     summary = db.query(DailySummary).filter(DailySummary.summary_date == target_date).first()
     if not summary:
-        return BaseResponse(code=4002, message="Summary not found")
+        return BaseResponse(code=4002, message=t("summary.not_found", locale))
 
-    payload = to_daily_summary_response(summary)
+    payload = to_daily_summary_response(summary, locale)
     return BaseResponse(data=payload)

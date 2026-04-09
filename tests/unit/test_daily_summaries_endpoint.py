@@ -90,6 +90,7 @@ def test_get_daily_summary_contains_detail_text() -> None:
         response = get_daily_summary(
             db=db,
             current_user=SimpleNamespace(id=1),
+            locale="zh-CN",
             date_str="2026-03-14",
         )
 
@@ -135,7 +136,10 @@ def test_generate_all_daily_summaries_dispatches_full_date_range() -> None:
         mock_orchestrator.dispatch_generate_daily_summary.side_effect = _mock_dispatch
 
         response = generate_all_daily_summaries(
-            db=db, current_user=SimpleNamespace(id=1), orchestrator=mock_orchestrator
+            db=db,
+            current_user=SimpleNamespace(id=1),
+            locale="zh-CN",
+            orchestrator=mock_orchestrator,
         )
 
         assert response.code == 0
@@ -186,7 +190,10 @@ def test_generate_all_daily_summaries_skips_active_dates() -> None:
         )
 
         response = generate_all_daily_summaries(
-            db=db, current_user=SimpleNamespace(id=1), orchestrator=mock_orchestrator
+            db=db,
+            current_user=SimpleNamespace(id=1),
+            locale="zh-CN",
+            orchestrator=mock_orchestrator,
         )
 
         assert response.code == 0

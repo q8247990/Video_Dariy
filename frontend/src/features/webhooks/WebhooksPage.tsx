@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -65,6 +66,7 @@ const mcpDailySummarySample = {
 }
 
 export function WebhooksPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [editing, setEditing] = useState<WebhookConfig | null>(null)
@@ -138,9 +140,9 @@ export function WebhooksPage() {
   return (
     <div>
       <PageHeader
-        title="Webhook 管理"
+        title={t('webhooks.title')}
         subtitle="配置外部通知推送规则"
-        actions={<button onClick={() => setShowCreate(true)}>新增 Webhook</button>}
+        actions={<button onClick={() => setShowCreate(true)}>{t('webhooks.add_webhook')}</button>}
       />
 
       {message ? <div className="api-ok">{message}</div> : null}
@@ -217,7 +219,7 @@ export function WebhooksPage() {
       {(showCreate || editing) && (
         <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
-            <h3>{editing ? '编辑 Webhook' : '新增 Webhook'}</h3>
+            <h3>{editing ? t('webhooks.edit_webhook') : t('webhooks.add_webhook')}</h3>
             <WebhookForm
               initialValue={editing ?? undefined}
               pending={

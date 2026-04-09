@@ -3,13 +3,14 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
 from src.application.qa.schemas import QARequest
 from src.application.qa.service import (
     QAProviderInvokeError,
     QAProviderNotConfiguredError,
     QAService,
 )
+from src.core.i18n import t
 from src.models.chat_query_log import ChatQueryLog
 from src.schemas.chat import ChatAskRequest, ChatAskResponse, ChatQueryLogResponse
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
@@ -18,7 +19,7 @@ router = APIRouter()
 
 
 @router.post("/ask", response_model=BaseResponse[ChatAskResponse])
-def ask_question(db: DB, current_user: CurrentUser, request: ChatAskRequest) -> Any:
+def ask_question(db: DB, current_user: CurrentUser, locale: Locale, request: ChatAskRequest) -> Any:
     try:
         service = QAService(db)
         result = service.answer(
@@ -28,10 +29,11 @@ def ask_question(db: DB, current_user: CurrentUser, request: ChatAskRequest) -> 
                 timezone="Asia/Shanghai",
                 write_query_log=True,
                 request_source="web",
+                locale=locale,
             )
         )
     except QAProviderNotConfiguredError:
-        return BaseResponse(code=5000, message="No QA provider configured")
+        return BaseResponse(code=5000, message=t("chat.no_qa_provider", locale))
     except QAProviderInvokeError as e:
         return BaseResponse(code=5002, message=str(e))
     except ValueError as e:

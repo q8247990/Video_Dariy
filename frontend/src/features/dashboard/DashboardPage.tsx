@@ -1,19 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { fetchDashboardOverview } from './api'
 import type { DashboardSystemStatusItem } from '../../types/api'
-
-const quickActions = [
-  { key: 'events', label: '事件与回放', target: '/events' },
-  { key: 'daily_summary', label: '每日日报', target: '/daily-summaries' },
-  { key: 'qa', label: '问答助手', target: '/chat' },
-  { key: 'home_profile', label: '家庭档案', target: '/home-profile' },
-  { key: 'settings', label: '设置', target: '/settings' },
-  { key: 'onboarding', label: '初始化引导', target: '/onboarding' },
-]
 
 function statusText(status: DashboardSystemStatusItem['status']): string {
   if (status === 'ok') {
@@ -45,11 +37,21 @@ function formatDateTime(value: string | null): string {
 }
 
 export function DashboardPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard-overview'],
     queryFn: fetchDashboardOverview,
   })
+
+  const quickActions = [
+    { key: 'events', label: t('layouts.events'), target: '/events' },
+    { key: 'daily_summary', label: t('layouts.daily_summary'), target: '/daily-summaries' },
+    { key: 'qa', label: t('layouts.chat'), target: '/chat' },
+    { key: 'home_profile', label: t('layouts.profile'), target: '/home-profile' },
+    { key: 'settings', label: t('layouts.settings'), target: '/settings' },
+    { key: 'onboarding', label: '初始化引导', target: '/onboarding' },
+  ]
 
   if (isLoading) {
     return <LoadingBlock text="正在加载总览数据" />
@@ -69,7 +71,7 @@ export function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title={`${data.assistant_name} · 首页`} />
+      <PageHeader title={`${data.assistant_name} · ${t('dashboard.title')}`} />
 
       <article className="card dashboard-status-card">
         <div className="dashboard-status-head">

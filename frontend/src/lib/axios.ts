@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
+import { useLocaleStore } from '../store/localeStore'
 
 type ApiResponse<T> = {
   code: number
@@ -16,6 +17,10 @@ apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  const locale = useLocaleStore.getState().locale
+  if (locale) {
+    config.headers['Accept-Language'] = locale
   }
   return config
 })

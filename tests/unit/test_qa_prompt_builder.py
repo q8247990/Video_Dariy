@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from src.application.qa.schemas import CompressedEvidence, QueryPlan, TimeRange
+from src.application.qa.schemas import CompressedEvidence
 from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
 from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
 
@@ -31,8 +31,8 @@ def test_build_qa_intent_prompt_basic() -> None:
     assert "爸爸" in user_prompt
     assert "布丁" in user_prompt
     assert "Asia/Shanghai" in user_prompt
-    assert "member_appear" in user_prompt
-    assert "overview" in user_prompt
+    assert "家庭名=温馨之家" in user_prompt
+    assert "已知主体: 爸爸、布丁" in user_prompt
 
 
 def test_build_qa_intent_prompt_empty_home() -> None:
@@ -48,7 +48,7 @@ def test_build_qa_intent_prompt_empty_home() -> None:
         home_context=home_context,
     )
 
-    assert "已知主体列表: 无" in user_prompt
+    assert "已知主体: 无" in user_prompt
     assert "最近有异常吗" in user_prompt
 
 
@@ -58,14 +58,6 @@ def test_build_qa_intent_prompt_empty_home() -> None:
 
 
 def test_build_qa_answer_prompt_with_evidence() -> None:
-    query_plan = QueryPlan(
-        question_mode="overview",
-        time_range=TimeRange(
-            start=datetime(2026, 3, 20, 0, 0),
-            end=datetime(2026, 3, 21, 0, 0),
-        ),
-        subjects=["爸爸"],
-    )
     evidence = CompressedEvidence(
         home_context_text="家庭: 温馨之家\n成员: 爸爸",
         query_plan_text="模式=overview | 主体=爸爸",
@@ -79,7 +71,6 @@ def test_build_qa_answer_prompt_with_evidence() -> None:
         now_iso="2026-03-21T12:00:00",
         timezone="Asia/Shanghai",
         home_context_text=evidence.home_context_text,
-        query_plan=query_plan,
         evidence=evidence,
     )
 
@@ -92,13 +83,6 @@ def test_build_qa_answer_prompt_with_evidence() -> None:
 
 
 def test_build_qa_answer_prompt_no_evidence() -> None:
-    query_plan = QueryPlan(
-        question_mode="existence",
-        time_range=TimeRange(
-            start=datetime(2026, 3, 21, 0, 0),
-            end=datetime(2026, 3, 21, 12, 0),
-        ),
-    )
     evidence = CompressedEvidence(
         home_context_text="家庭: 测试",
     )
@@ -108,7 +92,6 @@ def test_build_qa_answer_prompt_no_evidence() -> None:
         now_iso="2026-03-21T12:00:00",
         timezone="Asia/Shanghai",
         home_context_text=evidence.home_context_text,
-        query_plan=query_plan,
         evidence=evidence,
     )
 

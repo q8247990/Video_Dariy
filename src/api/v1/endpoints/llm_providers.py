@@ -5,7 +5,8 @@ from fastapi import APIRouter
 from sqlalchemy.exc import IntegrityError
 
 from src.api.common import reset_other_default_providers
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
+from src.core.i18n import t
 from src.models.llm_provider import LLMProvider
 from src.schemas.llm_provider import (
     LLMProviderCreate,
@@ -26,12 +27,12 @@ from src.services.provider_selector import (
 router = APIRouter()
 
 
-def _ensure_provider_capabilities(payload: dict[str, Any]) -> tuple[bool, bool]:
+def _ensure_provider_capabilities(payload: dict[str, Any], locale: str) -> tuple[bool, bool]:
     supports_vision = bool(payload.get("supports_vision", False))
     supports_qa = bool(payload.get("supports_qa", True))
 
     if not supports_vision and not supports_qa:
-        raise ValueError("Provider 至少需要开启一种能力")
+        raise ValueError(t("provider.capability_required", locale))
 
     return supports_vision, supports_qa
 
@@ -96,10 +97,12 @@ def get_providers(
 
 
 @router.post("", response_model=BaseResponse[LLMProviderResponse])
-def create_provider(db: DB, current_user: CurrentUser, data: LLMProviderCreate) -> Any:
+def create_provider(
+    db: DB, current_user: CurrentUser, locale: Locale, data: LLMProviderCreate
+) -> Any:
     dump = data.model_dump()
     try:
-        supports_vision, supports_qa = _ensure_provider_capabilities(dump)
+        supports_vision, supports_qa = _ensure_provider_capabilities(dump, locale)
     except ValueError as e:
         return BaseResponse(code=4001, message=str(e))
 
@@ -129,18 +132,18 @@ def create_provider(db: DB, current_user: CurrentUser, data: LLMProviderCreate) 
 
 @router.put("/{id}", response_model=BaseResponse[LLMProviderResponse])
 def update_provider(  # noqa: C901
-    db: DB, current_user: CurrentUser, id: int, data: LLMProviderUpdate
+    db: DB, current_user: CurrentUser, locale: Locale, id: int, data: LLMProviderUpdate
 ) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if not provider:
-        return BaseResponse(code=4002, message="Provider not found")
+        return BaseResponse(code=4002, message=t("provider.not_found", locale))
 
     dump = data.model_dump(exclude_unset=True)
 
     next_supports_vision = bool(dump.get("supports_vision", provider.supports_vision))
     next_supports_qa = bool(dump.get("supports_qa", provider.supports_qa))
     if not next_supports_vision and not next_supports_qa:
-        return BaseResponse(code=4001, message="Provider 至少需要开启一种能力")
+        return BaseResponse(code=4001, message=t("provider.capability_required", locale))
 
     next_is_default_vision = bool(dump.get("is_default_vision", provider.is_default_vision))
     next_is_default_qa = bool(dump.get("is_default_qa", provider.is_default_qa))
@@ -162,7 +165,7 @@ def update_provider(  # noqa: C901
         next_is_default_qa and next_supports_qa
     )
     if would_be_default and dump.get("enabled") is False:
-        return BaseResponse(code=4003, message="Cannot disable default provider")
+        return BaseResponse(code=4003, message=t("provider.cannot_disable_default", locale))
 
     final_supports_vision = bool(dump.get("supports_vision", provider.supports_vision))
     final_supports_qa = bool(dump.get("supports_qa", provider.supports_qa))
@@ -183,11 +186,11 @@ def update_provider(  # noqa: C901
 
 
 @router.delete("/{id}", response_model=BaseResponse[dict])
-def delete_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
+def delete_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if provider:
         if provider.is_default_vision or provider.is_default_qa:
-            return BaseResponse(code=4003, message="Cannot delete default provider")
+            return BaseResponse(code=4003, message=t("provider.cannot_delete_default", locale))
 
         active_vision = find_enabled_provider(db, PROVIDER_TYPE_VISION)
         active_qa = find_enabled_provider(db, PROVIDER_TYPE_QA)
@@ -201,7 +204,7 @@ def delete_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
             role_text = ", ".join(in_use_roles)
             return BaseResponse(
                 code=4004,
-                message=f"Provider is currently in use by: {role_text}",
+                message=t("provider.in_use", locale, roles=role_text),
             )
         try:
             db.delete(provider)
@@ -210,7 +213,7 @@ def delete_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
             db.rollback()
             return BaseResponse(
                 code=4005,
-                message="Provider has historical references and cannot be deleted",
+                message=t("provider.has_references", locale),
             )
     return BaseResponse(data={})
 
@@ -232,23 +235,23 @@ def enable_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/{id}/disable", response_model=BaseResponse[dict])
-def disable_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
+def disable_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if provider:
         if provider.is_default_vision or provider.is_default_qa:
-            return BaseResponse(code=4003, message="Cannot disable default provider")
+            return BaseResponse(code=4003, message=t("provider.cannot_disable_default", locale))
         provider.enabled = False
         db.commit()
     return BaseResponse(data={})
 
 
 @router.post("/{id}/set-default-vision", response_model=BaseResponse[dict])
-def set_default_vision_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
+def set_default_vision_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if not provider:
-        return BaseResponse(code=4002, message="Provider not found")
+        return BaseResponse(code=4002, message=t("provider.not_found", locale))
     if not provider.supports_vision:
-        return BaseResponse(code=4004, message="Provider does not support vision")
+        return BaseResponse(code=4004, message=t("provider.not_support_vision", locale))
 
     db.query(LLMProvider).filter(
         LLMProvider.supports_vision.is_(True), LLMProvider.id != id
@@ -262,12 +265,12 @@ def set_default_vision_provider(db: DB, current_user: CurrentUser, id: int) -> A
 
 
 @router.post("/{id}/set-default-qa", response_model=BaseResponse[dict])
-def set_default_qa_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
+def set_default_qa_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if not provider:
-        return BaseResponse(code=4002, message="Provider not found")
+        return BaseResponse(code=4002, message=t("provider.not_found", locale))
     if not provider.supports_qa:
-        return BaseResponse(code=4004, message="Provider does not support QA")
+        return BaseResponse(code=4004, message=t("provider.not_support_qa", locale))
 
     db.query(LLMProvider).filter(LLMProvider.supports_qa.is_(True), LLMProvider.id != id).update(
         {"is_default_qa": False}
@@ -281,12 +284,12 @@ def set_default_qa_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/{id}/test", response_model=BaseResponse[dict])
-def test_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
+def test_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if not provider:
-        return BaseResponse(code=4002, message="Provider not found")
+        return BaseResponse(code=4002, message=t("provider.not_found", locale))
 
-    result = check_provider_connectivity(provider)
+    result = check_provider_connectivity(provider, locale=locale)
 
     provider.supports_vision = result.supports_vision
     provider.supports_tool_calling = result.supports_tool_calling

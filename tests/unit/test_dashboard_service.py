@@ -118,7 +118,7 @@ def test_important_events_list_filters_to_high_only() -> None:
         db.add(event_medium)
         db.commit()
 
-        important_events = _build_important_events(db)
+        important_events = _build_important_events(db, "zh-CN")
 
         assert len(important_events) == 2
         assert important_events[0].summary == "高优先级-较新"

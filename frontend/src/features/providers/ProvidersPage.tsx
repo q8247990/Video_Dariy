@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -18,6 +19,7 @@ import {
 import { ProviderForm } from './ProviderForm'
 
 export function ProvidersPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [providerType, setProviderType] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -127,10 +129,10 @@ export function ProvidersPage() {
   return (
     <div>
       <PageHeader
-        title="Provider 管理"
+        title={t('providers.title')}
         subtitle="统一管理视觉与问答模型配置"
         actions={
-          <button onClick={() => setShowCreate(true)}>新增 Provider</button>
+          <button onClick={() => setShowCreate(true)}>{t('providers.add_provider')}</button>
         }
       />
 
@@ -255,7 +257,7 @@ export function ProvidersPage() {
       {(showCreate || editing) && (
         <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
-            <h3>{editing ? '编辑 Provider' : '新增 Provider'}</h3>
+            <h3>{editing ? t('providers.edit_provider') : t('providers.add_provider')}</h3>
             <ProviderForm
               initialValue={editing ?? undefined}
               pending={createMutation.isPending || updateMutation.isPending}

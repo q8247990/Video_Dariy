@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -41,6 +42,7 @@ function toggleValue(values: string[], value: string): string[] {
 }
 
 export function HomeProfilePage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [message, setMessage] = useState('')
 
@@ -82,7 +84,7 @@ export function HomeProfilePage() {
 
   return (
     <div>
-      <PageHeader title="家庭整体档案" subtitle="维护家庭语境、关注重点和系统风格" />
+      <PageHeader title={t('home_profile.title')} subtitle="维护家庭语境、关注重点和系统风格" />
 
       {message ? <div className="api-ok">{message}</div> : null}
 

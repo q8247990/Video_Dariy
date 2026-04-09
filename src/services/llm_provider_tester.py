@@ -1,6 +1,8 @@
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
+from src.core.i18n import DEFAULT_LOCALE, t
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.llm_provider import LLMProvider
 from src.providers.openai_client import OpenAIClient
@@ -16,12 +18,12 @@ class ProviderTestResult:
     supports_tool_calling: bool
 
 
-def check_provider_connectivity(provider: LLMProvider) -> ProviderTestResult:
-    """Test provider connectivity and probe capabilities.
-
-    Does NOT modify the provider model — caller is responsible for
-    writing results back and committing.
-    """
+def check_provider_connectivity(
+    provider: LLMProvider,
+    *,
+    locale: Optional[str] = None,
+) -> ProviderTestResult:
+    loc = locale or DEFAULT_LOCALE
     test_status = "failed"
     test_message = ""
     vision_result = False
@@ -59,11 +61,11 @@ def check_provider_connectivity(provider: LLMProvider) -> ProviderTestResult:
 
         capabilities = []
         if vision_result:
-            capabilities.append("视觉")
+            capabilities.append(t("provider.test.cap_vision", loc))
         if tool_calling_result:
-            capabilities.append("工具调用")
-        cap_text = "、".join(capabilities) if capabilities else "无"
-        test_message = f"连通性正常，检测到能力：{cap_text}"
+            capabilities.append(t("provider.test.cap_tool_calling", loc))
+        cap_text = "\u3001".join(capabilities) if capabilities else t("provider.test.cap_none", loc)
+        test_message = t("provider.test.reachable", loc, capabilities=cap_text)
 
     return ProviderTestResult(
         success=(test_status == "success"),

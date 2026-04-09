@@ -2,7 +2,8 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
+from src.core.i18n import t
 from src.models.tag_definition import TagDefinition
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.schemas.tag import TagCreate, TagResponse, TagUpdate
@@ -48,10 +49,10 @@ def create_tag(db: DB, current_user: CurrentUser, data: TagCreate) -> Any:
 
 
 @router.put("/{id}", response_model=BaseResponse[TagResponse])
-def update_tag(db: DB, current_user: CurrentUser, id: int, data: TagUpdate) -> Any:
+def update_tag(db: DB, current_user: CurrentUser, locale: Locale, id: int, data: TagUpdate) -> Any:
     tag = db.query(TagDefinition).filter(TagDefinition.id == id).first()
     if not tag:
-        return BaseResponse(code=4002, message="Tag not found")
+        return BaseResponse(code=4002, message=t("tag.not_found", locale))
 
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(tag, key, value)

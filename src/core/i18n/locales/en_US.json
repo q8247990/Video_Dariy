@@ -1,0 +1,110 @@
+{
+  "ok": "ok",
+
+  "dashboard.title.basic_not_ready": "Basic setup incomplete",
+  "dashboard.title.basic_ready": "Basic ready",
+  "dashboard.title.full_ready": "Fully operational",
+
+  "dashboard.desc.basic_not_ready": "Basic setup is not complete. The system cannot perform full analysis yet.",
+  "dashboard.desc.basic_ready": "The system is ready for analysis. Consider completing family info and style settings.",
+  "dashboard.desc.full_ready": "All major settings are configured. The system is continuously analyzing surveillance video.",
+
+  "dashboard.label.video_source": "Video Source",
+  "dashboard.label.provider": "Provider",
+  "dashboard.label.daily_summary": "Daily Summary",
+  "dashboard.label.home_profile": "Home Profile",
+
+  "dashboard.action.continue_init": "Continue Setup",
+  "dashboard.action.complete_profile": "Complete Home Profile",
+  "dashboard.action.view_status": "View Status Details",
+
+  "dashboard.alert.basic_not_ready.title": "Basic setup incomplete",
+  "dashboard.alert.basic_not_ready.desc": "The system cannot perform full analysis. Please continue the setup.",
+  "dashboard.alert.provider_error.title": "Provider Error",
+  "dashboard.alert.provider_error.desc": "The model service is unavailable, which may affect analysis and daily summary generation.",
+  "dashboard.alert.provider_error.action": "Check Provider",
+  "dashboard.alert.video_source_error.title": "Video Source Error",
+  "dashboard.alert.video_source_error.desc": "Video source configuration is incomplete or validation failed. Scanning may not work.",
+  "dashboard.alert.video_source_error.action": "Check Video Source",
+  "dashboard.alert.daily_summary_error.title": "Daily Summary Task Error",
+  "dashboard.alert.daily_summary_error.desc": "The latest daily summary generation failed. Please check logs and retry.",
+  "dashboard.alert.daily_summary_error.action": "View Task Logs",
+  "dashboard.alert.analysis_task_error.title": "Analysis Task Error",
+  "dashboard.alert.analysis_task_error.desc": "{count} analysis tasks failed in the last 24 hours",
+  "dashboard.alert.analysis_task_error.action": "View Task Logs",
+
+  "dashboard.event.unnamed": "Unnamed Event",
+
+  "onboarding.default_home_name": "My Home",
+  "onboarding.default_assistant_name": "Home Assistant",
+
+  "provider.capability_required": "Provider must have at least one capability enabled",
+  "provider.not_found": "Provider not found",
+  "provider.cannot_disable_default": "Cannot disable default provider",
+  "provider.cannot_delete_default": "Cannot delete default provider",
+  "provider.in_use": "Provider is currently in use by: {roles}",
+  "provider.has_references": "Provider has historical references and cannot be deleted",
+  "provider.not_support_vision": "Provider does not support vision",
+  "provider.not_support_qa": "Provider does not support QA",
+  "provider.test.reachable": "Connection OK. Detected capabilities: {capabilities}",
+  "provider.test.cap_vision": "Vision",
+  "provider.test.cap_tool_calling": "Tool Calling",
+  "provider.test.cap_none": "None",
+
+  "entity.not_found": "Entity not found",
+  "entity.invalid_entity_type": "Invalid entity_type",
+  "entity.no_image": "No image uploaded",
+  "entity.unsupported_image_format": "Unsupported image format. Please upload JPG/PNG/WebP.",
+  "entity.image_too_large": "Image size cannot exceed 10MB",
+  "entity.image_process_failed": "Image processing failed. Please try again.",
+  "entity.upload_image_first": "Please upload an image before generating appearance description",
+  "entity.no_vision_provider": "No vision model configured. Please set one up in LLM settings.",
+  "entity.image_read_failed": "Failed to read image. Please try again.",
+  "entity.ai_generate_failed": "AI generation failed: {error}",
+  "entity.ai_no_result": "AI did not return a valid description. Please try again.",
+
+  "entity.role_type_required": "role_type is required",
+  "entity.invalid_member_role": "Invalid member role_type",
+  "entity.invalid_pet_role": "Invalid pet role_type",
+  "entity.member_no_breed": "Member does not support breed",
+  "entity.invalid_age_group": "Invalid age_group",
+
+  "source.not_found": "Source not found",
+  "source.has_running_task": "Source has running task: {task_type}",
+  "source.invalid_id": "Invalid source id: {id}",
+
+  "auth.admin_already_init": "Admin already initialized",
+  "auth.invalid_credentials": "Invalid username or password",
+  "auth.incorrect_old_password": "Incorrect old password",
+  "auth.could_not_validate": "Could not validate credentials",
+
+  "session.not_found": "Session not found",
+  "session.is_analyzing": "Session is currently being analyzed",
+  "session.is_open": "Session is open and cannot be analyzed yet",
+
+  "task.log_not_found": "Task log not found",
+  "task.cannot_delete_active": "Running or pending task cannot be deleted",
+  "task.only_active_can_stop": "Only pending or running tasks can be stopped",
+  "task.stop_failed": "Failed to stop task: {error}",
+  "task.cancelled_before_exec": "Task cancelled before execution",
+  "task.cancel_requested": "Cancellation requested by user",
+  "task.queue_unavailable": "Task queue unavailable: {error}",
+  "task.source_disabled": "Source is disabled",
+  "task.full_build_running": "Full build is already running for this source",
+
+  "event.not_found": "Event not found",
+  "tag.not_found": "Tag not found",
+  "webhook.not_found": "Webhook not found",
+
+  "summary.not_found": "Summary not found",
+  "summary.no_sessions": "No analyzed sessions found",
+  "summary.invalid_date": "Invalid date format. Use YYYY-MM-DD",
+
+  "chat.no_qa_provider": "No QA provider configured",
+
+  "media.video_file_not_found": "Video file not found",
+  "media.physical_file_not_found": "Physical file not found on disk",
+  "media.hls_manifest_not_found": "Session HLS manifest not found",
+  "media.hls_read_failed": "Failed to read HLS manifest: {error}",
+  "media.merged_video_not_found": "Session merged video not found"
+}

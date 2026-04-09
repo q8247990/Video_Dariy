@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -24,6 +25,7 @@ function levelLabel(level: string): string {
 }
 
 export function DailySummariesPage() {
+  const { t } = useTranslation()
   const [page, setPage] = useState(1)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [manualDate, setManualDate] = useState('')
@@ -70,7 +72,7 @@ export function DailySummariesPage() {
   return (
     <div>
       <PageHeader
-        title="日报中心"
+        title={t('daily_summaries.title')}
         subtitle="查看每日总结并支持手动触发生成"
         actions={
           <div className="summary-generate">
@@ -128,7 +130,7 @@ export function DailySummariesPage() {
                   {(listQuery.data?.list.length ?? 0) === 0 ? (
                     <tr>
                       <td colSpan={2} className="empty-cell">
-                        暂无日报
+                        {t('daily_summaries.empty')}
                       </td>
                     </tr>
                   ) : null}

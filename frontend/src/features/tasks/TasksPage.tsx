@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { useSearchParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -21,7 +23,7 @@ function taskTypeLabel(value: string): string {
   return found?.label ?? value
 }
 
-function formatAlertDetail(detailJson: Record<string, unknown> | null, fallback: string | null): string {
+function formatAlertDetail(detailJson: Record<string, unknown> | null, fallback: string | null, t: TFunction): string {
   if (!detailJson) {
     return fallback ?? '-'
   }
@@ -33,23 +35,24 @@ function formatAlertDetail(detailJson: Record<string, unknown> | null, fallback:
   const metricValue = detailJson.metric_value
   const consecutiveCount = detailJson.consecutive_count
 
-  const stateText = alertState === 'recovered' ? '恢复' : '触发'
-  const typeText = alertType === 'latency' ? '延迟告警' : alertType
+  const stateText = alertState === 'recovered' ? t('tasks.alert_recovered', '恢复') : t('tasks.alert_triggered', '触发')
+  const typeText = alertType === 'latency' ? t('tasks.alert_latency', '延迟告警') : alertType
 
   const metricText = metricValue === undefined || metricValue === null ? '-' : String(metricValue)
   const countText =
     consecutiveCount === undefined || consecutiveCount === null ? '-' : String(consecutiveCount)
 
-  return `${stateText} | ${typeText} | 视频源:${sourceName}(${cameraName}) | 指标:${metricText} | 连续:${countText}`
+  return `${stateText} | ${typeText} | ${t('tasks.source_label', '视频源')}:${sourceName}(${cameraName}) | ${t('tasks.metric_label', '指标')}:${metricText} | ${t('tasks.consecutive_label', '连续')}:${countText}`
 }
 
 function formatSessionAnalysisDetail(
   detailJson: Record<string, unknown> | null,
   fallback: string | null,
   taskStatus: string,
+  t: TFunction,
 ): string {
   if (taskStatus === 'running' || taskStatus === 'pending') {
-    return '正在识别'
+    return t('tasks.analyzing', '正在识别')
   }
 
   if (!detailJson) {
@@ -58,28 +61,29 @@ function formatSessionAnalysisDetail(
 
   const reason = typeof detailJson.reason === 'string' ? detailJson.reason : ''
   if (reason === 'not_found' || reason === 'not_found_after_lock') {
-    return `已跳过：Session 不存在（${reason}）`
+    return t('tasks.skip_not_found', '已跳过：Session 不存在（{{reason}}）', { reason })
   }
   if (reason === 'already_analyzing') {
-    return '已跳过：已有其他分析任务抢占执行'
+    return t('tasks.skip_already_analyzing', '已跳过：已有其他分析任务抢占执行')
   }
   if (reason === 'session_open') {
-    return '已跳过：Session 仍在采集中'
+    return t('tasks.skip_session_open', '已跳过：Session 仍在采集中')
   }
   if (reason.startsWith('status_')) {
     const currentStatus = typeof detailJson.current_status === 'string' ? detailJson.current_status : reason.slice(7)
-    return `已跳过：Session 当前状态为 ${currentStatus}`
+    return t('tasks.skip_status', '已跳过：Session 当前状态为 {{status}}', { status: currentStatus })
   }
 
   const chunkIndex =
     typeof detailJson.failed_chunk_index === 'number' ? detailJson.failed_chunk_index : null
   if (chunkIndex !== null) {
-    return `${fallback ?? '识别失败'}（在第 ${chunkIndex + 1} 段中断）`
+    return t('tasks.fail_at_chunk', '{{fallback}}（在第 {{index}} 段中断）', { fallback: fallback ?? t('tasks.analyze_failed', '识别失败'), index: chunkIndex + 1 })
   }
-  return fallback ?? '识别失败，请稍后重试'
+  return fallback ?? t('tasks.analyze_failed_retry', '识别失败，请稍后重试')
 }
 
 export function TasksPage() {
+  const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const page = Number(searchParams.get('page') ?? '1') || 1
@@ -128,7 +132,7 @@ export function TasksPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteTaskLog,
     onSuccess: () => {
-      setMessage('任务记录删除成功')
+      setMessage(t('tasks.delete_success', '任务记录删除成功'))
       queryClient.invalidateQueries({ queryKey: ['task-logs'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -137,7 +141,7 @@ export function TasksPage() {
   const stopMutation = useMutation({
     mutationFn: stopTaskLog,
     onSuccess: () => {
-      setMessage('任务已结束')
+      setMessage(t('tasks.stop_success', '任务已结束'))
       queryClient.invalidateQueries({ queryKey: ['task-logs'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -146,7 +150,7 @@ export function TasksPage() {
   const retryMutation = useMutation({
     mutationFn: retryTaskLog,
     onSuccess: (data) => {
-      setMessage(`任务已重新运行：${data.task_id}`)
+      setMessage(t('tasks.retry_success', '任务已重新运行：{{id}}', { id: data.task_id }))
       queryClient.invalidateQueries({ queryKey: ['task-logs'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -155,7 +159,7 @@ export function TasksPage() {
   const hasPendingAction = deleteMutation.isPending || stopMutation.isPending || retryMutation.isPending
 
   if (query.isLoading) {
-    return <LoadingBlock text="加载任务日志中" />
+    return <LoadingBlock text={t('tasks.loading', '加载任务日志中')} />
   }
 
   if (query.error) {
@@ -169,14 +173,14 @@ export function TasksPage() {
   return (
     <div>
       <PageHeader
-        title="任务日志"
-        subtitle="查看扫描、归并、分析、汇总等后台任务状态"
-        actions={<button onClick={() => query.refetch()}>立即刷新</button>}
+        title={t('tasks.title')}
+        subtitle={t('tasks.subtitle', '查看扫描、归并、分析、汇总等后台任务状态')}
+        actions={<button onClick={() => query.refetch()}>{t('tasks.refresh', '立即刷新')}</button>}
       />
 
       <div className="card tool-row tool-row-inline">
         <label>
-          任务类型
+          {t('tasks.filter_type', '任务类型')}
           <select
             value={taskType}
             onChange={(event) => {
@@ -193,7 +197,7 @@ export function TasksPage() {
         </label>
 
         <label>
-          状态
+          {t('tasks.filter_status', '状态')}
           <select
             value={status}
             onChange={(event) => {
@@ -201,14 +205,14 @@ export function TasksPage() {
               syncSearchParams({ status: value, page: 1 })
             }}
           >
-            <option value="">全部</option>
-            <option value="running">运行中</option>
-            <option value="success">成功</option>
-            <option value="skipped">已跳过</option>
-            <option value="failed">失败</option>
-            <option value="timeout">超时</option>
-            <option value="cancelled">已取消</option>
-            <option value="pending">待执行</option>
+            <option value="">{t('tasks.status_all', '全部')}</option>
+            <option value="running">{t('tasks.status_running', '运行中')}</option>
+            <option value="success">{t('tasks.status_success', '成功')}</option>
+            <option value="skipped">{t('tasks.status_skipped', '已跳过')}</option>
+            <option value="failed">{t('tasks.status_failed', '失败')}</option>
+            <option value="timeout">{t('tasks.status_timeout', '超时')}</option>
+            <option value="cancelled">{t('tasks.status_cancelled', '已取消')}</option>
+            <option value="pending">{t('tasks.status_pending', '待执行')}</option>
           </select>
         </label>
       </div>
@@ -220,13 +224,13 @@ export function TasksPage() {
           <thead>
             <tr>
               <th>ID</th>
-              <th>任务类型</th>
-              <th>目标ID</th>
-              <th>状态</th>
-              <th>重试</th>
-              <th>信息</th>
-              <th>创建时间</th>
-              <th>操作</th>
+              <th>{t('tasks.col_type', '任务类型')}</th>
+              <th>{t('tasks.col_target_id', '目标ID')}</th>
+              <th>{t('tasks.col_status', '状态')}</th>
+              <th>{t('tasks.col_retry', '重试')}</th>
+              <th>{t('tasks.col_message', '信息')}</th>
+              <th>{t('tasks.col_created', '创建时间')}</th>
+              <th>{t('tasks.col_actions', '操作')}</th>
             </tr>
           </thead>
           <tbody>
@@ -241,29 +245,29 @@ export function TasksPage() {
                 <td>{row.retry_count}</td>
                 <td className="break-all">
                   {row.task_type === 'video_pipeline_alert'
-                    ? formatAlertDetail(row.detail_json, row.message)
+                    ? formatAlertDetail(row.detail_json, row.message, t)
                     : row.task_type === 'session_analysis'
-                      ? formatSessionAnalysisDetail(row.detail_json, row.message, row.status)
+                      ? formatSessionAnalysisDetail(row.detail_json, row.message, row.status, t)
                       : row.message ?? '-'}
                 </td>
                 <td>{row.created_at}</td>
                 <td>
                   {row.status === 'running' || row.status === 'pending' ? (
                     <button className="ghost" disabled={hasPendingAction} onClick={() => stopMutation.mutate(row.id)}>
-                      结束任务
+                      {t('tasks.action_stop', '结束任务')}
                     </button>
                   ) : row.status === 'failed' || row.status === 'timeout' ? (
                     <>
                       <button className="ghost" disabled={hasPendingAction} onClick={() => retryMutation.mutate(row.id)}>
-                        重新运行
+                        {t('tasks.action_retry', '重新运行')}
                       </button>
                       <button className="ghost" disabled={hasPendingAction} onClick={() => deleteMutation.mutate(row.id)}>
-                        删除
+                        {t('tasks.action_delete', '删除')}
                       </button>
                     </>
                   ) : row.status === 'cancelled' || row.status === 'success' || row.status === 'skipped' ? (
                     <button className="ghost" disabled={hasPendingAction} onClick={() => deleteMutation.mutate(row.id)}>
-                      删除
+                      {t('tasks.action_delete', '删除')}
                     </button>
                   ) : (
                     '-'
@@ -274,7 +278,7 @@ export function TasksPage() {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="empty-cell">
-                  暂无任务日志
+                  {t('tasks.empty', '暂无任务日志')}
                 </td>
               </tr>
             ) : null}
@@ -290,10 +294,10 @@ export function TasksPage() {
               syncSearchParams({ page: nextPage })
             }}
           >
-            上一页
+            {t('tasks.pager_prev', '上一页')}
           </button>
           <span>
-            第 {page} / {totalPages} 页，共 {total} 条
+            {t('tasks.pager_info', '第 {{page}} / {{totalPages}} 页，共 {{total}} 条', { page, totalPages, total })}
           </span>
           <button
             className="ghost"
@@ -303,7 +307,7 @@ export function TasksPage() {
               syncSearchParams({ page: nextPage })
             }}
           >
-            下一页
+            {t('tasks.pager_next', '下一页')}
           </button>
         </div>
       </div>

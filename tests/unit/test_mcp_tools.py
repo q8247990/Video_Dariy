@@ -53,6 +53,9 @@ def _setup_source_session_event(db: Session) -> tuple[int, int, int]:
         event_end_time=datetime(2026, 2, 26, 15, 14, 0),
         object_type="human",
         action_type="stay",
+        title="门口停留",
+        summary="一名人员在门口短暂停留。",
+        detail="一名人员在门口短暂停留。",
         description="一名人员在门口短暂停留。",
     )
     db.add(event)
@@ -65,10 +68,10 @@ def test_list_tools_exposes_all_tools() -> None:
 
     assert len(payload["tools"]) == 5
     assert {tool["name"] for tool in payload["tools"]} == {
+        "get_data_availability",
+        "get_sessions",
         "get_daily_summary",
         "search_events",
-        "get_event_detail",
-        "get_video_segments",
         "ask_home_monitor",
     }
 
@@ -92,15 +95,15 @@ def test_call_tool_get_daily_summary_success_and_log() -> None:
         result = call_tool(
             db=db,
             tool_name="get_daily_summary",
-            arguments={"date": "2026-02-26"},
+            arguments={"start_date": "2026-02-26"},
             source="robot-a",
             user_agent="pytest",
             session_id="session-a",
         )
 
         assert result["isError"] is False
-        assert result["structuredContent"]["date"] == "2026-02-26"
-        assert result["structuredContent"]["event_count"] == 1
+        assert result["structuredContent"]["summaries"][0]["date"] == "2026-02-26"
+        assert result["structuredContent"]["summaries"][0]["event_count"] == 1
         rows = db.query(McpCallLog).all()
         assert len(rows) == 1
         assert rows[0].tool_name == "get_daily_summary"
@@ -141,40 +144,40 @@ def test_call_tool_search_and_media_paths() -> None:
             arguments={
                 "start_time": "2026-02-26T00:00:00",
                 "end_time": "2026-02-26T23:59:59",
-                "camera": "门口摄像头",
                 "keywords": ["停留"],
-                "tags": ["门口停留"],
             },
             source=None,
             user_agent=None,
             session_id="session-b",
         )
-        detail_result = call_tool(
+        sessions_result = call_tool(
             db=db,
-            tool_name="get_event_detail",
-            arguments={"event_id": event_id},
+            tool_name="get_sessions",
+            arguments={
+                "start_time": "2026-02-26T00:00:00",
+                "end_time": "2026-02-26T23:59:59",
+            },
             source=None,
             user_agent=None,
             session_id="session-b",
         )
-        segments_result = call_tool(
+        availability_result = call_tool(
             db=db,
-            tool_name="get_video_segments",
-            arguments={"event_id": event_id},
+            tool_name="get_data_availability",
+            arguments={},
             source=None,
             user_agent=None,
             session_id="session-b",
         )
 
         assert search_result["structuredContent"]["events"][0]["id"] == event_id
-        assert "门口停留" in search_result["structuredContent"]["events"][0]["tags"]
-        assert detail_result["structuredContent"]["session"]["id"] == session_id
-        assert detail_result["structuredContent"]["video_reference"]["playback_url"].endswith(
-            f"/media/sessions/{session_id}/playback"
+        assert search_result["structuredContent"]["events"][0]["title"] == "门口停留"
+        assert sessions_result["structuredContent"]["sessions"][0]["id"] == session_id
+        assert (
+            sessions_result["structuredContent"]["sessions"][0]["session_start_time"]
+            == "2026-02-26T15:10:00"
         )
-        assert segments_result["structuredContent"]["files"][0]["stream_url"].endswith(
-            f"/media/files/{video_file.id}/stream"
-        )
+        assert availability_result["structuredContent"]["video_sources"][0]["name"] == "source-1"
     finally:
         db.close()
 

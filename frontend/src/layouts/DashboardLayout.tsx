@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   LayoutDashboard,
   MessagesSquare,
@@ -21,29 +22,8 @@ import { LoadingBlock } from '../components/common/LoadingBlock'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
 
-const topLinks = [
-  { to: '/dashboard', label: '首页', icon: LayoutDashboard },
-  { to: '/chat', label: '问答助手', icon: MessagesSquare },
-  { to: '/events', label: '事件与回放', icon: FileSearch2 },
-  { to: '/daily-summaries', label: '每日日报', icon: ScrollText },
-]
-
-const homeProfileChildren = [
-  { to: '/home-profile/overview', label: '家庭整体档案', icon: House },
-  { to: '/home-profile/members', label: '家庭成员', icon: Users },
-  { to: '/home-profile/pets', label: '宠物档案', icon: PawPrint },
-]
-
-const settingsChildren = [
-  { to: '/system-config', label: '日报与提醒', icon: SlidersHorizontal },
-  { to: '/video-sources', label: '视频源管理', icon: Camera },
-  { to: '/providers', label: '模型连接', icon: Bot },
-  { to: '/system-status', label: '运行状态详情', icon: Activity },
-  { to: '/tasks', label: '运行记录', icon: ListChecks },
-  { to: '/webhooks', label: '外部通知', icon: BellRing },
-]
-
 export function DashboardLayout() {
+  const { t } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const token = useAuthStore((state) => state.token)
@@ -51,15 +31,38 @@ export function DashboardLayout() {
   const username = useAuthStore((state) => state.username)
   const clearAuth = useAuthStore((state) => state.clearAuth)
   const theme = useThemeStore((state) => state.theme)
+
+  const topLinks = useMemo(() => [
+    { to: '/dashboard', label: t('layouts.dashboard'), icon: LayoutDashboard },
+    { to: '/chat', label: t('layouts.chat'), icon: MessagesSquare },
+    { to: '/events', label: t('layouts.events'), icon: FileSearch2 },
+    { to: '/daily-summaries', label: t('layouts.daily_summary'), icon: ScrollText },
+  ], [t])
+
+  const homeProfileChildren = useMemo(() => [
+    { to: '/home-profile/overview', label: t('home_profile.title'), icon: House },
+    { to: '/home-profile/members', label: '家庭成员', icon: Users },
+    { to: '/home-profile/pets', label: '宠物档案', icon: PawPrint },
+  ], [t])
+
+  const settingsChildren = useMemo(() => [
+    { to: '/system-config', label: '日报与提醒', icon: SlidersHorizontal },
+    { to: '/video-sources', label: t('video_sources.title'), icon: Camera },
+    { to: '/providers', label: t('providers.title'), icon: Bot },
+    { to: '/system-status', label: t('system_status.title'), icon: Activity },
+    { to: '/tasks', label: t('tasks.title'), icon: ListChecks },
+    { to: '/webhooks', label: t('webhooks.title'), icon: BellRing },
+  ], [t])
+
   const homeProfileActive = useMemo(() => {
     return location.pathname === '/home-profile' || homeProfileChildren.some((item) => location.pathname.startsWith(item.to))
-  }, [location.pathname])
+  }, [location.pathname, homeProfileChildren])
   const settingsActive = useMemo(() => {
     if (location.pathname === '/settings') {
       return true
     }
     return settingsChildren.some((item) => location.pathname.startsWith(item.to))
-  }, [location.pathname])
+  }, [location.pathname, settingsChildren])
   const [homeProfileExpandedState, setHomeProfileExpanded] = useState(true)
   const [settingsExpandedState, setSettingsExpanded] = useState(true)
 
@@ -155,7 +158,7 @@ export function DashboardLayout() {
                 className={({ isActive }) => (isActive ? 'nav-item nav-sub-item active' : 'nav-item nav-sub-item')}
               >
                 <Settings size={14} />
-                <span>设置总览</span>
+                <span>{t('layouts.settings')}</span>
               </NavLink>
               {settingsChildren.map((link) => {
                 const Icon = link.icon
@@ -182,7 +185,7 @@ export function DashboardLayout() {
             <h2>家庭助手</h2>
             <p>欢迎回来，{username ?? '家人'}</p>
           </div>
-          <button onClick={onLogout}>退出登录</button>
+          <button onClick={onLogout}>{t('layouts.logout')}</button>
         </header>
         <section className="page-content">
           <Outlet />

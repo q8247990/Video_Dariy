@@ -51,6 +51,7 @@ class DailySummaryPromptInput:
     subject_sections: list[dict[str, Any]] = field(default_factory=list)
     missing_subjects: list[str] = field(default_factory=list)
     attention_candidates: list[dict[str, Any]] = field(default_factory=list)
+    locale: str | None = None
 
 
 @dataclass
@@ -59,6 +60,7 @@ class QAIntentPromptInput:
     now: datetime
     timezone: str
     home_context: dict[str, Any]
+    locale: str | None = None
 
 
 @dataclass
@@ -68,3 +70,4 @@ class QAAnswerPromptInput:
     timezone: str
     home_context_text: str
     evidence: CompressedEvidence
+    locale: str | None = None

@@ -1,0 +1,93 @@
+{
+  "layouts": {
+    "dashboard": "仪表盘",
+    "events": "视频片段",
+    "daily_summary": "家庭日报",
+    "chat": "视频问答",
+    "profile": "家庭画像",
+    "settings": "系统设置",
+    "logout": "退出登录"
+  },
+  "login": {
+    "title": "登录",
+    "username": "用户名",
+    "password": "密码",
+    "submit": "登录",
+    "loading": "登录中..."
+  },
+  "settings": {
+    "title": "系统设置",
+    "nav_overview": "总览",
+    "nav_video_sources": "视频源",
+    "nav_models": "模型连接",
+    "nav_tasks": "任务状态",
+    "nav_system": "系统概况",
+    "nav_webhooks": "Webhooks",
+    "theme_title": "主题设置",
+    "theme_light": "浅色",
+    "theme_dark": "深色",
+    "theme_tangtang": "深色 (纪念糖糖)",
+    "language_title": "语言设置 / Language",
+    "language_zh": "简体中文",
+    "language_en": "English"
+  },
+  "dashboard": {
+    "title": "仪表盘",
+    "today_events": "今日事件",
+    "pending_sessions": "待分析视频",
+    "success_rate": "分析成功率",
+    "storage_used": "存储使用",
+    "recent_events": "最新事件",
+    "recent_summaries": "最新日报"
+  },
+  "events": {
+    "title": "视频片段",
+    "filter_all": "全部",
+    "filter_today": "今天",
+    "filter_yesterday": "昨天",
+    "filter_week": "本周",
+    "search_placeholder": "搜索事件内容...",
+    "status_analyzed": "已分析",
+    "status_pending": "待分析",
+    "status_failed": "分析失败",
+    "empty": "暂无数据"
+  },
+  "daily_summaries": {
+    "title": "家庭日报",
+    "empty": "暂无日报"
+  },
+  "providers": {
+    "title": "模型连接",
+    "add_provider": "添加提供商",
+    "edit_provider": "编辑提供商"
+  },
+  "video_sources": {
+    "title": "视频源",
+    "add_source": "添加视频源",
+    "edit_source": "编辑视频源"
+  },
+  "webhooks": {
+    "title": "Webhooks",
+    "add_webhook": "添加 Webhook",
+    "edit_webhook": "编辑 Webhook"
+  },
+  "tasks": {
+    "title": "任务状态"
+  },
+  "system_status": {
+    "title": "系统概况"
+  },
+  "chat": {
+    "title": "视频问答",
+    "input_placeholder": "问点关于视频的事...",
+    "send": "发送"
+  },
+  "home_profile": {
+    "title": "家庭画像"
+  },
+  "onboarding": {
+    "welcome": "欢迎使用 Video Diary",
+    "next": "下一步",
+    "done": "完成"
+  }
+}

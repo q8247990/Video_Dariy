@@ -12,6 +12,16 @@ from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.application.prompt.compiler import compile_daily_summary_prompt
 from src.application.prompt.contracts import DailySummaryPromptInput
 from src.core.celery_app import celery_app
+from src.core.i18n.locale_directive import (
+    get_fallback_summary,
+    get_retry_json_instruction,
+    get_retry_structured_instruction,
+    get_retry_system_role,
+    get_subject_activity_text,
+    get_subject_fallback_text,
+    get_subject_no_activity_text,
+    get_summary_title,
+)
 from src.db.session import task_db_session
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
@@ -63,8 +73,8 @@ def _get_pipeline_orchestrator() -> PipelineOrchestrator:
     return PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
 
 
-def _summary_title(target_date: date) -> str:
-    return f"{target_date.strftime('%Y-%m-%d')} 家庭日报"
+def _summary_title(target_date: date, locale: str | None = None) -> str:
+    return get_summary_title(target_date.strftime("%Y-%m-%d"), locale)
 
 
 def _get_daily_schedule(db: Session) -> str:
@@ -184,10 +194,8 @@ def _upsert_daily_summary(
     return summary
 
 
-def _build_fallback_overall_summary(events: list[EventRecord]) -> str:
-    if not events:
-        return "昨天家中整体较为平稳，未观测到明确的关键活动。"
-    return "昨天家中有一定活动，系统已生成简要总结，建议查看事件明细以获取更多细节。"
+def _build_fallback_overall_summary(events: list[EventRecord], locale: str | None = None) -> str:
+    return get_fallback_summary(bool(events), locale)
 
 
 def _truncate_text(value: str, max_len: int) -> str:
@@ -306,6 +314,7 @@ def _parse_summary_with_retry(
     client: Any,
     prompt: str,
     initial_response_text: str | None,
+    locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], bool]:
     if initial_response_text:
         try:
@@ -321,14 +330,13 @@ def _parse_summary_with_retry(
 
     retry_prompt = "\n\n".join(
         [
-            "请严格输出一个 JSON 对象，禁止输出解释文字、代码块或多余片段。",
-            "如果字段缺失，请使用空数组或简短字符串占位，保持 JSON 可解析。",
+            get_retry_structured_instruction(locale),
             prompt,
         ]
     )
     retry_text = client.chat_completion(
         [
-            {"role": "system", "content": "你负责生成结构化家庭日报。"},
+            {"role": "system", "content": get_retry_system_role(locale)},
             {"role": "user", "content": retry_prompt},
         ],
         temperature=0,
@@ -450,12 +458,14 @@ def _parse_rollup_output(raw_text: str) -> tuple[str, list[dict[str, Any]]]:
     return overall_summary, normalized_attention
 
 
-def _build_subject_fallback_summary(subject_section: dict[str, Any]) -> str:
+def _build_subject_fallback_summary(
+    subject_section: dict[str, Any], locale: str | None = None
+) -> str:
     subject_name = str(subject_section.get("subject_name") or "该对象")
     raw_count = int(subject_section.get("raw_event_count") or 0)
     raw_clusters = subject_section.get("clusters")
     clusters: list[dict[str, Any]] = raw_clusters if isinstance(raw_clusters, list) else []
-    return f"{subject_name}当日有{raw_count}次相关活动，系统已提取{len(clusters)}类关键模式。"
+    return get_subject_fallback_text(subject_name, raw_count, len(clusters), locale)
 
 
 def _complete_subject_sections(  # noqa: C901
@@ -463,6 +473,7 @@ def _complete_subject_sections(  # noqa: C901
     sections: list[dict[str, Any]],
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
+    locale: str | None = None,
 ) -> list[dict[str, Any]]:
     activity_score_map: dict[str, int] = {}
     subject_type_map: dict[str, str] = {}
@@ -510,9 +521,9 @@ def _complete_subject_sections(  # noqa: C901
             continue
         score = activity_score_map.get(subject_name, 0)
         if score > 0:
-            summary = f"{subject_name}当日有{score}次相关活动，整体状态平稳。"
+            summary = get_subject_activity_text(subject_name, score, locale)
         else:
-            summary = f"{subject_name}当日未观察到明确活动。"
+            summary = get_subject_no_activity_text(subject_name, locale)
         normalized.append(
             {
                 "subject_name": subject_name,
@@ -537,6 +548,7 @@ def _generate_single_pass_summary_payload(
     prompt: tuple[str, str],
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
+    locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     system_prompt, user_prompt = prompt
     response_text = _chat_completion_with_usage(
@@ -550,7 +562,7 @@ def _generate_single_pass_summary_payload(
         ],
     )
 
-    overall_summary = _build_fallback_overall_summary(events)
+    overall_summary = _build_fallback_overall_summary(events, locale)
     structured_subject_sections: list[dict[str, Any]] = []
     structured_attention_items: list[dict[str, Any]] = []
     parse_retried = False
@@ -564,6 +576,7 @@ def _generate_single_pass_summary_payload(
         except DailySummaryOutputError as exc:
             parse_retried = True
             logger.warning("Single-pass summary parse failed, retry once: %s", exc)
+            retry_instruction = get_retry_json_instruction(locale)
             retry_text = _chat_completion_with_usage(
                 db=db,
                 client=client,
@@ -571,7 +584,7 @@ def _generate_single_pass_summary_payload(
                 provider_name_snapshot=provider_name_snapshot,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": "请严格只输出JSON对象。\n\n" + user_prompt},
+                    {"role": "user", "content": retry_instruction + "\n\n" + user_prompt},
                 ],
             )
             try:
@@ -582,7 +595,7 @@ def _generate_single_pass_summary_payload(
                 ]
                 structured_attention_items = [item.model_dump() for item in parsed.attention_items]
             except DailySummaryOutputError:
-                overall_summary = _build_fallback_overall_summary(events)
+                overall_summary = _build_fallback_overall_summary(events, locale)
                 structured_subject_sections = []
                 structured_attention_items = []
 
@@ -590,6 +603,7 @@ def _generate_single_pass_summary_payload(
         sections=structured_subject_sections,
         known_subjects=known_subjects,
         subject_sections_payload=subject_sections_payload,
+        locale=locale,
     )
 
     return (
@@ -616,6 +630,7 @@ def _generate_serial_summary_payload(
     subject_sections_payload: list[dict[str, Any]],
     missing_subjects: list[str],
     attention_candidates_payload: list[dict[str, Any]],
+    locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     compressed_input = compress_daily_input(
         subject_sections=subject_sections_payload,
@@ -649,7 +664,7 @@ def _generate_serial_summary_payload(
         reverse=True,
     )
 
-    overall_summary = _build_fallback_overall_summary(events)
+    overall_summary = _build_fallback_overall_summary(events, locale)
     structured_subject_sections: list[dict[str, Any]] = []
     structured_attention_items: list[dict[str, Any]] = []
     prompt_chars_total = 0
@@ -662,6 +677,7 @@ def _generate_serial_summary_payload(
             time_range_start=start_dt.isoformat(),
             time_range_end=end_dt.isoformat(),
             subject_section=subject_section,
+            locale=locale,
         )
         subject_system_prompt, subject_user_prompt = subject_prompt
         prompt_chars_total += len(subject_user_prompt)
@@ -699,7 +715,9 @@ def _generate_serial_summary_payload(
                     },
                     {
                         "role": "user",
-                        "content": "请严格只输出JSON对象。\n\n" + subject_user_prompt,
+                        "content": get_retry_json_instruction(locale)
+                        + "\n\n"
+                        + subject_user_prompt,
                     },
                 ],
             )
@@ -709,7 +727,7 @@ def _generate_serial_summary_payload(
                     subject_name=subject_name,
                 )
             except DailySummaryOutputError:
-                subject_summary = _build_subject_fallback_summary(subject_section)
+                subject_summary = _build_subject_fallback_summary(subject_section, locale)
                 attention_needed = False
 
         structured_subject_sections.append(
@@ -732,6 +750,7 @@ def _generate_serial_summary_payload(
         summary_date=target_date,
         subject_results=structured_subject_sections,
         attention_candidates=compressed_input["attention_candidates"],
+        locale=locale,
     )
     rollup_system_prompt, rollup_user_prompt = rollup_prompt
     prompt_chars_total += len(rollup_user_prompt)
@@ -758,13 +777,16 @@ def _generate_serial_summary_payload(
             provider_name_snapshot=provider_name_snapshot,
             messages=[
                 {"role": "system", "content": rollup_system_prompt},
-                {"role": "user", "content": "请严格只输出JSON对象。\n\n" + rollup_user_prompt},
+                {
+                    "role": "user",
+                    "content": get_retry_json_instruction(locale) + "\n\n" + rollup_user_prompt,
+                },
             ],
         )
         try:
             overall_summary, structured_attention_items = _parse_rollup_output(retry_text)
         except DailySummaryOutputError:
-            overall_summary = _build_fallback_overall_summary(events)
+            overall_summary = _build_fallback_overall_summary(events, locale)
             structured_attention_items = []
 
     return (
@@ -875,6 +897,10 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
             provider = find_required_enabled_provider(db, PROVIDER_TYPE_QA)
             enforce_token_quota(db, provider)
 
+            from src.core.i18n import get_system_default_locale
+
+            locale = get_system_default_locale()
+
             # Get events for the target date
             start_dt = datetime.combine(target_date, datetime.min.time())
             end_dt = datetime.combine(target_date, datetime.max.time())
@@ -913,6 +939,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                     subject_sections=subject_sections_payload,
                     missing_subjects=missing_subjects,
                     attention_candidates=attention_candidates_payload,
+                    locale=locale,
                 )
             )
 
@@ -923,7 +950,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                 timeout_seconds=provider.timeout_seconds,
             )
 
-            summary_title = _summary_title(target_date)
+            summary_title = _summary_title(target_date, locale)
             (
                 overall_summary,
                 structured_subject_sections,
@@ -945,6 +972,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                     subject_sections_payload=subject_sections_payload,
                     missing_subjects=missing_subjects,
                     attention_candidates_payload=attention_candidates_payload,
+                    locale=locale,
                 )
                 if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
                 else _generate_single_pass_summary_payload(
@@ -956,6 +984,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                     prompt=single_pass_prompt,
                     known_subjects=known_subjects,
                     subject_sections_payload=subject_sections_payload,
+                    locale=locale,
                 )
             )
 

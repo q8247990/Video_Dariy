@@ -136,6 +136,7 @@ class QARequest:
     timezone: str = "Asia/Shanghai"
     write_query_log: bool = True
     request_source: str = "web"
+    locale: str = "zh-CN"
 
 
 @dataclass

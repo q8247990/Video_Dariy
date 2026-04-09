@@ -1,9 +1,11 @@
 import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { getHomeProfile } from '../home-profile/api'
 import { useThemeStore } from '../../store/themeStore'
+import { useLocaleStore } from '../../store/localeStore'
 
 type SettingEntry = {
   key: string
@@ -12,64 +14,14 @@ type SettingEntry = {
   target: string
 }
 
-const commonEntries: SettingEntry[] = [
-  {
-    key: 'daily-summary',
-    title: '日报与提醒',
-    description: '设置日报生成时间和家庭常用提醒节奏。',
-    target: '/system-config',
-  },
-  {
-    key: 'onboarding',
-    title: '初始化引导',
-    description: '继续完成首次接入和个性化设置。',
-    target: '/onboarding',
-  },
-  {
-    key: 'chat',
-    title: '问答助手',
-    description: '查看历史问答并继续提问。',
-    target: '/chat',
-  },
-]
-
-const advancedEntries: SettingEntry[] = [
-  {
-    key: 'video-sources',
-    title: '视频源管理',
-    description: '配置摄像头目录、查看连接和扫描状态。',
-    target: '/video-sources',
-  },
-  {
-    key: 'providers',
-    title: '模型连接',
-    description: '管理用于识别和问答的模型服务。',
-    target: '/providers',
-  },
-  {
-    key: 'system-status',
-    title: '运行状态详情',
-    description: '查看任务失败情况和系统整体健康度。',
-    target: '/system-status',
-  },
-  {
-    key: 'tasks',
-    title: '运行记录',
-    description: '查看后台任务状态、失败信息和重试记录。',
-    target: '/tasks',
-  },
-  {
-    key: 'webhooks',
-    title: '外部通知',
-    description: '配置第三方通知回调与联调样例。',
-    target: '/webhooks',
-  },
-]
-
 export function SettingsPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const theme = useThemeStore((state) => state.theme)
   const setTheme = useThemeStore((state) => state.setTheme)
+  const locale = useLocaleStore((state) => state.locale)
+  const setLocale = useLocaleStore((state) => state.setLocale)
+
   const homeProfileQuery = useQuery({
     queryKey: ['home-profile'],
     queryFn: getHomeProfile,
@@ -89,28 +41,82 @@ export function SettingsPage() {
     }
   }, [homeProfileQuery.isSuccess, setTheme, tangtangEnabled, theme])
 
+  const commonEntries: SettingEntry[] = [
+    {
+      key: 'daily-summary',
+      title: '日报与提醒',
+      description: '设置日报生成时间和家庭常用提醒节奏。',
+      target: '/system-config',
+    },
+    {
+      key: 'onboarding',
+      title: '初始化引导',
+      description: '继续完成首次接入和个性化设置。',
+      target: '/onboarding',
+    },
+    {
+      key: 'chat',
+      title: '问答助手',
+      description: '查看历史问答并继续提问。',
+      target: '/chat',
+    },
+  ]
+
+  const advancedEntries: SettingEntry[] = [
+    {
+      key: 'video-sources',
+      title: '视频源管理',
+      description: '配置摄像头目录、查看连接和扫描状态。',
+      target: '/video-sources',
+    },
+    {
+      key: 'providers',
+      title: '模型连接',
+      description: '管理用于识别和问答的模型服务。',
+      target: '/providers',
+    },
+    {
+      key: 'system-status',
+      title: '运行状态详情',
+      description: '查看任务失败情况和系统整体健康度。',
+      target: '/system-status',
+    },
+    {
+      key: 'tasks',
+      title: '运行记录',
+      description: '查看后台任务状态、失败信息和重试记录。',
+      target: '/tasks',
+    },
+    {
+      key: 'webhooks',
+      title: '外部通知',
+      description: '配置第三方通知回调与联调样例。',
+      target: '/webhooks',
+    },
+  ]
+
   return (
     <div>
-      <PageHeader title="设置" subtitle="常用设置在上方，高级设置在下方" />
+      <PageHeader title={t('settings.title')} subtitle="常用设置在上方，高级设置在下方" />
 
       <article className="card">
         <h3>常用设置</h3>
         <div className="theme-card">
-          <p className="text-muted">外观皮肤（仅改变配色，不改变页面摆放）</p>
+          <p className="text-muted">{t('settings.theme_title')}</p>
           <div className="theme-switcher">
             <button
               type="button"
               className={theme === 'light' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
               onClick={() => setTheme('light')}
             >
-              浅色
+              {t('settings.theme_light')}
             </button>
             <button
               type="button"
               className={theme === 'dark' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
               onClick={() => setTheme('dark')}
             >
-              深色
+              {t('settings.theme_dark')}
             </button>
             {tangtangEnabled ? (
               <button
@@ -118,11 +124,32 @@ export function SettingsPage() {
                 className={theme === 'tangtang' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
                 onClick={() => setTheme('tangtang')}
               >
-                糖糖
+                {t('settings.theme_tangtang')}
               </button>
             ) : null}
           </div>
         </div>
+
+        <div className="theme-card settings-block-gap">
+          <p className="text-muted">{t('settings.language_title')}</p>
+          <div className="theme-switcher">
+            <button
+              type="button"
+              className={locale === 'zh-CN' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
+              onClick={() => setLocale('zh-CN')}
+            >
+              {t('settings.language_zh')}
+            </button>
+            <button
+              type="button"
+              className={locale === 'en-US' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
+              onClick={() => setLocale('en-US')}
+            >
+              {t('settings.language_en')}
+            </button>
+          </div>
+        </div>
+
         <div className="settings-grid">
           {commonEntries.map((entry) => (
             <button

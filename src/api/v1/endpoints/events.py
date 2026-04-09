@@ -2,7 +2,8 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
+from src.core.i18n import t
 from src.models.event_record import EventRecord
 from src.models.event_tag_rel import EventTagRel
 from src.models.tag_definition import TagDefinition
@@ -61,7 +62,7 @@ def get_events(
 
 
 @router.get("/{id}", response_model=BaseResponse[EventDetailResponse])
-def get_event_detail(db: DB, current_user: CurrentUser, id: int) -> Any:
+def get_event_detail(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     row = (
         db.query(EventRecord, VideoSession, VideoSource)
         .join(VideoSession, EventRecord.session_id == VideoSession.id)
@@ -70,7 +71,7 @@ def get_event_detail(db: DB, current_user: CurrentUser, id: int) -> Any:
         .first()
     )
     if not row:
-        return BaseResponse(code=4002, message="Event not found")
+        return BaseResponse(code=4002, message=t("event.not_found", locale))
 
     event, session, source = row
 

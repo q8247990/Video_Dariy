@@ -3,7 +3,8 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
+from src.core.i18n import t
 from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
 from src.schemas.event import EventResponse
@@ -51,10 +52,10 @@ def get_sessions(
 
 
 @router.get("/{id}", response_model=BaseResponse[VideoSessionResponse])
-def get_session(db: DB, current_user: CurrentUser, id: int) -> Any:
+def get_session(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     session = db.query(VideoSession).filter(VideoSession.id == id).first()
     if not session:
-        return BaseResponse(code=4002, message="Session not found")
+        return BaseResponse(code=4002, message=t("session.not_found", locale))
 
     return BaseResponse(data=VideoSessionResponse.model_validate(session))
 
@@ -63,12 +64,13 @@ def get_session(db: DB, current_user: CurrentUser, id: int) -> Any:
 def get_session_events(
     db: DB,
     current_user: CurrentUser,
+    locale: Locale,
     id: int,
     order: str = "asc",
 ) -> Any:
     session = db.query(VideoSession).filter(VideoSession.id == id).first()
     if not session:
-        return BaseResponse(code=4002, message="Session not found")
+        return BaseResponse(code=4002, message=t("session.not_found", locale))
 
     query = db.query(EventRecord).filter(EventRecord.session_id == id)
     if order == "desc":

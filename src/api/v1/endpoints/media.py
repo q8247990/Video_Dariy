@@ -3,7 +3,8 @@ import os
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from src.api.deps import DB
+from src.api.deps import DB, Locale
+from src.core.i18n import t
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
@@ -28,15 +29,14 @@ def send_bytes_range_requests(file_obj, start: int, end: int, chunk_size: int = 
 
 
 @router.get("/files/{file_id}/stream")
-def stream_video(file_id: int, db: DB, request: Request):
-    """Stream a single video file."""
+def stream_video(file_id: int, db: DB, locale: Locale, request: Request):
     video_file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not video_file:
-        raise HTTPException(status_code=404, detail="Video file not found")
+        raise HTTPException(status_code=404, detail=t("media.video_file_not_found", locale))
 
     path = video_file.file_path
     if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Physical file not found on disk")
+        raise HTTPException(status_code=404, detail=t("media.physical_file_not_found", locale))
 
     file_size = os.path.getsize(path)
     range_header = request.headers.get("Range")
@@ -69,11 +69,10 @@ def stream_video(file_id: int, db: DB, request: Request):
 
 
 @router.get("/sessions/{session_id}/playback", response_model=BaseResponse[dict])
-def get_session_playback(session_id: int, db: DB):
-    """Get playback list for a session."""
+def get_session_playback(session_id: int, db: DB, locale: Locale):
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:
-        return BaseResponse(code=4002, message="Session not found")
+        return BaseResponse(code=4002, message=t("session.not_found", locale))
 
     rels = (
         db.query(VideoSessionFileRel)
@@ -108,10 +107,10 @@ def get_session_playback(session_id: int, db: DB):
 
 
 @router.get("/sessions/{session_id}/hls/index.m3u8")
-def stream_session_hls_manifest(session_id: int, db: DB):
+def stream_session_hls_manifest(session_id: int, db: DB, locale: Locale):
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("session.not_found", locale))
 
     try:
         manifest_info = get_or_create_session_hls_manifest(db, session_id)
@@ -119,22 +118,23 @@ def stream_session_hls_manifest(session_id: int, db: DB):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     if not manifest_info.manifest_path.exists():
-        raise HTTPException(status_code=404, detail="Session HLS manifest not found")
+        raise HTTPException(status_code=404, detail=t("media.hls_manifest_not_found", locale))
 
     try:
         content = manifest_info.manifest_path.read_text(encoding="utf-8")
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read HLS manifest: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=t("media.hls_read_failed", locale, error=e)
+        ) from e
 
     return Response(content=content, media_type="application/vnd.apple.mpegurl")
 
 
 @router.get("/sessions/{session_id}/stream")
-def stream_session_merged_video(session_id: int, db: DB, request: Request):
-    """Stream merged video for a session."""
+def stream_session_merged_video(session_id: int, db: DB, locale: Locale, request: Request):
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("session.not_found", locale))
 
     try:
         path = ensure_merged_video(db, session_id)
@@ -142,7 +142,7 @@ def stream_session_merged_video(session_id: int, db: DB, request: Request):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Session merged video not found")
+        raise HTTPException(status_code=404, detail=t("media.merged_video_not_found", locale))
 
     file_size = os.path.getsize(path)
     range_header = request.headers.get("Range")

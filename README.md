@@ -1,3 +1,5 @@
+> **English version**: [README.en.md](README.en.md)
+
 # Video Diary — 家庭监控视频 AI 分析系统
 
 > 家里装了摄像头，NAS 里攒了一堆录像，但从来没人看？

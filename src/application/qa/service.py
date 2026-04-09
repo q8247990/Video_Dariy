@@ -64,7 +64,6 @@ class QAService:
             supports_tool_calling=provider.supports_tool_calling,
         )
 
-        # 2. 根据 provider 能力选择链路
         if gateway.supports_tool_calling:
             return self._answer_via_agent(gateway, provider, question, request)
 
@@ -88,6 +87,7 @@ class QAService:
                 question=question,
                 now=request.now,
                 timezone=request.timezone,
+                locale=request.locale,
             )
         except Exception as e:
             logger.warning("Agent loop failed: %s, falling back to legacy", e)
@@ -149,6 +149,7 @@ class QAService:
             evidence.home_context_text,
             query_plan,
             evidence,
+            request.locale,
         )
 
         referenced_events = list(events)
@@ -235,6 +236,7 @@ class QAService:
         home_context_text: str,
         query_plan: Any,
         evidence: Any,
+        locale: str | None = None,
     ) -> str:
         system_prompt, user_prompt = build_qa_answer_prompt(
             question=question,
@@ -242,6 +244,7 @@ class QAService:
             timezone=timezone,
             home_context_text=home_context_text,
             evidence=evidence,
+            locale=locale,
         )
 
         try:

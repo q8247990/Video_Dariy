@@ -7,8 +7,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
 from src.core.config import settings
+from src.core.i18n import t
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.system_config import SystemConfig
@@ -116,11 +117,12 @@ def put_home_profile(db: DB, current_user: CurrentUser, payload: HomeProfileUpse
 def get_home_entities(
     db: DB,
     current_user: CurrentUser,
+    locale: Locale,
     entity_type: Optional[str] = None,
     include_disabled: bool = False,
 ) -> Any:
     if entity_type is not None and entity_type not in {"member", "pet"}:
-        return BaseResponse(code=4000, message="invalid entity_type")
+        return BaseResponse(code=4000, message=t("entity.invalid_entity_type", locale))
     entities = list_entities(db, entity_type=entity_type, include_disabled=include_disabled)
     data = [_build_entity_response(item) for item in entities]
     return BaseResponse(data=data)
@@ -150,6 +152,7 @@ def create_home_pet(db: DB, current_user: CurrentUser, payload: PetCreate) -> An
 def update_home_entity(
     db: DB,
     current_user: CurrentUser,
+    locale: Locale,
     entity_id: int,
     payload: HomeEntityUpdate,
 ) -> Any:
@@ -160,46 +163,46 @@ def update_home_entity(
         return BaseResponse(code=4001, message=str(exc))
 
     if entity is None:
-        return BaseResponse(code=4002, message="entity not found")
+        return BaseResponse(code=4002, message=t("entity.not_found", locale))
     return BaseResponse(data=_build_entity_response(entity))
 
 
 @router.delete("/entities/{entity_id}", response_model=BaseResponse[dict])
-def delete_home_entity(db: DB, current_user: CurrentUser, entity_id: int) -> Any:
+def delete_home_entity(db: DB, current_user: CurrentUser, locale: Locale, entity_id: int) -> Any:
     ok = disable_entity(db, entity_id)
     db.commit()
     if not ok:
-        return BaseResponse(code=4002, message="entity not found")
+        return BaseResponse(code=4002, message=t("entity.not_found", locale))
     return BaseResponse(data={})
 
 
 @router.get("/entities/{entity_id}/image")
-def get_entity_image(entity_id: int, db: DB) -> Any:
+def get_entity_image(entity_id: int, db: DB, locale: Locale) -> Any:
     entity = get_entity_by_id(db, entity_id)
     if entity is None:
-        return BaseResponse(code=4002, message="entity not found")
+        return BaseResponse(code=4002, message=t("entity.not_found", locale))
     image_path = _entity_image_path(entity_id)
     if not entity.image_path or not os.path.exists(image_path):
-        return BaseResponse(code=4004, message="no image uploaded")
+        return BaseResponse(code=4004, message=t("entity.no_image", locale))
     return FileResponse(image_path, media_type="image/jpeg")
 
 
 @router.post("/entities/{entity_id}/image", response_model=BaseResponse[HomeEntityResponse])
 async def upload_entity_image(
-    entity_id: int, db: DB, current_user: CurrentUser, file: UploadFile
+    entity_id: int, db: DB, current_user: CurrentUser, locale: Locale, file: UploadFile
 ) -> Any:
     from PIL import Image
 
     entity = get_entity_by_id(db, entity_id)
     if entity is None:
-        return BaseResponse(code=4002, message="entity not found")
+        return BaseResponse(code=4002, message=t("entity.not_found", locale))
 
     if file.content_type not in _ALLOWED_IMAGE_TYPES:
-        return BaseResponse(code=4000, message="不支持的图片格式，请上传 JPG/PNG/WebP")
+        return BaseResponse(code=4000, message=t("entity.unsupported_image_format", locale))
 
     raw = await file.read()
     if len(raw) > _MAX_IMAGE_SIZE:
-        return BaseResponse(code=4000, message="图片大小不能超过 10MB")
+        return BaseResponse(code=4000, message=t("entity.image_too_large", locale))
 
     try:
         img = Image.open(io.BytesIO(raw)).convert("RGB")
@@ -213,7 +216,7 @@ async def upload_entity_image(
         img.save(save_path, "JPEG", quality=85)
     except Exception as exc:
         logger.error("Failed to process image for entity %s: %s", entity_id, exc)
-        return BaseResponse(code=5000, message="图片处理失败，请重试")
+        return BaseResponse(code=5000, message=t("entity.image_process_failed", locale))
 
     entity.image_path = save_path
     db.commit()
@@ -222,10 +225,10 @@ async def upload_entity_image(
 
 
 @router.delete("/entities/{entity_id}/image", response_model=BaseResponse[HomeEntityResponse])
-def delete_entity_image(entity_id: int, db: DB, current_user: CurrentUser) -> Any:
+def delete_entity_image(entity_id: int, db: DB, current_user: CurrentUser, locale: Locale) -> Any:
     entity = get_entity_by_id(db, entity_id)
     if entity is None:
-        return BaseResponse(code=4002, message="entity not found")
+        return BaseResponse(code=4002, message=t("entity.not_found", locale))
 
     if entity.image_path and os.path.exists(entity.image_path):
         try:
@@ -243,18 +246,23 @@ def delete_entity_image(entity_id: int, db: DB, current_user: CurrentUser) -> An
     "/entities/{entity_id}/generate-appearance",
     response_model=BaseResponse[HomeEntityResponse],
 )
-def generate_entity_appearance(entity_id: int, db: DB, current_user: CurrentUser) -> Any:
+def generate_entity_appearance(
+    entity_id: int,
+    db: DB,
+    current_user: CurrentUser,
+    locale: Locale,
+) -> Any:
     entity = get_entity_by_id(db, entity_id)
     if entity is None:
-        return BaseResponse(code=4002, message="entity not found")
+        return BaseResponse(code=4002, message=t("entity.not_found", locale))
 
     image_path = _entity_image_path(entity_id)
     if not entity.image_path or not os.path.exists(image_path):
-        return BaseResponse(code=4000, message="请先上传图片再生成外观描述")
+        return BaseResponse(code=4000, message=t("entity.upload_image_first", locale))
 
     provider = find_enabled_provider(db, PROVIDER_TYPE_VISION)
     if provider is None:
-        return BaseResponse(code=5000, message="未配置可用的视觉模型，请先在 LLM 设置中配置")
+        return BaseResponse(code=5000, message=t("entity.no_vision_provider", locale))
 
     try:
         with open(image_path, "rb") as f:
@@ -262,7 +270,7 @@ def generate_entity_appearance(entity_id: int, db: DB, current_user: CurrentUser
         data_url = f"data:image/jpeg;base64,{image_b64}"
     except OSError as exc:
         logger.error("Failed to read image for entity %s: %s", entity_id, exc)
-        return BaseResponse(code=5000, message="读取图片失败，请重试")
+        return BaseResponse(code=5000, message=t("entity.image_read_failed", locale))
 
     entity_label = "宠物" if entity.entity_type == "pet" else "家庭成员"
     messages = [
@@ -293,10 +301,10 @@ def generate_entity_appearance(entity_id: int, db: DB, current_user: CurrentUser
         result = gateway.chat_completion(messages=messages, temperature=0.3, max_tokens=300)
     except Exception as exc:
         logger.error("Vision LLM call failed for entity %s: %s", entity_id, exc)
-        return BaseResponse(code=5002, message=f"AI 生成失败：{exc}")
+        return BaseResponse(code=5002, message=t("entity.ai_generate_failed", locale, error=exc))
 
     if not result:
-        return BaseResponse(code=5002, message="AI 未返回有效描述，请重试")
+        return BaseResponse(code=5002, message=t("entity.ai_no_result", locale))
 
     entity.appearance_desc = result.strip()
     db.commit()

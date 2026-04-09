@@ -61,7 +61,7 @@ def test_stop_analysis_task_marks_cancel_requested_without_resetting_session(mon
             "src.api.v1.endpoints.tasks.celery_app.control.revoke", lambda *args, **kwargs: None
         )
 
-        resp = stop_task_log(db=db, current_user=_current_user(), id=log.id)
+        resp = stop_task_log(db=db, current_user=_current_user(), locale="zh-CN", id=log.id)
         assert resp.code == 0
         db.refresh(log)
         db.refresh(session)
@@ -114,7 +114,11 @@ def test_retry_task_log_rejects_duplicate_running() -> None:
         mock_orchestrator = MagicMock()
 
         resp = retry_task_log(
-            db=db, current_user=_current_user(), id=failed.id, orchestrator=mock_orchestrator
+            db=db,
+            current_user=_current_user(),
+            locale="zh-CN",
+            id=failed.id,
+            orchestrator=mock_orchestrator,
         )
         assert resp.code == 4004
         assert "already running" in str(resp.message)
@@ -161,7 +165,11 @@ def test_retry_analysis_task_resets_failed_session_to_sealed() -> None:
         mock_orchestrator.dispatch_analyze_session.return_value = "analysis-task-1"
 
         resp = retry_task_log(
-            db=db, current_user=_current_user(), id=failed.id, orchestrator=mock_orchestrator
+            db=db,
+            current_user=_current_user(),
+            locale="zh-CN",
+            id=failed.id,
+            orchestrator=mock_orchestrator,
         )
 
         assert resp.code == 0
@@ -184,10 +192,12 @@ def test_delete_task_log_blocks_running_and_allows_finished() -> None:
         db.add_all([running, finished])
         db.commit()
 
-        blocked = delete_task_log(db=db, current_user=_current_user(), id=running.id)
+        blocked = delete_task_log(
+            db=db, current_user=_current_user(), locale="zh-CN", id=running.id
+        )
         assert blocked.code == 4004
 
-        ok = delete_task_log(db=db, current_user=_current_user(), id=finished.id)
+        ok = delete_task_log(db=db, current_user=_current_user(), locale="zh-CN", id=finished.id)
         assert ok.code == 0
     finally:
         db.close()

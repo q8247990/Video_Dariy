@@ -57,6 +57,7 @@ def test_update_video_source_resets_validation_when_config_changed() -> None:
         resp = update_video_source(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             id=source.id,
             data=VideoSourceUpdate(config_json={"root_path": "/tmp/b"}),
         )
@@ -90,7 +91,9 @@ def test_delete_video_source_blocks_running_task() -> None:
         )
         db.commit()
 
-        resp = delete_video_source(db=db, current_user=_current_user(), id=source.id)
+        resp = delete_video_source(
+            db=db, current_user=_current_user(), locale="zh-CN", id=source.id
+        )
         assert resp.code == 4004
         assert "running task" in str(resp.message)
     finally:
@@ -122,6 +125,7 @@ def test_video_source_status_batch_returns_multiple_sources() -> None:
         resp = get_video_sources_status_batch(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             source_ids=f"{s1.id},{s2.id}",
         )
         assert resp.code == 0

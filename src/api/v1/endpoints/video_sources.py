@@ -4,7 +4,8 @@ from typing import Any
 from fastapi import APIRouter
 from sqlalchemy import or_
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
+from src.core.i18n import t
 from src.models.video_source import VideoSource
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.schemas.video_source import (
@@ -65,6 +66,7 @@ def get_video_sources(
 def get_video_sources_status_batch(
     db: DB,
     current_user: CurrentUser,
+    locale: Locale,
     source_ids: str,
 ) -> Any:
     parsed_ids: list[int] = []
@@ -73,7 +75,7 @@ def get_video_sources_status_batch(
         if not raw:
             continue
         if not raw.isdigit():
-            return BaseResponse(code=4001, message=f"Invalid source id: {raw}")
+            return BaseResponse(code=4001, message=t("source.invalid_id", locale, id=raw))
         parsed_ids.append(int(raw))
 
     if not parsed_ids:
@@ -98,28 +100,28 @@ def create_video_source(db: DB, current_user: CurrentUser, data: VideoSourceCrea
 
 
 @router.get("/{id}", response_model=BaseResponse[VideoSourceResponse])
-def get_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
+def get_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
     return BaseResponse(data=VideoSourceResponse.model_validate(source))
 
 
 @router.get("/{id}/status", response_model=BaseResponse[VideoSourceStatusResponse])
-def get_video_source_status(db: DB, current_user: CurrentUser, id: int) -> Any:
+def get_video_source_status(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
 
     status_payload = build_video_source_status(db=db, source_id=id)
     return BaseResponse(data=VideoSourceStatusResponse.model_validate(status_payload))
 
 
 @router.post("/{id}/pause", response_model=BaseResponse[dict])
-def pause_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
+def pause_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
 
     source.source_paused = True
     source.paused_at = datetime.utcnow()
@@ -128,10 +130,10 @@ def pause_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/{id}/resume", response_model=BaseResponse[dict])
-def resume_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
+def resume_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
 
     source.source_paused = False
     source.paused_at = None
@@ -140,10 +142,12 @@ def resume_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.put("/{id}", response_model=BaseResponse[VideoSourceResponse])
-def update_video_source(db: DB, current_user: CurrentUser, id: int, data: VideoSourceUpdate) -> Any:
+def update_video_source(
+    db: DB, current_user: CurrentUser, locale: Locale, id: int, data: VideoSourceUpdate
+) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
 
     updates = data.model_dump(exclude_unset=True)
     old_source_type = source.source_type
@@ -169,15 +173,15 @@ def update_video_source(db: DB, current_user: CurrentUser, id: int, data: VideoS
 
 
 @router.delete("/{id}", response_model=BaseResponse[dict])
-def delete_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
+def delete_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
     running_task_type = find_running_source_task_type(db, id)
     if running_task_type is not None:
         return BaseResponse(
             code=4004,
-            message=f"Source has running task: {running_task_type}",
+            message=t("source.has_running_task", locale, task_type=running_task_type),
         )
 
     db.delete(source)
@@ -204,10 +208,10 @@ def disable_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
 
 
 @router.post("/{id}/test", response_model=BaseResponse[dict])
-def test_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
+def test_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
     if not source:
-        return BaseResponse(code=4002, message="Source not found")
+        return BaseResponse(code=4002, message=t("source.not_found", locale))
 
     config = source.config_json if isinstance(source.config_json, dict) else {}
     root_path = str(config.get("root_path") or "")

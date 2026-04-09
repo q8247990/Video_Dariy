@@ -70,13 +70,15 @@ def test_session_playback_returns_stream_and_manifest() -> None:
             )
             db.commit()
 
-            playback_resp = get_session_playback(session_id=session.id, db=db)
+            playback_resp = get_session_playback(session_id=session.id, db=db, locale="zh-CN")
             assert playback_resp.code == 0
             assert playback_resp.data is not None
             assert playback_resp.data["playback_url"] == f"/media/sessions/{session.id}/stream"
             assert playback_resp.data["hls_url"] == f"/media/sessions/{session.id}/hls/index.m3u8"
 
-            manifest_resp = stream_session_hls_manifest(session_id=session.id, db=db)
+            manifest_resp = stream_session_hls_manifest(
+                session_id=session.id, db=db, locale="zh-CN"
+            )
             manifest_text = manifest_resp.body.decode("utf-8")
             assert "#EXTM3U" in manifest_text
             assert f"{settings.API_V1_STR}/media/files/{file_a.id}/stream" in manifest_text

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, Request, Response
 from fastapi.responses import JSONResponse
 
 from src.api.deps import DB
+from src.core.i18n import normalize_locale
 from src.mcp.auth import authorize
 from src.mcp.tools import (
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -121,6 +122,7 @@ def _handle_tools_call(
     params: dict[str, Any],
     source: Optional[str],
     session_id: Optional[str],
+    locale: str | None = None,
 ) -> JSONResponse:
     tool_name = params.get("name")
     arguments = params.get("arguments") or {}
@@ -141,6 +143,7 @@ def _handle_tools_call(
         source=source,
         user_agent=request.headers.get("User-Agent"),
         session_id=session_id,
+        locale=locale,
     )
     return JSONResponse(content=_jsonrpc_result(result, request_id))
 
@@ -157,15 +160,16 @@ def _dispatch_method(
     params: dict[str, Any],
     source: Optional[str],
     session_id: Optional[str],
+    locale: str | None = None,
 ) -> Response:
     if method == "initialize":
         return _handle_initialize(request_id, params)
     if method == "notifications/initialized":
         return Response(status_code=202)
     if method == "tools/list":
-        return JSONResponse(content=_jsonrpc_result(list_tools(), request_id))
+        return JSONResponse(content=_jsonrpc_result(list_tools(locale=locale), request_id))
     if method == "tools/call":
-        return _handle_tools_call(db, request, request_id, params, source, session_id)
+        return _handle_tools_call(db, request, request_id, params, source, session_id, locale)
     if method == "ping":
         return JSONResponse(content=_jsonrpc_result({}, request_id))
     return JSONResponse(
@@ -180,6 +184,7 @@ async def _handle_post(
     source: Optional[str],
     session_id: Optional[str],
     protocol_version: Optional[str],
+    locale: str | None = None,
 ) -> Response:
     protocol_error = _validate_protocol_header(protocol_version)
     if protocol_error is not None:
@@ -198,7 +203,7 @@ async def _handle_post(
     if request_error is not None:
         return request_error
 
-    return _dispatch_method(db, request, request_id, method, params, source, session_id)
+    return _dispatch_method(db, request, request_id, method, params, source, session_id, locale)
 
 
 @router.api_route("/mcp", methods=["GET", "POST", "DELETE"])
@@ -209,11 +214,19 @@ async def mcp_endpoint(
     x_mcp_source: Optional[str] = Header(default=None, alias="X-MCP-Source"),
     mcp_session_id: Optional[str] = Header(default=None, alias="Mcp-Session-Id"),
     mcp_protocol_version: Optional[str] = Header(default=None, alias="MCP-Protocol-Version"),
+    x_locale: Optional[str] = Header(default=None, alias="X-Locale"),
+    accept_language: Optional[str] = Header(default=None, alias="Accept-Language"),
 ) -> Response:
     if request.method == "GET":
         return Response(status_code=200, content="", media_type="text/event-stream")
     if request.method == "DELETE":
         return _handle_delete()
+
+    raw_locale = (x_locale or "").strip()
+    if not raw_locale and accept_language:
+        raw_locale = accept_language.split(",")[0].strip()
+    locale = normalize_locale(raw_locale) if raw_locale else None
+
     return await _handle_post(
         request=request,
         db=db,
@@ -221,4 +234,5 @@ async def mcp_endpoint(
         source=x_mcp_source,
         session_id=mcp_session_id,
         protocol_version=mcp_protocol_version,
+        locale=locale,
     )

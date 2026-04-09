@@ -9,6 +9,7 @@ from src.application.qa.service import (
     QAProviderNotConfiguredError,
 )
 from src.core.config import settings
+from src.core.i18n.locale_directive import get_mcp_field_description, get_mcp_tool_description
 from src.mcp.auth import log_mcp_call
 
 MCP_ERROR_INVALID_ARGUMENT = "INVALID_ARGUMENT"
@@ -58,129 +59,143 @@ def _tool_error(code: str, message: str) -> dict[str, Any]:
     return _tool_result({"error": {"code": code, "message": message}}, is_error=True)
 
 
-TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "get_data_availability",
-        "description": "查询系统中数据的时间范围和视频源列表",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "search_events",
-        "description": "按时间范围和过滤条件查询事件列表",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "start_time": {
-                    "type": "string",
-                    "description": "开始时间，ISO 8601 格式",
-                },
-                "end_time": {
-                    "type": "string",
-                    "description": "结束时间，ISO 8601 格式",
-                },
-                "subjects": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "主体名称列表",
-                },
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "关键词列表，匹配事件标题/摘要/详情",
-                },
-                "event_types": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "事件类型列表",
-                },
-                "importance_levels": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "description": "重要程度列表",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "返回数量上限，默认 20",
-                },
-            },
-            "required": ["start_time", "end_time"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "get_sessions",
-        "description": "按时间范围和主体查询 session 摘要列表",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "start_time": {
-                    "type": "string",
-                    "description": "开始时间，ISO 8601 格式",
-                },
-                "end_time": {
-                    "type": "string",
-                    "description": "结束时间，ISO 8601 格式",
-                },
-                "subjects": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "主体名称列表",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "返回数量上限，默认 20",
-                },
-            },
-            "required": ["start_time", "end_time"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "get_daily_summary",
-        "description": "按日期范围查询日报",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "start_date": {
-                    "type": "string",
-                    "description": "开始日期，格式 YYYY-MM-DD",
-                },
-                "end_date": {
-                    "type": "string",
-                    "description": "结束日期，格式 YYYY-MM-DD",
-                },
-            },
-            "required": ["start_date"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "ask_home_monitor",
-        "description": "对家庭监控数据进行自然语言问答",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "question": {"type": "string", "description": "自然语言问题"},
-            },
-            "required": ["question"],
-            "additionalProperties": False,
-        },
-    },
+TOOL_NAMES = [
+    "get_data_availability",
+    "search_events",
+    "get_sessions",
+    "get_daily_summary",
+    "ask_home_monitor",
 ]
 
-TOOL_MAP = {tool["name"]: tool for tool in TOOLS}
+
+def _build_tools(locale: str | None = None) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "get_data_availability",
+            "description": get_mcp_tool_description("get_data_availability", locale),
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "search_events",
+            "description": get_mcp_tool_description("search_events", locale),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "start_time": {
+                        "type": "string",
+                        "description": get_mcp_field_description("start_time", locale),
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": get_mcp_field_description("end_time", locale),
+                    },
+                    "subjects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": get_mcp_field_description("subjects", locale),
+                    },
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": get_mcp_field_description("keywords", locale),
+                    },
+                    "event_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": get_mcp_field_description("event_types", locale),
+                    },
+                    "importance_levels": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "description": get_mcp_field_description("importance_levels", locale),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": get_mcp_field_description("limit", locale),
+                    },
+                },
+                "required": ["start_time", "end_time"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "get_sessions",
+            "description": get_mcp_tool_description("get_sessions", locale),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "start_time": {
+                        "type": "string",
+                        "description": get_mcp_field_description("start_time", locale),
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": get_mcp_field_description("end_time", locale),
+                    },
+                    "subjects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": get_mcp_field_description("subjects", locale),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": get_mcp_field_description("limit", locale),
+                    },
+                },
+                "required": ["start_time", "end_time"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "get_daily_summary",
+            "description": get_mcp_tool_description("get_daily_summary", locale),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": get_mcp_field_description("start_date", locale),
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": get_mcp_field_description("end_date", locale),
+                    },
+                },
+                "required": ["start_date"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "ask_home_monitor",
+            "description": get_mcp_tool_description("ask_home_monitor", locale),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": get_mcp_field_description("question", locale),
+                    },
+                },
+                "required": ["question"],
+                "additionalProperties": False,
+            },
+        },
+    ]
 
 
-def list_tools() -> dict[str, Any]:
-    return {"tools": TOOLS}
+def list_tools(locale: str | None = None) -> dict[str, Any]:
+    return {"tools": _build_tools(locale)}
 
 
 def _execute_tool(
-    service: MCPToolService, tool_name: str, arguments: dict[str, Any]
+    service: MCPToolService,
+    tool_name: str,
+    arguments: dict[str, Any],
+    locale: str | None = None,
 ) -> dict[str, Any]:
     handlers = {
         "get_data_availability": lambda: service.get_data_availability(),
@@ -203,7 +218,10 @@ def _execute_tool(
             start_date=_required_str(arguments, "start_date"),
             end_date=_optional_str(arguments.get("end_date")),
         ),
-        "ask_home_monitor": lambda: service.ask_home_monitor(_required_str(arguments, "question")),
+        "ask_home_monitor": lambda: service.ask_home_monitor(
+            _required_str(arguments, "question"),
+            locale=locale,
+        ),
     }
     handler = handlers.get(tool_name)
     if handler is None:
@@ -218,6 +236,7 @@ def call_tool(
     source: Optional[str],
     user_agent: Optional[str],
     session_id: Optional[str],
+    locale: str | None = None,
 ) -> dict[str, Any]:
     request_data = {
         "arguments": arguments,
@@ -230,7 +249,7 @@ def call_tool(
     service = build_tool_service(db)
 
     try:
-        response = _execute_tool(service, tool_name, arguments)
+        response = _execute_tool(service, tool_name, arguments, locale=locale)
     except MCPInvalidArgumentError as exc:
         error_result = _tool_error(MCP_ERROR_INVALID_ARGUMENT, str(exc))
         log_mcp_call(db, tool_name, request_data, error_result, "failed")

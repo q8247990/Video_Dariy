@@ -1,3 +1,5 @@
+> **English version**: [mcp_quickstart.en.md](mcp_quickstart.en.md)
+
 # MCP 快速接入（AstrBot Streamable HTTP）
 
 本文对应当前系统的标准 MCP 接入方式。
@@ -54,15 +56,105 @@
 
 ## 4. 当前暴露的 MCP Tools
 
-- `get_daily_summary`：获取某日结构化日报
-- `search_events`：按时间、摄像头、关键词、标签检索事件
-- `get_event_detail`：查询单个事件详情及关联 session
-- `get_video_segments`：查询事件或 session 对应的视频片段
-- `ask_home_monitor`：对家庭监控数据进行自然语言问答
+当前实际暴露的 tools 以 MCP `tools/list` 返回为准，下面是主要用途说明。
 
-这些 tools 由 MCP `tools/list` 自动发现，AstrBot 不需要手动逐个配置 URL。
+### 4.1 `get_data_availability`
 
-## 5. 返回特征
+- 用途：查询系统中已有数据的时间范围和视频源列表
+- 适合：
+  - 还不确定系统里覆盖了哪些日期
+  - 还不清楚有哪些视频源可查
+  - 想先探测数据边界，再决定后续查询范围
+- 参数：无
+
+### 4.2 `search_events`
+
+- 用途：按时间范围和过滤条件查询事件列表
+- 适合：
+  - 查询某段时间是否发生过某类事件
+  - 查询某个对象、关键词、事件类型、重要程度相关事件
+- 必填参数：
+  - `start_time`：开始时间，ISO 8601 格式
+  - `end_time`：结束时间，ISO 8601 格式
+- 可选参数：
+  - `subjects`：主体名称列表
+  - `keywords`：关键词列表，匹配事件标题/摘要/详情
+  - `event_types`：事件类型列表
+  - `importance_levels`：重要程度列表，枚举为 `low` / `medium` / `high`
+  - `limit`：返回数量上限，默认 20
+
+### 4.3 `get_sessions`
+
+- 用途：按时间范围和主体查询 session 摘要列表
+- 适合：
+  - 查询某段时间整体发生了什么
+  - 先粗粒度浏览活动，再决定是否继续下钻到具体事件
+- 必填参数：
+  - `start_time`：开始时间，ISO 8601 格式
+  - `end_time`：结束时间，ISO 8601 格式
+- 可选参数：
+  - `subjects`：主体名称列表
+  - `limit`：返回数量上限，默认 20
+
+### 4.4 `get_daily_summary`
+
+- 用途：按日期范围查询日报
+- 适合：
+  - 查询某天家庭日报
+  - 查询一段日期范围内的日报汇总
+- 必填参数：
+  - `start_date`：开始日期，格式 `YYYY-MM-DD`
+- 可选参数：
+  - `end_date`：结束日期，格式 `YYYY-MM-DD`
+
+### 4.5 `ask_home_monitor`
+
+- 用途：对家庭监控数据进行自然语言问答
+- 适合：
+  - 复杂自然语言问题
+  - 需要系统内部问答能力自动规划检索的问题
+  - 希望直接输入自然语言并获得综合回答的问题
+- 必填参数：
+  - `question`：自然语言问题
+
+## 5. AstrBot 工具使用提示词（可选）
+
+如果你希望 AstrBot 更稳定地使用这些 MCP tools，可以在 AstrBot 的系统提示词中补充下面这段：
+
+```text
+你可以通过 MCP tools 查询家庭监控分析数据。
+
+工具使用建议：
+- 查询数据范围或可用视频源：get_data_availability
+- 查询具体事件：search_events
+- 查询某段时间的整体活动：get_sessions
+- 查询某天或某段日期的日报：get_daily_summary
+- 复杂自然语言问题：ask_home_monitor
+
+调用 ask_home_monitor 前，尽量从用户问题中整理这些信息：
+- 时间范围
+- 区域或摄像头
+- 对象
+- 行为
+- 输出要求
+
+如果用户问题已经足够明确，直接传原问题即可。
+如果缺少关键条件，先追问一个最关键的问题。
+
+可选整理格式：
+
+查询条件：
+- 时间：
+- 区域：
+- 对象：
+- 行为：
+- 输出要求：
+
+用户问题：
+<原始问题>
+```
+
+## 6. 返回特征
 
 - 协议：JSON-RPC 2.0
 - 初始化：`initialize` + `notifications/initialized`
@@ -80,12 +172,16 @@
     "content": [
       {
         "type": "text",
-        "text": "{\"date\":\"2026-02-26\",\"event_count\":1}"
+        "text": "{\"summaries\":[{\"date\":\"2026-02-26\",\"summary_text\":\"今天家中整体平稳。\"}]}"
       }
     ],
     "structuredContent": {
-      "date": "2026-02-26",
-      "event_count": 1
+      "summaries": [
+        {
+          "date": "2026-02-26",
+          "summary_text": "今天家中整体平稳。"
+        }
+      ]
     },
     "isError": false
   }
@@ -116,7 +212,7 @@
 }
 ```
 
-## 6. 连通性自检
+## 7. 连通性自检
 
 可以先用标准 MCP 初始化请求检查链路是否畅通：
 
@@ -144,7 +240,7 @@ curl -sS -X POST "http://127.0.0.1:8226/mcp" \
 
 说明 MCP 入口已打通。
 
-## 7. Docker / 部署注意事项
+## 8. Docker / 部署注意事项
 
 - 如果 AstrBot 跑在 Docker 中，`127.0.0.1` 指向 AstrBot 自己，不是当前系统
 - 应填写前端 nginx 对外地址，例如：
@@ -152,7 +248,7 @@ curl -sS -X POST "http://127.0.0.1:8226/mcp" \
   - 反向代理域名：`https://your-domain/mcp`
 - 不要让 AstrBot 直接连接 `backend:8000` 或宿主机 `8000`
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### Q1: AstrBot 配置了 `streamable-http` 但连不上
 
@@ -181,4 +277,4 @@ curl -sS -X POST "http://127.0.0.1:8226/mcp" \
 
 ---
 
-深入排障见：`docs/develop/mcp_debug.md`
+深入排障见：[docs/develop/mcp_debug.md](docs/develop/mcp_debug.md)

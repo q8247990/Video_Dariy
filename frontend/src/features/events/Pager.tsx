@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 type PagerProps = {
   page: number
   totalPages: number
@@ -19,13 +21,14 @@ export function Pager({
   onPrev,
   onNext,
 }: PagerProps) {
+  const { t } = useTranslation()
   return (
     <div className="pager">
       <button className="ghost" disabled={page <= 1} onClick={onPrev}>
-        上一页
+        {t('events.pager_prev', '上一页')}
       </button>
       <span>
-        第 {page} / {totalPages} 页，共 {total} 条
+        {t('events.pager_info', '第 {{page}} / {{totalPages}} 页，共 {{total}} 条', { page, totalPages, total })}
       </span>
       <input
         className="pager-input"
@@ -41,10 +44,10 @@ export function Pager({
         }}
       />
       <button className="ghost" onClick={onJumpToPage}>
-        跳转
+        {t('events.pager_jump', '跳转')}
       </button>
       <button className="ghost" disabled={page >= totalPages} onClick={onNext}>
-        下一页
+        {t('events.pager_next', '下一页')}
       </button>
     </div>
   )

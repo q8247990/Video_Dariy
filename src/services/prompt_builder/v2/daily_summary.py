@@ -3,6 +3,7 @@
 from datetime import date
 from typing import Any
 
+from src.core.i18n.locale_directive import get_language_directive
 from src.services.prompt_builder.compression.daily_summary_compressor import (
     MAX_DATA_INPUT_PROMPT_CHARS,
     compress_daily_input,
@@ -45,8 +46,10 @@ def _render_data_input(
     return text
 
 
-def build_daily_summary_prompt(input_data: dict[str, Any]) -> tuple[str, str]:
-    """构建单次日报 prompt，返回 (system_prompt, user_prompt)。"""
+def build_daily_summary_prompt(
+    input_data: dict[str, Any],
+    locale: str | None = None,
+) -> tuple[str, str]:
     home_context = input_data["home_context"]
     summary_date = input_data["summary_date"]
     time_range = input_data["time_range"]
@@ -54,7 +57,11 @@ def build_daily_summary_prompt(input_data: dict[str, Any]) -> tuple[str, str]:
     missing_subjects = input_data["missing_subjects"]
     attention_candidates = input_data["attention_candidates"]
 
-    system_prompt = render_template("daily_summary/system_rules.j2")
+    lang_directive = get_language_directive(locale)
+    system_prompt = render_template(
+        "daily_summary/system_rules.j2",
+        lang_directive=lang_directive,
+    )
 
     user_prompt = "\n\n".join(
         [
@@ -79,8 +86,8 @@ def build_subject_summary_prompt(
     time_range_start: str,
     time_range_end: str,
     subject_section: dict[str, Any],
+    locale: str | None = None,
 ) -> tuple[str, str]:
-    """构建串行路径的单对象摘要 prompt，返回 (system_prompt, user_prompt)。"""
     subject_name = str(subject_section.get("subject_name") or "未知对象")
     subject_type = str(subject_section.get("subject_type") or "unknown")
     raw_event_count = int(subject_section.get("raw_event_count") or 0)
@@ -89,7 +96,11 @@ def build_subject_summary_prompt(
     if isinstance(raw_clusters, list):
         clusters = [item for item in raw_clusters if isinstance(item, dict)]
 
-    system_prompt = render_template("daily_summary/system_rules.j2")
+    lang_directive = get_language_directive(locale)
+    system_prompt = render_template(
+        "daily_summary/system_rules.j2",
+        lang_directive=lang_directive,
+    )
 
     user_prompt = "\n\n".join(
         [
@@ -116,9 +127,13 @@ def build_daily_rollup_prompt(
     summary_date: date,
     subject_results: list[dict[str, Any]],
     attention_candidates: list[dict[str, Any]],
+    locale: str | None = None,
 ) -> tuple[str, str]:
-    """构建串行路径的汇总 prompt，返回 (system_prompt, user_prompt)。"""
-    system_prompt = render_template("daily_summary/system_rules.j2")
+    lang_directive = get_language_directive(locale)
+    system_prompt = render_template(
+        "daily_summary/system_rules.j2",
+        lang_directive=lang_directive,
+    )
 
     user_prompt = "\n\n".join(
         [

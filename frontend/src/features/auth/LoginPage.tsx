@@ -2,11 +2,13 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { login } from './api'
 import { useAuthStore } from '../../store/authStore'
 
 export function LoginPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const setAuth = useAuthStore((state) => state.setAuth)
   const [username, setUsername] = useState('admin')
@@ -32,7 +34,7 @@ export function LoginPage() {
         <p>登录后可管理视频源、模型与任务流程</p>
         <form onSubmit={handleSubmit}>
           <label>
-            用户名
+            {t('login.username')}
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -41,7 +43,7 @@ export function LoginPage() {
             />
           </label>
           <label>
-            密码
+            {t('login.password')}
             <input
               type="password"
               value={password}
@@ -52,7 +54,7 @@ export function LoginPage() {
           </label>
           {mutation.error ? <ApiErrorAlert message={mutation.error.message} /> : null}
           <button type="submit" disabled={mutation.isPending}>
-            {mutation.isPending ? '登录中...' : '登录系统'}
+            {mutation.isPending ? t('login.loading') : t('login.submit')}
           </button>
         </form>
       </div>

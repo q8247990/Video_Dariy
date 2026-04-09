@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from './ApiErrorAlert'
 import { HlsVideoPlayer } from './HlsVideoPlayer'
 import { LoadingBlock } from './LoadingBlock'
@@ -11,6 +12,7 @@ type SessionPlaybackModalProps = {
 }
 
 export function SessionPlaybackModal({ sessionId, open, onClose }: SessionPlaybackModalProps) {
+  const { t } = useTranslation()
   const playbackQuery = useQuery({
     queryKey: ['session-playback', sessionId],
     queryFn: () => getSessionPlayback(sessionId as number),
@@ -25,20 +27,20 @@ export function SessionPlaybackModal({ sessionId, open, onClose }: SessionPlayba
     <div className="dialog-mask" onClick={onClose}>
       <div className="dialog dialog-wide" onClick={(event) => event.stopPropagation()}>
         <div className="playback-head">
-          <h3>Session #{sessionId} 回放</h3>
+          <h3>{t('sessions.playback_title', 'Session #{{id}} 回放', { id: sessionId })}</h3>
           <button className="ghost" onClick={onClose}>
-            关闭
+            {t('common.close', '关闭')}
           </button>
         </div>
 
-        {playbackQuery.isLoading ? <LoadingBlock text="加载回放列表中" /> : null}
+        {playbackQuery.isLoading ? <LoadingBlock text={t('sessions.loading_playback', '加载回放列表中')} /> : null}
         {playbackQuery.error ? <ApiErrorAlert message={(playbackQuery.error as Error).message} /> : null}
 
         {!playbackQuery.isLoading && !playbackQuery.error ? (
           <div className="playback-grid">
             {playbackQuery.data?.playback_url ? (
                 <article className="playback-item">
-                  <h4>拼接回放</h4>
+                  <h4>{t('sessions.hls_playback', '拼接回放')}</h4>
                   <HlsVideoPlayer
                     src={
                       playbackQuery.data.playback_url.startsWith('/api/v1')
@@ -48,7 +50,7 @@ export function SessionPlaybackModal({ sessionId, open, onClose }: SessionPlayba
                   />
                 </article>
             ) : (
-              <div className="empty-cell">当前 Session 暂无可播放文件</div>
+              <div className="empty-cell">{t('sessions.empty_playback', '当前 Session 暂无可播放文件')}</div>
             )}
           </div>
         ) : null}

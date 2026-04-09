@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -22,6 +23,7 @@ import { VideoSourceForm } from './VideoSourceForm'
 import { VideoSourceStatusDialog, analysisStateText } from './VideoSourceStatusDialog'
 
 export function VideoSourcesPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [keyword, setKeyword] = useState('')
@@ -174,9 +176,9 @@ export function VideoSourcesPage() {
   return (
     <div>
       <PageHeader
-        title="视频源管理"
+        title={t('video_sources.title')}
         subtitle="配置摄像头目录和识别上下文"
-        actions={<button onClick={() => setShowCreate(true)}>新增视频源</button>}
+        actions={<button onClick={() => setShowCreate(true)}>{t('video_sources.add_source')}</button>}
       />
 
       <div className="card tool-row">
@@ -271,7 +273,7 @@ export function VideoSourcesPage() {
       {(showCreate || editing) && (
         <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
-            <h3>{editing ? '编辑视频源' : '新增视频源'}</h3>
+            <h3>{editing ? t('video_sources.edit_source') : t('video_sources.add_source')}</h3>
             <VideoSourceForm
               initialValue={editing ?? undefined}
               pending={createMutation.isPending || updateMutation.isPending}

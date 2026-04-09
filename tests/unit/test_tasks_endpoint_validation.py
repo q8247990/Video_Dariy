@@ -43,7 +43,11 @@ def test_trigger_full_build_rejects_disabled_source() -> None:
         mock_orchestrator = MagicMock()
 
         resp = trigger_full_build(
-            db=db, current_user=_current_user(), id=source.id, orchestrator=mock_orchestrator
+            db=db,
+            current_user=_current_user(),
+            locale="zh-CN",
+            id=source.id,
+            orchestrator=mock_orchestrator,
         )
         assert resp.code == 4004
         assert "disabled" in str(resp.message).lower()
@@ -81,6 +85,7 @@ def test_trigger_analyze_rejects_open_session() -> None:
         resp = trigger_analyze(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             session_id=session.id,
             orchestrator=mock_orchestrator,
         )
@@ -121,6 +126,7 @@ def test_trigger_analyze_allows_paused_source_session() -> None:
         resp = trigger_analyze(
             db=db,
             current_user=_current_user(),
+            locale="zh-CN",
             session_id=session.id,
             orchestrator=mock_orchestrator,
         )

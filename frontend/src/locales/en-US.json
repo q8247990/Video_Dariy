@@ -1,0 +1,93 @@
+{
+  "layouts": {
+    "dashboard": "Dashboard",
+    "events": "Video Events",
+    "daily_summary": "Daily Summaries",
+    "chat": "Video Q&A",
+    "profile": "Home Profile",
+    "settings": "Settings",
+    "logout": "Logout"
+  },
+  "login": {
+    "title": "Login",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign In",
+    "loading": "Signing in..."
+  },
+  "settings": {
+    "title": "System Settings",
+    "nav_overview": "Overview",
+    "nav_video_sources": "Video Sources",
+    "nav_models": "Models",
+    "nav_tasks": "Tasks",
+    "nav_system": "System Status",
+    "nav_webhooks": "Webhooks",
+    "theme_title": "Theme Settings",
+    "theme_light": "Light",
+    "theme_dark": "Dark",
+    "theme_tangtang": "Dark (Memorial to Tangtang)",
+    "language_title": "Language / 语言设置",
+    "language_zh": "简体中文",
+    "language_en": "English"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "today_events": "Today Events",
+    "pending_sessions": "Pending Videos",
+    "success_rate": "Success Rate",
+    "storage_used": "Storage Used",
+    "recent_events": "Recent Events",
+    "recent_summaries": "Recent Summaries"
+  },
+  "events": {
+    "title": "Video Events",
+    "filter_all": "All",
+    "filter_today": "Today",
+    "filter_yesterday": "Yesterday",
+    "filter_week": "This Week",
+    "search_placeholder": "Search events...",
+    "status_analyzed": "Analyzed",
+    "status_pending": "Pending",
+    "status_failed": "Failed",
+    "empty": "No data"
+  },
+  "daily_summaries": {
+    "title": "Daily Summaries",
+    "empty": "No summaries"
+  },
+  "providers": {
+    "title": "Models",
+    "add_provider": "Add Provider",
+    "edit_provider": "Edit Provider"
+  },
+  "video_sources": {
+    "title": "Video Sources",
+    "add_source": "Add Source",
+    "edit_source": "Edit Source"
+  },
+  "webhooks": {
+    "title": "Webhooks",
+    "add_webhook": "Add Webhook",
+    "edit_webhook": "Edit Webhook"
+  },
+  "tasks": {
+    "title": "Tasks"
+  },
+  "system_status": {
+    "title": "System Status"
+  },
+  "chat": {
+    "title": "Video Q&A",
+    "input_placeholder": "Ask something about the videos...",
+    "send": "Send"
+  },
+  "home_profile": {
+    "title": "Home Profile"
+  },
+  "onboarding": {
+    "welcome": "Welcome to Video Diary",
+    "next": "Next",
+    "done": "Done"
+  }
+}

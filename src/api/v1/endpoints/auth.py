@@ -3,7 +3,8 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.deps import DB, CurrentUser
+from src.api.deps import DB, CurrentUser, Locale
+from src.core.i18n import t
 from src.core.security import create_access_token, get_password_hash, verify_password
 from src.models.admin_user import AdminUser
 from src.schemas.auth import UserChangePassword, UserInit, UserLogin
@@ -14,10 +15,10 @@ router = APIRouter()
 
 
 @router.post("/init", response_model=BaseResponse[dict])
-def init_admin(db: DB, data: UserInit) -> Any:
+def init_admin(db: DB, locale: Locale, data: UserInit) -> Any:
     user = db.query(AdminUser).first()
     if user:
-        return BaseResponse(code=4001, message="Admin already initialized")
+        return BaseResponse(code=4001, message=t("auth.admin_already_init", locale))
 
     new_user = AdminUser(username=data.username, password_hash=get_password_hash(data.password))
     db.add(new_user)
@@ -26,10 +27,10 @@ def init_admin(db: DB, data: UserInit) -> Any:
 
 
 @router.post("/login", response_model=BaseResponse[TokenResponse])
-def login(db: DB, data: UserLogin) -> Any:
+def login(db: DB, locale: Locale, data: UserLogin) -> Any:
     user = db.query(AdminUser).filter(AdminUser.username == data.username).first()
     if not user or not verify_password(data.password, user.password_hash):
-        return BaseResponse(code=4011, message="Invalid username or password")
+        return BaseResponse(code=4011, message=t("auth.invalid_credentials", locale))
 
     user.last_login_at = datetime.now()
     db.commit()
@@ -46,9 +47,11 @@ def get_me(current_user: CurrentUser) -> Any:
 
 
 @router.post("/change-password", response_model=BaseResponse[dict])
-def change_password(db: DB, current_user: CurrentUser, data: UserChangePassword) -> Any:
+def change_password(
+    db: DB, current_user: CurrentUser, locale: Locale, data: UserChangePassword
+) -> Any:
     if not verify_password(data.old_password, current_user.password_hash):
-        return BaseResponse(code=4001, message="Incorrect old password")
+        return BaseResponse(code=4001, message=t("auth.incorrect_old_password", locale))
 
     current_user.password_hash = get_password_hash(data.new_password)
     db.commit()

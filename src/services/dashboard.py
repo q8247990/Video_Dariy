@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
+from typing import Optional
 
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from src.core.i18n import DEFAULT_LOCALE, t
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
 from src.models.home_profile import HomeProfile
@@ -25,18 +27,22 @@ from src.services.pipeline_constants import TaskStatus, TaskType
 IMPORTANT_LEVELS = ("high",)
 
 
-def get_dashboard_overview(db: Session) -> DashboardOverviewResponse:
+def get_dashboard_overview(
+    db: Session,
+    locale: Optional[str] = None,
+) -> DashboardOverviewResponse:
+    loc = locale or DEFAULT_LOCALE
     onboarding_status = get_onboarding_status(db)
     assistant_name = _get_assistant_name(db)
 
     return DashboardOverviewResponse(
         assistant_name=assistant_name,
-        system_status=_build_system_status(onboarding_status),
-        alert=_build_alert(db, onboarding_status),
+        system_status=_build_system_status(onboarding_status, loc),
+        alert=_build_alert(db, onboarding_status, loc),
         task_summary=_build_task_summary(db),
         event_summary=_build_event_summary(db),
         latest_daily_summary=_build_latest_daily_summary(db),
-        important_events=_build_important_events(db),
+        important_events=_build_important_events(db, loc),
     )
 
 
@@ -47,20 +53,12 @@ def _get_assistant_name(db: Session) -> str:
     return DEFAULT_ASSISTANT_NAME
 
 
-def _build_system_status(onboarding_status: dict) -> DashboardSystemStatus:
+def _build_system_status(onboarding_status: dict, locale: str) -> DashboardSystemStatus:
     overall_status = onboarding_status["overall_status"]
     next_action = str(onboarding_status.get("next_action") or "")
 
-    title_map = {
-        "basic_not_ready": "未完成基础配置",
-        "basic_ready": "基础可运行",
-        "full_ready": "完整可运行",
-    }
-    description_map = {
-        "basic_not_ready": "尚未完成基础配置，系统暂不能进行完整分析",
-        "basic_ready": "系统已可开始分析，建议继续完善家庭信息与风格设置",
-        "full_ready": "系统已完成主要配置，正在持续分析家庭监控视频",
-    }
+    title = t(f"dashboard.title.{overall_status}", locale)
+    description = t(f"dashboard.desc.{overall_status}", locale)
 
     steps = onboarding_status["steps"]
     video_configured = bool(steps["video_source"]["configured"])
@@ -73,56 +71,66 @@ def _build_system_status(onboarding_status: dict) -> DashboardSystemStatus:
     items = [
         DashboardStatusItem(
             key="video_source",
-            label="视频源",
+            label=t("dashboard.label.video_source", locale),
             status=_bool_pair_to_status(video_configured, video_validated),
         ),
         DashboardStatusItem(
             key="provider",
-            label="Provider",
+            label=t("dashboard.label.provider", locale),
             status=_bool_pair_to_status(provider_configured, provider_tested),
         ),
         DashboardStatusItem(
             key="daily_summary",
-            label="日报",
+            label=t("dashboard.label.daily_summary", locale),
             status="ok" if daily_summary_configured else "not_ready",
         ),
         DashboardStatusItem(
             key="home_profile",
-            label="家庭档案",
+            label=t("dashboard.label.home_profile", locale),
             status="ok" if home_profile_configured else "partial",
         ),
     ]
 
     if overall_status == "basic_not_ready":
         primary_action = DashboardAction(
-            label="继续完成初始化",
+            label=t("dashboard.action.continue_init", locale),
             target=_onboarding_target_from_action(next_action),
         )
     elif overall_status == "basic_ready":
         primary_action = DashboardAction(
-            label="完善家庭配置", target="/onboarding/personalize/profile"
+            label=t("dashboard.action.complete_profile", locale),
+            target="/onboarding/personalize/profile",
         )
     else:
-        primary_action = DashboardAction(label="查看状态详情", target="/system-status")
+        primary_action = DashboardAction(
+            label=t("dashboard.action.view_status", locale),
+            target="/system-status",
+        )
 
     return DashboardSystemStatus(
         overall_status=overall_status,
-        title=title_map[overall_status],
-        description=description_map[overall_status],
+        title=title,
+        description=description,
         items=items,
         primary_action=primary_action,
-        detail_action=DashboardAction(label="查看状态详情", target="/system-status"),
+        detail_action=DashboardAction(
+            label=t("dashboard.action.view_status", locale),
+            target="/system-status",
+        ),
     )
 
 
-def _build_alert(db: Session, onboarding_status: dict) -> DashboardAlert:
+def _build_alert(db: Session, onboarding_status: dict, locale: str) -> DashboardAlert:
     if onboarding_status["overall_status"] == "basic_not_ready":
         return DashboardAlert(
             show=True,
             type="basic_not_ready",
-            title="尚未完成基础配置",
-            description="系统暂不能进行完整分析，建议继续完成初始化配置",
-            action=DashboardAction(label="继续完成初始化", target="/onboarding"),
+            title=t("dashboard.alert.basic_not_ready.title", locale),
+            description=t("dashboard.alert.basic_not_ready.desc", locale),
+            action=DashboardAction(
+                label=t("dashboard.action.continue_init", locale),
+                target="/onboarding",
+            ),
         )
 
     steps = onboarding_status["steps"]
@@ -130,18 +138,24 @@ def _build_alert(db: Session, onboarding_status: dict) -> DashboardAlert:
         return DashboardAlert(
             show=True,
             type="provider_error",
-            title="Provider 异常",
-            description="当前模型服务不可用，可能影响分析与日报生成",
-            action=DashboardAction(label="去检查 Provider", target="/providers"),
+            title=t("dashboard.alert.provider_error.title", locale),
+            description=t("dashboard.alert.provider_error.desc", locale),
+            action=DashboardAction(
+                label=t("dashboard.alert.provider_error.action", locale),
+                target="/providers",
+            ),
         )
 
     if not steps["video_source"]["configured"] or not steps["video_source"]["validated"]:
         return DashboardAlert(
             show=True,
             type="video_source_error",
-            title="视频源异常",
-            description="视频源配置未完成或校验失败，可能无法继续扫描分析",
-            action=DashboardAction(label="去检查视频源", target="/video-sources"),
+            title=t("dashboard.alert.video_source_error.title", locale),
+            description=t("dashboard.alert.video_source_error.desc", locale),
+            action=DashboardAction(
+                label=t("dashboard.alert.video_source_error.action", locale),
+                target="/video-sources",
+            ),
         )
 
     latest_daily_task = _latest_task_by_type(db, TaskType.DAILY_SUMMARY_GENERATION)
@@ -149,9 +163,12 @@ def _build_alert(db: Session, onboarding_status: dict) -> DashboardAlert:
         return DashboardAlert(
             show=True,
             type="daily_summary_error",
-            title="日报任务异常",
-            description="最近一次日报生成失败，建议检查日志并重试",
-            action=DashboardAction(label="查看任务日志", target="/tasks"),
+            title=t("dashboard.alert.daily_summary_error.title", locale),
+            description=t("dashboard.alert.daily_summary_error.desc", locale),
+            action=DashboardAction(
+                label=t("dashboard.alert.daily_summary_error.action", locale),
+                target="/tasks",
+            ),
         )
 
     failed_analysis_count = (
@@ -168,10 +185,15 @@ def _build_alert(db: Session, onboarding_status: dict) -> DashboardAlert:
         return DashboardAlert(
             show=True,
             type="analysis_task_error",
-            title="分析任务异常",
-            description=f"最近24小时有 {failed_analysis_count} 个分析任务失败",
+            title=t("dashboard.alert.analysis_task_error.title", locale),
+            description=t(
+                "dashboard.alert.analysis_task_error.desc",
+                locale,
+                count=failed_analysis_count,
+            ),
             action=DashboardAction(
-                label="查看任务日志", target="/tasks?status=failed&task_type=session_analysis"
+                label=t("dashboard.alert.analysis_task_error.action", locale),
+                target="/tasks?status=failed&task_type=session_analysis",
             ),
         )
 
@@ -266,7 +288,7 @@ def _build_latest_daily_summary(db: Session) -> DashboardLatestDailySummary:
     )
 
 
-def _build_important_events(db: Session) -> list[DashboardImportantEvent]:
+def _build_important_events(db: Session, locale: str) -> list[DashboardImportantEvent]:
     importance_score = case(
         (EventRecord.importance_level == "high", 3),
         else_=0,
@@ -286,7 +308,7 @@ def _build_important_events(db: Session) -> list[DashboardImportantEvent]:
         result.append(
             DashboardImportantEvent(
                 id=event.id,
-                title=_build_event_title(event.description),
+                title=_build_event_title(event.description, locale),
                 summary=_truncate_text(event.description, 60),
                 event_time=event.event_start_time,
                 camera_name=source.camera_name,
@@ -334,10 +356,10 @@ def _truncate_text(value: str | None, limit: int) -> str:
     return f"{text[:limit].rstrip()}..."
 
 
-def _build_event_title(description: str) -> str:
+def _build_event_title(description: str, locale: str) -> str:
     text = description.strip()
     if not text:
-        return "未命名事件"
+        return t("dashboard.event.unnamed", locale)
     if len(text) <= 18:
         return text
     return f"{text[:18].rstrip()}..."
