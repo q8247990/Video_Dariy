@@ -6,8 +6,8 @@ import httpx
 
 from src.db.session import SessionLocal
 from src.models.llm_provider import LLMProvider
-from src.models.video_source import VideoSource
 from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 from src.services.home_profile import build_home_context
 from src.services.session_analysis_video import (
     build_chunk_video_data_url,

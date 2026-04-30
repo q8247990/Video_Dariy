@@ -409,7 +409,8 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             finalize_task_log(
                 task_log,
                 TaskStatus.SUCCESS,
-                f"Analyzed session in {len(chunks)} chunks, created {len(events_to_persist)} events.",
+                f"Analyzed session in {len(chunks)} chunks, "
+                f"created {len(events_to_persist)} events.",
                 {
                     "session_id": session_id,
                     "events_created": len(events_to_persist),
