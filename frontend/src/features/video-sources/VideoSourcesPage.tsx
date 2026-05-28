@@ -20,7 +20,8 @@ import {
   updateVideoSource,
 } from './api'
 import { VideoSourceForm } from './VideoSourceForm'
-import { VideoSourceStatusDialog, analysisStateText } from './VideoSourceStatusDialog'
+import { VideoSourceStatusDialog } from './VideoSourceStatusDialog'
+import { analysisStateText } from './utils'
 
 export function VideoSourcesPage() {
   const { t } = useTranslation()
