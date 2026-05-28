@@ -2,12 +2,12 @@ import logging
 import time
 from pathlib import Path
 
+from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from alembic import command
-from alembic.config import Config
 from src.core.security import get_password_hash
 from src.db.session import SessionLocal, engine
 from src.models.admin_user import AdminUser
