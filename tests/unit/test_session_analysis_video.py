@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -79,20 +78,19 @@ def test_build_session_video_chunks_split_by_10_minutes() -> None:
         db.close()
 
 
-def test_concat_video_uses_temp_concat_file_input(monkeypatch) -> None:
+def test_concat_video_delegates_to_run_ffmpeg_concat(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def _mock_run(cmd, input=None, capture_output=False):
-        calls.append(cmd)
-        return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+    def _mock_concat(paths: list[str]) -> bytes:
+        calls.append(paths)
+        return b"ok"
 
-    monkeypatch.setattr("src.services.session_analysis_video.subprocess.run", _mock_run)
+    monkeypatch.setattr(
+        "src.services.session_analysis_video.run_ffmpeg_concat_to_bytes", _mock_concat
+    )
 
     result = _concat_video_files_to_mp4_bytes(["/tmp/a.mp4", "/tmp/b.mp4"])
 
     assert result == b"ok"
     assert len(calls) == 1
-    assert "-f" in calls[0]
-    assert "concat" in calls[0]
-    index = calls[0].index("-i")
-    assert calls[0][index + 1].endswith(".txt")
+    assert calls[0] == ["/tmp/a.mp4", "/tmp/b.mp4"]

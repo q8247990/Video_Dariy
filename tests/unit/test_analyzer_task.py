@@ -263,7 +263,9 @@ def test_analyze_session_failure_logs_prompt_and_raw_response(monkeypatch, caplo
         db.close()
 
     _mock_common(monkeypatch, session_factory)
-    monkeypatch.setattr("src.tasks.analyzer._build_prompt", lambda *args: "final prompt text")
+    monkeypatch.setattr(
+        "src.tasks.analyzer._build_prompts", lambda *_: ("system", "final prompt text")
+    )
     monkeypatch.setattr(
         "src.tasks.analyzer.parse_video_recognition_output",
         lambda response_text: (_ for _ in ()).throw(RuntimeError("parse failed")),

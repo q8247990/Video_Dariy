@@ -23,7 +23,7 @@ def test_build_video_recognition_prompt_contains_four_layers() -> None:
         source_type="local_directory",
         prompt_text="电视屏幕会反光",
     )
-    prompt = build_video_recognition_prompt(
+    system_prompt, user_prompt = build_video_recognition_prompt(
         {
             "home_context": {
                 "home_profile": {
@@ -54,14 +54,18 @@ def test_build_video_recognition_prompt_contains_four_layers() -> None:
         }
     )
 
-    assert "系统识别规则" in prompt
-    assert "家庭上下文" in prompt
-    assert "摄像头上下文" in prompt
-    assert "任务级 Prompt" in prompt
-    assert "家庭概况" in prompt
-    assert "会话上下文" in prompt
-    assert "输出 schema（完整示例，必须严格遵守）" in prompt
-    assert '"session_summary"' in prompt
-    assert '"analysis_notes"' in prompt
-    assert '"detail"' in prompt
-    assert "命名优先" in prompt
+    # system prompt assertions
+    assert "输出 schema" in system_prompt
+    assert '"session_summary"' in system_prompt
+    assert '"analysis_notes"' in system_prompt
+    assert '"detail"' in system_prompt
+    assert "命名优先" in system_prompt
+    assert "事实优先" in system_prompt
+    assert "保守识别" in system_prompt
+
+    # user prompt assertions
+    assert "家庭上下文" in user_prompt
+    assert "摄像头上下文" in user_prompt
+    assert "任务级 Prompt" in user_prompt
+    assert "家庭概况" in user_prompt
+    assert "会话上下文" in user_prompt
