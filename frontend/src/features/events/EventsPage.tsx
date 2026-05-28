@@ -12,7 +12,8 @@ import { usePagination } from '../../hooks/usePagination'
 import { getSessions } from '../sessions/api'
 import { triggerSessionAnalyze } from './api'
 import { EventsFilterBar } from './EventsFilterBar'
-import { SessionEventsRow, formatSessionStartTime } from './SessionEventsRow'
+import { SessionEventsRow } from './SessionEventsRow'
+import { formatSessionStartTime } from './utils'
 import { Pager } from './Pager'
 
 export function EventsPage() {
