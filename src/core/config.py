@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Home Monitor Video Analysis"
     API_V1_STR: str = "/api/v1"
+    DEFAULT_LOCALE: str = "zh-CN"
 
     # Security
     SECRET_KEY: str = "supersecretkey_please_change_in_production"
