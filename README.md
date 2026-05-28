@@ -128,6 +128,11 @@ bash scripts/package_release.sh --tag v1.0.0
 | `REDIS_URL` | Redis 连接串 | Docker 部署保持默认即可 |
 | `PLAYBACK_CACHE_ROOT` | HLS 播放缓存目录 | Docker 部署保持默认即可 |
 | `MCP_TOKEN` | MCP 接口鉴权 Token | 需要 MCP 时配置 |
+| `DEFAULT_LOCALE` | 界面语言（zh-CN / en-US） | 默认 zh-CN |
+| `ANALYZER_SEGMENT_SECONDS` | 视频分析切片时长（秒） | 默认 600 |
+| `SESSION_PLAYBACK_MODE` | 回放模式 | 默认 hls_index_only |
+| `DB_INIT_MAX_RETRIES` | 数据库初始化重试次数 | 默认 120 |
+| `DB_INIT_RETRY_INTERVAL_SECONDS` | 数据库初始化重试间隔（秒） | 默认 2 |
 
 ### 默认访问地址
 
@@ -204,14 +209,28 @@ Python 版本：3.10
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/auth/login` | 登录 |
+| POST | `/api/v1/auth/init` | 初始化管理员 |
 | GET | `/api/v1/dashboard/overview` | 仪表盘统计 |
 | GET | `/api/v1/video-sources` | 视频源列表 |
-| POST | `/api/v1/tasks/{id}/build/full` | 全量构建 |
-| POST | `/api/v1/tasks/analyze/{session_id}` | 手动分析 |
-| POST | `/api/v1/tasks/summarize` | 手动生成日报 |
-| POST | `/api/v1/chat/ask` | 自然语言问答 |
-| GET | `/api/v1/daily-summaries` | 日报列表 |
+| POST | `/api/v1/video-sources` | 创建视频源 |
+| GET | `/api/v1/sessions` | Session 列表 |
 | GET | `/api/v1/events` | 事件列表 |
+| GET | `/api/v1/events/{id}` | 事件详情 |
+| GET | `/api/v1/daily-summaries` | 日报列表 |
+| GET | `/api/v1/daily-summaries/{date}` | 指定日期日报 |
+| POST | `/api/v1/chat/ask` | 自然语言问答 |
+| GET | `/api/v1/chat/history` | 问答历史 |
+| GET | `/api/v1/providers` | LLM 提供商列表 |
+| POST | `/api/v1/providers` | 添加 LLM 提供商 |
+| POST | `/api/v1/tasks/{id}/build/full` | 全量扫描任务 |
+| POST | `/api/v1/tasks/analyze/{session_id}` | 手动分析 Session |
+| POST | `/api/v1/tasks/summarize` | 手动生成日报 |
+| GET | `/api/v1/tasks/logs` | 任务日志列表 |
+| GET | `/api/v1/home-profile` | 家庭画像 |
+| GET | `/api/v1/webhooks` | Webhook 配置列表 |
+| GET | `/api/v1/system-config` | 系统配置 |
+| GET | `/api/v1/onboarding/status` | 引导流程状态 |
+| GET | `/api/v1/media/sessions/{session_id}/playback` | Session 视频回放 (HLS) |
 | POST | `/mcp` | MCP JSON-RPC 入口 |
 
 ### 常用命令

@@ -78,12 +78,14 @@
 - `src/api/v1/endpoints/events.py`
 - `src/api/v1/endpoints/sessions.py`
 - `src/api/v1/endpoints/daily_summaries.py`
+- `src/api/v1/endpoints/dashboard.py`
 - `src/api/v1/endpoints/chat.py`
 - `src/api/v1/endpoints/llm_providers.py`
 - `src/api/v1/endpoints/webhooks.py`
 - `src/api/v1/endpoints/media.py`
 - `src/api/v1/endpoints/home_profile.py`
 - `src/api/v1/endpoints/system_config.py`
+- `src/api/v1/endpoints/tags.py`
 - `src/api/v1/endpoints/onboarding.py`
 
 接口特点：
@@ -175,6 +177,10 @@
 - `AppRuntimeState`：运行时保护状态，如日报派发 guard
 - `ChatQueryLog`：问答记录
 - `McpCallLog`：MCP 调用日志
+- `LLMUsageLog`：LLM Token 用量记录
+- `TagDefinition`：标签定义
+- `EventTagRel`：事件与标签多对多关联
+- `VideoSourceRuntimeState`：视频源运行时状态（延迟告警等）
 
 ### 4.7 `src/db/`
 
@@ -211,10 +217,10 @@
 
 已实现工具包括：
 
-- `get_daily_summary`
+- `get_data_availability`
 - `search_events`
-- `get_event_detail`
-- `get_video_segments`
+- `get_sessions`
+- `get_daily_summary`
 - `ask_home_monitor`
 
 ### 4.10 `frontend/`
@@ -460,6 +466,11 @@ DailySummary 1 --- 1 summary_date
 - `DEFAULT_ADMIN_PASSWORD`
 - `DB_INIT_MAX_RETRIES`
 - `DB_INIT_RETRY_INTERVAL_SECONDS`
+- `DEFAULT_LOCALE`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `ENTITY_IMAGE_ROOT`
+- `SESSION_PLAYBACK_MODE`
+- `ANALYZER_SEGMENT_SECONDS`
 
 说明：当前根目录 `.env.example` 已按 PostgreSQL、Redis、MCP 与播放缓存目录的实际配置同步更新，推荐以 `src/core/config.py` 和 `docker-compose.yml` 为最终运行准则。
 
