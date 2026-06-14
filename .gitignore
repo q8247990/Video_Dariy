@@ -32,3 +32,4 @@ docs/
 AGENTS.md
 src/home_monitor.egg-info
 .opencode/
+.playwright-mcp/
