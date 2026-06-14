@@ -270,7 +270,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 关键规则：
 
-- 合并阈值：`MERGE_GAP_SECONDS = 61`
+- 合并阈值：`MERGE_GAP_SECONDS = 1`
 - 封口缓冲：`SEAL_BUFFER_SECONDS = 600`
 - 扫描模式：`hot` / `full`
 

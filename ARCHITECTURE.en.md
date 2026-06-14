@@ -264,7 +264,7 @@ Workflow:
 
 Key rules:
 
-- Merge threshold: `MERGE_GAP_SECONDS = 61`
+- Merge threshold: `MERGE_GAP_SECONDS = 1`
 - Seal buffer: `SEAL_BUFFER_SECONDS = 600`
 - Scan modes: `hot` / `full`
 
