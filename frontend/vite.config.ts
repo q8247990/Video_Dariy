@@ -16,16 +16,6 @@ export default defineConfig({
           if (id.includes('react-player') || id.includes('hls.js')) {
             return 'vendor-media'
           }
-          if (id.includes('@tanstack/react-query')) {
-            return 'vendor-query'
-          }
-          if (id.includes('react') || id.includes('react-dom')) {
-            return 'vendor-react'
-          }
-          if (id.includes('lucide-react')) {
-            return 'vendor-icons'
-          }
-          return 'vendor'
         },
       },
     },
