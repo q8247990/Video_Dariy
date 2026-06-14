@@ -2,8 +2,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Optional
 
-from src.application.qa.schemas import CompressedEvidence
-
 
 @dataclass
 class VideoSourcePromptContext:
@@ -51,23 +49,4 @@ class DailySummaryPromptInput:
     subject_sections: list[dict[str, Any]] = field(default_factory=list)
     missing_subjects: list[str] = field(default_factory=list)
     attention_candidates: list[dict[str, Any]] = field(default_factory=list)
-    locale: str | None = None
-
-
-@dataclass
-class QAIntentPromptInput:
-    question: str
-    now: datetime
-    timezone: str
-    home_context: dict[str, Any]
-    locale: str | None = None
-
-
-@dataclass
-class QAAnswerPromptInput:
-    question: str
-    now_iso: str
-    timezone: str
-    home_context_text: str
-    evidence: CompressedEvidence
     locale: str | None = None

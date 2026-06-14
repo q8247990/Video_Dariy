@@ -1,12 +1,8 @@
 from src.application.prompt.contracts import (
     DailySummaryPromptInput,
-    QAAnswerPromptInput,
-    QAIntentPromptInput,
     VideoRecognitionPromptInput,
 )
 from src.services.prompt_builder.v2.daily_summary import build_daily_summary_prompt
-from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
-from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
 from src.services.prompt_builder.v2.video_recognition import build_video_recognition_prompt
 
 
@@ -58,21 +54,4 @@ def compile_daily_summary_prompt(input_data: DailySummaryPromptInput) -> tuple[s
     )
 
 
-def compile_qa_intent_prompt(input_data: QAIntentPromptInput) -> tuple[str, str]:
-    return build_qa_intent_prompt(
-        question=input_data.question,
-        now=input_data.now,
-        timezone=input_data.timezone,
-        home_context=input_data.home_context,
-    )
 
-
-def compile_qa_answer_prompt(input_data: QAAnswerPromptInput) -> tuple[str, str]:
-    return build_qa_answer_prompt(
-        question=input_data.question,
-        now_iso=input_data.now_iso,
-        timezone=input_data.timezone,
-        home_context_text=input_data.home_context_text,
-        evidence=input_data.evidence,
-        locale=input_data.locale,
-    )
