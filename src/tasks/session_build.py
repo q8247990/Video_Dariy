@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
+from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import (
@@ -24,6 +25,9 @@ from src.services.session_builder import SessionBuilder
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
+    build_dedupe_key,
+    create_pending_task_log,
+    ensure_dict_detail,
     ensure_task_not_cancelled,
     finalize_cancelled_task_log,
     finalize_task_log,
@@ -76,19 +80,48 @@ def _compute_full_scan_end(now: datetime) -> datetime:
 
 
 def _dispatch_analysis_for_sealed(
+    db: Session,
     sealed_sessions: list,
 ) -> list[dict]:
-    """Dispatch analysis tasks for sealed sessions via Celery send_task."""
+    """为已封口的 Session 派发视频分析任务。
+
+    复用 ``create_pending_task_log`` 的部分唯一索引做原子去重，避免 hot_build
+    每 60 秒被 heartbeat 触发一次时对同一 Session 重复派发分析任务。
+    """
     dispatched: list[dict] = []
     for info in sealed_sessions:
         queue = "analysis_hot" if info.priority == ScanMode.HOT else "analysis_full"
+        pending_log: TaskLog | None = None
         try:
+            detail_payload = ensure_dict_detail({"priority": info.priority})
+            dedupe_key = build_dedupe_key(
+                TaskType.SESSION_ANALYSIS, info.session_id, detail_payload
+            )
+            detail_payload["dedupe_key"] = dedupe_key
+
+            pending_log, created = create_pending_task_log(
+                db,
+                task_type=TaskType.SESSION_ANALYSIS,
+                task_target_id=info.session_id,
+                detail_json=detail_payload,
+            )
+            if not created:
+                logger.info(
+                    "跳过重复分析派发: session=%s 已有活跃任务 task_log_id=%s",
+                    info.session_id,
+                    pending_log.id,
+                )
+                continue
+
             task = celery_app.send_task(
                 "src.tasks.analyzer.analyze_session_task",
                 args=[info.session_id],
                 kwargs={"priority": info.priority},
                 queue=queue,
             )
+            pending_log.queue_task_id = str(task.id)
+            pending_log.message = "Queued"
+            db.commit()
             dispatched.append(
                 {
                     "session_id": info.session_id,
@@ -96,8 +129,24 @@ def _dispatch_analysis_for_sealed(
                     "queue": queue,
                 }
             )
-        except Exception:
-            logger.exception("Failed to dispatch analysis for session %s", info.session_id)
+        except Exception as exc:
+            logger.exception(
+                "Failed to dispatch analysis for session %s", info.session_id
+            )
+            if isinstance(pending_log, TaskLog):
+                try:
+                    db.rollback()
+                    pending_log.status = TaskStatus.FAILED
+                    pending_log.finished_at = datetime.now()
+                    pending_log.message = f"Failed to enqueue: {exc}"
+                    db.add(pending_log)
+                    db.commit()
+                except Exception:
+                    logger.exception(
+                        "Failed to mark pending_log FAILED for session %s",
+                        info.session_id,
+                    )
+                    db.rollback()
     return dispatched
 
 
@@ -176,7 +225,7 @@ def hot_build_task(self, source_id: int) -> dict:
             db.commit()
 
             # Dispatch analysis for sealed sessions
-            dispatched = _dispatch_analysis_for_sealed(build_result.sealed_sessions)
+            dispatched = _dispatch_analysis_for_sealed(db, build_result.sealed_sessions)
 
             return {
                 "files_found": build_result.files_found,
@@ -297,7 +346,7 @@ def full_build_task(self, source_id: int) -> dict:
             db.commit()
 
             # Dispatch analysis for sealed sessions
-            dispatched = _dispatch_analysis_for_sealed(build_result.sealed_sessions)
+            dispatched = _dispatch_analysis_for_sealed(db, build_result.sealed_sessions)
 
             return {
                 "files_found": build_result.files_found,

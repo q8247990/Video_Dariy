@@ -113,7 +113,36 @@ services:
       - app_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: celery -A src.core.celery_app worker --loglevel=info -Q celery,analysis_hot,analysis_full
+    command: celery -A src.core.celery_app worker --loglevel=info -Q celery
+    networks:
+      - app_bridge
+
+  celery_vision_worker:
+    image: ghcr.io/q8247990/video_dariy/backend:${IMAGE_TAG:-latest}
+    container_name: hm_celery_vision_worker
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      VIDEO_ROOT_PATH: /data/videos
+      PLAYBACK_CACHE_ROOT: /data/hls
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+      - app_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A src.core.celery_app worker --loglevel=info -Q analysis_hot,analysis_full --concurrency=1
     networks:
       - app_bridge
 

@@ -1,7 +1,8 @@
 """Session analysis task: LLM-based video recognition.
 
-Uses dedicated Celery queues (analysis_hot / analysis_full) with
-worker concurrency=2 to control parallel analysis.
+Uses dedicated Celery queues (analysis_hot / analysis_full) consumed by the
+dedicated celery_vision_worker with --concurrency=1, so globally at most one
+session analysis task runs at any moment.
 """
 
 import logging
@@ -299,8 +300,9 @@ def _build_provider_client(db: Session) -> tuple[Any, LLMProvider]:
 def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict:  # noqa: C901
     """Analyze a sealed session using LLM vision.
 
-    Dispatched to analysis_hot or analysis_full queue by the caller.
-    Worker concurrency on these queues controls parallelism (max 2).
+    Dispatched to the analysis_hot or analysis_full queue by the caller and
+    consumed by the dedicated celery_vision_worker (--concurrency=1).
+    The worker process runs at most one session analysis task at a time.
     """
     with task_db_session() as db:
         session = None
