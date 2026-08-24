@@ -169,7 +169,7 @@
 - `VideoSessionFileRel`：Session 与文件片段顺序关系
 - `EventRecord`：AI 识别出的结构化事件
 - `DailySummary`：日报
-- `LLMProvider`：模型服务配置
+- `LLMProvider`：模型服务配置（含 `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` 三个视频预处理字段，控制 §5.2 关键帧路径）
 - `TaskLog`：异步任务日志与状态
 - `WebhookConfig`：Webhook 配置
 - `HomeProfile` / `HomeEntityProfile`：家庭画像
@@ -280,26 +280,33 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 - `src/tasks/analyzer.py`
 - `src/services/session_analysis_video.py`
+- `src/services/keyframe_extractor.py`
 - `src/services/video_analysis/output_parser.py`
 - `src/services/video_analysis/mapper.py`
 
 流程：
 
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
-2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒
-3. 为每个切片构造视频数据 URL 与识别 Prompt
-4. 调用兼容 OpenAI 的视觉模型
-5. 解析返回 JSON，转换为多个 `EventRecord`
-6. 覆盖替换该 Session 历史事件
-7. 汇总片段摘要并回写到 `VideoSession`
-8. 更新分析状态为 `SUCCESS`
+2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒（10 分钟 session-level chunk）
+3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 300 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
+4. 根据 `LLMProvider.video_preprocess_mode` 决定 LLM 载荷：
+   - `keyframe`（默认）：客户端 ffmpeg 单遍解码源 mp4，2fps 采样 + 在线 MAD/pHash 决策 + top-N JPEG 关键帧（`video_keyframe_target_n` 控制 N，默认 64）。组装 `data:video/jpeg;base64,<J1>,<J2>,...` 并附加 `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}`（REPORT §4.2）。
+   - `raw_mp4`：回退到旧路径 `data:video/mp4;base64,...`。
+   - `keyframe` 提取失败时，若 `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4=true`，自动 fallback 到 `raw_mp4`。
+5. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
+6. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
+7. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
+8. 覆盖替换该 Session 历史事件
+9. 汇总片段摘要并回写到 `VideoSession`
+10. 更新分析状态为 `SUCCESS`
 
 附加机制：
 
-- 任务日志绑定与状态落库
+- 任务日志绑定与状态落库；detail_json 新增字段 `sub_chunk_count` / `llm_chunk_seconds` / `preprocess_mode` / `keyframe_total` / `keyframe_fallback`
 - token quota 检查与 token usage 记录
 - 死锁重试与分析状态回滚
 - 失败时保留原始模型返回摘要片段，方便排查
+- 关键帧提取 ffmpeg stderr 末 1KB 截断（异常信息不污染 TaskLog）
 
 ### 5.3 家庭日报生成
 
@@ -471,6 +478,11 @@ DailySummary 1 --- 1 summary_date
 - `ENTITY_IMAGE_ROOT`
 - `SESSION_PLAYBACK_MODE`
 - `ANALYZER_SEGMENT_SECONDS`
+- `ANALYZER_LLM_CHUNK_SECONDS`（默认 300；每个 LLM 调用的 sub-chunk 时长）
+- `ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS`（默认 8）
+- `ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD`（默认 1.0）
+- `ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD`（默认 6）
+- `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4`（默认 true）
 
 说明：当前根目录 `.env.example` 已按 PostgreSQL、Redis、MCP 与播放缓存目录的实际配置同步更新，推荐以 `src/core/config.py` 和 `docker-compose.yml` 为最终运行准则。
 

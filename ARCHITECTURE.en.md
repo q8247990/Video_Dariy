@@ -167,7 +167,7 @@ Core entities:
 - `VideoSessionFileRel`: Ordered relationship between sessions and file segments
 - `EventRecord`: Structured event identified by AI
 - `DailySummary`: Daily report
-- `LLMProvider`: Model service configuration
+- `LLMProvider`: Model service configuration (includes `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` fields controlling §5.2 keyframe path)
 - `TaskLog`: Async task log and status
 - `WebhookConfig`: Webhook configuration
 - `HomeProfile` / `HomeEntityProfile`: Family profile
@@ -274,26 +274,33 @@ Core code:
 
 - `src/tasks/analyzer.py`
 - `src/services/session_analysis_video.py`
+- `src/services/keyframe_extractor.py`
 - `src/services/video_analysis/output_parser.py`
 - `src/services/video_analysis/mapper.py`
 
 Workflow:
 
 1. Tasks can only claim a session from `SEALED` state, transitioning it to `ANALYZING`
-2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds
-3. For each slice, a video data URL and recognition prompt are constructed
-4. An OpenAI-compatible vision model is called
-5. The returned JSON is parsed and converted into multiple `EventRecord` entries
-6. Previous events for the session are replaced (overwrite strategy)
-7. Segment summaries are aggregated and written back to `VideoSession`
-8. Analysis status is updated to `SUCCESS`
+2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds (10-min session-level chunk)
+3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 300 seconds) into sub-chunks; one LLM call per sub-chunk
+4. Branch on `LLMProvider.video_preprocess_mode`:
+   - `keyframe` (default): client-side ffmpeg single-pass decode of source mp4 (2fps sample + online MAD/pHash decision + top-N JPEG keyframes, where N is `video_keyframe_target_n`, default 64). Assemble `data:video/jpeg;base64,<J1>,<J2>,...` plus `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}` (REPORT §4.2).
+   - `raw_mp4`: legacy `data:video/mp4;base64,...` path.
+   - When `keyframe` extraction fails AND `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4=true`, automatically fall back to `raw_mp4`.
+5. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
+6. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)
+7. The returned JSON is parsed and converted into multiple `EventRecord` entries (offsets are absolute session-time, non-negative)
+8. Previous events for the session are replaced (overwrite strategy)
+9. Segment summaries are aggregated and written back to `VideoSession`
+10. Analysis status is updated to `SUCCESS`
 
 Additional mechanisms:
 
-- Task log binding and status persistence
+- Task log binding and status persistence; detail_json adds `sub_chunk_count` / `llm_chunk_seconds` / `preprocess_mode` / `keyframe_total` / `keyframe_fallback`
 - Token quota checking and token usage recording
 - Deadlock retry and analysis status rollback
 - On failure, the raw model response summary fragments are preserved for debugging
+- ffmpeg stderr tail bounded to last 1KB to keep TaskLog clean
 
 ### 5.3 Daily Family Report Generation
 
