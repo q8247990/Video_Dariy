@@ -178,9 +178,57 @@ def test_emit_jpeg_base64_produces_valid_jpeg() -> None:
     frame = np.full((480, 640, 3), 128, dtype=np.uint8)
     b64 = ke._emit_jpeg_base64(frame, jpeg_quality=90)
     import base64 as _b64
-
     raw = _b64.b64decode(b64)
     assert raw[:3] == b"\xff\xd8\xff"
+
+
+def test_decode_pipe_raises_on_ffmpeg_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REPORT §7: ffmpeg stderr last 1KB surfaces in KeyframeExtractionError."""
+    import io
+    from pathlib import Path as _Path
+
+    class _FakeProc:
+        def __init__(self) -> None:
+            self.stdout = io.BytesIO(b"")  # empty stream → loop exits immediately
+            self.stderr = io.BytesIO(b"x" * 2000 + b" bad_input_marker tail")
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return 1
+
+    monkeypatch.setattr(ke, "_detect_dimensions", lambda _p: (320, 240))
+    monkeypatch.setattr(
+        "src.services.keyframe_extractor.subprocess.Popen",
+        lambda *a, **kw: _FakeProc(),
+    )
+
+    with pytest.raises(ke.KeyframeExtractionError) as exc_info:
+        list(ke._decode_file_with_ffmpeg_pipe(_Path("/fake/bad.mp4"), fps_target=2))
+
+    msg = str(exc_info.value)
+    assert "bad_input_marker" in msg
+    assert "exit=1" in msg
+
+
+def test_decode_pipe_raises_when_ffmpeg_binary_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FileNotFoundError from Popen surfaces as KeyframeExtractionError."""
+    from pathlib import Path as _Path
+
+    def _raise_filenotfound(*args, **kwargs):
+        del args, kwargs
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(ke, "_detect_dimensions", lambda _p: (320, 240))
+    monkeypatch.setattr(
+        "src.services.keyframe_extractor.subprocess.Popen", _raise_filenotfound
+    )
+
+    with pytest.raises(ke.KeyframeExtractionError, match="ffmpeg not installed"):
+        list(ke._decode_file_with_ffmpeg_pipe(_Path("/fake/missing.mp4"), fps_target=2))
 
 
 def test_periodic_anchor_resets_after_fire(

@@ -287,14 +287,28 @@ def _decode_file_with_ffmpeg_pipe(path: Path, fps_target: int) -> Iterator[np.nd
             proc.stdout.close()
         except Exception:  # noqa: BLE001
             pass
+        stderr_tail = b""
         if proc.stderr is not None:
+            try:
+                stderr_tail = proc.stderr.read()
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 proc.stderr.close()
             except Exception:  # noqa: BLE001
                 pass
         returncode = proc.wait(timeout=10)
         if returncode != 0:
-            logger.warning("ffmpeg exited with code %s for %s", returncode, path)
+            tail = stderr_tail[-_STDERR_TAIL_BYTES:].decode("utf-8", errors="ignore")
+            logger.warning(
+                "ffmpeg decode failed for %s (exit=%s): %s",
+                path,
+                returncode,
+                tail,
+            )
+            raise KeyframeExtractionError(
+                f"ffmpeg decode failed for {path} (exit={returncode}): {tail}"
+            )
 
 
 def _detect_dimensions(path: Path) -> tuple[int, int]:
