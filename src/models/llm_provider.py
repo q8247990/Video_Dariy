@@ -29,7 +29,7 @@ class LLMProvider(Base):
         String(16), nullable=False, server_default="keyframe"
     )
     video_keyframe_target_n: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="64"
+        Integer, nullable=False, server_default="128"
     )
     video_keyframe_jpeg_quality: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="88"

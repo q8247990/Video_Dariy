@@ -42,7 +42,7 @@ function getInitialState(initialValue?: Provider): FormState {
     supports_tool_calling: initialValue?.supports_tool_calling ?? false,
     video_preprocess_mode:
       initialValue?.video_preprocess_mode === 'raw_mp4' ? 'raw_mp4' : 'keyframe',
-    video_keyframe_target_n: initialValue?.video_keyframe_target_n ?? 64,
+    video_keyframe_target_n: initialValue?.video_keyframe_target_n ?? 128,
     video_keyframe_jpeg_quality: initialValue?.video_keyframe_jpeg_quality ?? 88,
   }
 }
