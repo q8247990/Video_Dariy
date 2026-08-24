@@ -43,9 +43,9 @@ def test_video_preprocess_mode_rejects_unknown_value() -> None:
     assert "video_preprocess_mode" in str(exc_info.value)
 
 
-def test_video_keyframe_target_n_default_is_128() -> None:
+def test_video_keyframe_target_n_default_is_120() -> None:
     obj = LLMProviderBase(**_base_kwargs())
-    assert obj.video_keyframe_target_n == 128
+    assert obj.video_keyframe_target_n == 120
 
 
 def test_video_keyframe_target_n_rejects_zero() -> None:

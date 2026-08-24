@@ -24,7 +24,7 @@ class LLMProviderBase(BaseModel):
     is_default_vision: bool = False
     is_default_qa: bool = False
     video_preprocess_mode: str = "keyframe"
-    video_keyframe_target_n: int = 128
+    video_keyframe_target_n: int = 120
     video_keyframe_jpeg_quality: int = 88
 
     @field_validator("video_preprocess_mode")

@@ -10,7 +10,7 @@ def test_default_settings_load_cleanly() -> None:
     from src.core.config import Settings
 
     s = Settings()
-    assert s.ANALYZER_LLM_CHUNK_SECONDS == 300
+    assert s.ANALYZER_LLM_CHUNK_SECONDS == 60
     assert s.ANALYZER_SEGMENT_SECONDS == 600
     assert s.ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4 is True
 

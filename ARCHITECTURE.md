@@ -288,7 +288,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
 2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒（10 分钟 session-level chunk）
-3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 300 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
+3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 60 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
 4. 根据 `LLMProvider.video_preprocess_mode` 决定 LLM 载荷：
    - `keyframe`（默认）：客户端 ffmpeg 单遍解码源 mp4，2fps 采样 + 在线 MAD/pHash 决策 + top-N JPEG 关键帧（`video_keyframe_target_n` 控制 N，默认 64）。组装 `data:video/jpeg;base64,<J1>,<J2>,...` 并附加 `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}`（REPORT §4.2）。
    - `raw_mp4`：回退到旧路径 `data:video/mp4;base64,...`。

@@ -282,7 +282,7 @@ Workflow:
 
 1. Tasks can only claim a session from `SEALED` state, transitioning it to `ANALYZING`
 2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds (10-min session-level chunk)
-3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 300 seconds) into sub-chunks; one LLM call per sub-chunk
+3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 60 seconds) into sub-chunks; one LLM call per sub-chunk
 4. Branch on `LLMProvider.video_preprocess_mode`:
    - `keyframe` (default): client-side ffmpeg single-pass decode of source mp4 (2fps sample + online MAD/pHash decision + top-N JPEG keyframes, where N is `video_keyframe_target_n`, default 64). Assemble `data:video/jpeg;base64,<J1>,<J2>,...` plus `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}` (REPORT §4.2).
    - `raw_mp4`: legacy `data:video/mp4;base64,...` path.
