@@ -194,3 +194,73 @@ def test_chat_completion_no_retry_on_400(monkeypatch) -> None:
         client.chat_completion(messages=[{"role": "user", "content": "hi"}])
 
     assert call_count == 1
+
+
+def test_chat_completion_merges_extra_body(monkeypatch) -> None:
+    recorded_requests: list[dict[str, Any]] = []
+
+    def _client_factory(*args, **kwargs) -> _DummyClient:  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return _DummyClient(
+            recorded_requests,
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    monkeypatch.setattr("src.providers.openai_client.httpx.Client", _client_factory)
+
+    client = OpenAIClient(
+        api_base_url="http://example.com/v1",
+        api_key="dummy",
+        model_name="qwen3.5-9b",
+    )
+
+    extra = {
+        "media_io_kwargs": {
+            "video": {
+                "fps": 19.955,
+                "total_num_frames": 5985,
+                "frames_indices": [24, 130, 480, 491, 1210],
+                "num_frames": -1,
+            }
+        }
+    }
+    client.chat_completion(
+        messages=[{"role": "user", "content": "hi"}],
+        extra_body=extra,
+    )
+
+    sent = recorded_requests[0]["json"]
+    assert sent["media_io_kwargs"] == extra["media_io_kwargs"]
+    assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_chat_completion_default_extra_body_is_no_op(monkeypatch) -> None:
+    recorded_requests: list[dict[str, Any]] = []
+
+    def _client_factory(*args, **kwargs) -> _DummyClient:  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return _DummyClient(
+            recorded_requests,
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    monkeypatch.setattr("src.providers.openai_client.httpx.Client", _client_factory)
+
+    client = OpenAIClient(
+        api_base_url="http://example.com/v1",
+        api_key="dummy",
+        model_name="qwen3.5-9b",
+    )
+
+    client.chat_completion(messages=[{"role": "user", "content": "hi"}])
+
+    sent = recorded_requests[0]["json"]
+    assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "media_io_kwargs" not in sent
+    assert "extra_body" not in sent

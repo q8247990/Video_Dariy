@@ -77,11 +77,18 @@ class OpenAIClient:
         temperature: float = 0.2,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> Optional[str]:
+        """Chat completion. ``extra_body`` is shallow-merged into the request payload
+        AFTER ``_build_default_request_extras()`` so provider-specific defaults
+        (e.g. ``chat_template_kwargs`` for qwen) are preserved unless explicitly
+        overridden. Default ``None`` is a no-op."""
         url = f"{self.api_base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"model": self.model_name, "messages": messages, "temperature": temperature}
         payload.update(self._build_default_request_extras())
+        if extra_body:
+            payload.update(extra_body)
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if response_format is not None:

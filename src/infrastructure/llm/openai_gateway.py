@@ -15,12 +15,14 @@ class OpenAICompatGateway(LLMGatewayPort):
         temperature: float = 0.2,
         max_tokens: Optional[int] = None,
         response_format: Optional[dict[str, Any]] = None,
+        extra_body: Optional[dict[str, Any]] = None,
     ) -> Optional[str]:
         return self.client.chat_completion(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            extra_body=extra_body,
         )
 
     def chat_completion_with_tools(
