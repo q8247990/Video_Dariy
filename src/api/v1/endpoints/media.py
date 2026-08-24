@@ -19,13 +19,23 @@ router = APIRouter()
 # if we want to stream directly to <video src="...">, often done via query param token.
 
 
+def _clamp_range_end(byte2: int, file_size: int) -> int:
+    """Clamp the inclusive end offset to the last valid byte index."""
+    return min(byte2, file_size - 1)
+
+
 def send_bytes_range_requests(file_obj, start: int, end: int, chunk_size: int = 1024 * 1024):
-    """Send a file in chunks for Range requests."""
+    """Stream a byte range from ``file_obj``. Stops cleanly at EOF or end offset."""
     with file_obj as f:
         f.seek(start)
-        while (pos := f.tell()) <= end:
-            read_size = min(chunk_size, end + 1 - pos)
-            yield f.read(read_size)
+        while True:
+            pos = f.tell()
+            if pos > end:
+                break
+            chunk = f.read(min(chunk_size, end - pos + 1))
+            if not chunk:
+                break
+            yield chunk
 
 
 @router.get("/files/{file_id}/stream")
@@ -49,6 +59,7 @@ def stream_video(file_id: int, db: DB, locale: Locale, request: Request):
             byte2 = int(match[1])
         else:
             byte2 = file_size - 1
+        byte2 = _clamp_range_end(byte2, file_size)
 
         length = byte2 - byte1 + 1
 
@@ -155,6 +166,7 @@ def stream_session_merged_video(session_id: int, db: DB, locale: Locale, request
             byte2 = int(match[1])
         else:
             byte2 = file_size - 1
+        byte2 = _clamp_range_end(byte2, file_size)
 
         length = byte2 - byte1 + 1
         headers = {
