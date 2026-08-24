@@ -213,7 +213,9 @@ def test_call_tool_ask_home_monitor_success(monkeypatch) -> None:
             temperature=0.2,
             max_tokens=None,
             response_format=None,
+            extra_body=None,
         ):
+            del messages, temperature, max_tokens, response_format, extra_body
             _call_count["n"] += 1
             if _call_count["n"] == 1:
                 # 意图识别阶段：返回结构化 JSON
