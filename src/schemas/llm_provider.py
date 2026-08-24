@@ -1,7 +1,13 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+_VIDEO_PREPROCESS_MODES = {"keyframe", "raw_mp4"}
+_KEYFRAME_TARGET_N_MIN = 16
+_KEYFRAME_TARGET_N_MAX = 256
+_KEYFRAME_JPEG_QUALITY_MIN = 50
+_KEYFRAME_JPEG_QUALITY_MAX = 100
 
 
 class LLMProviderBase(BaseModel):
@@ -17,6 +23,41 @@ class LLMProviderBase(BaseModel):
     supports_tool_calling: bool = False
     is_default_vision: bool = False
     is_default_qa: bool = False
+    video_preprocess_mode: str = "keyframe"
+    video_keyframe_target_n: int = 64
+    video_keyframe_jpeg_quality: int = 88
+
+    @field_validator("video_preprocess_mode")
+    @classmethod
+    def _validate_video_preprocess_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in _VIDEO_PREPROCESS_MODES:
+            raise ValueError(
+                f"video_preprocess_mode must be one of "
+                f"{sorted(_VIDEO_PREPROCESS_MODES)}, got {value!r}"
+            )
+        return normalized
+
+    @field_validator("video_keyframe_target_n")
+    @classmethod
+    def _validate_video_keyframe_target_n(cls, value: int) -> int:
+        if not (_KEYFRAME_TARGET_N_MIN <= value <= _KEYFRAME_TARGET_N_MAX):
+            raise ValueError(
+                f"video_keyframe_target_n must be in "
+                f"[{_KEYFRAME_TARGET_N_MIN}, {_KEYFRAME_TARGET_N_MAX}], got {value}"
+            )
+        return value
+
+    @field_validator("video_keyframe_jpeg_quality")
+    @classmethod
+    def _validate_video_keyframe_jpeg_quality(cls, value: int) -> int:
+        if not (_KEYFRAME_JPEG_QUALITY_MIN <= value <= _KEYFRAME_JPEG_QUALITY_MAX):
+            raise ValueError(
+                f"video_keyframe_jpeg_quality must be in "
+                f"[{_KEYFRAME_JPEG_QUALITY_MIN}, {_KEYFRAME_JPEG_QUALITY_MAX}], "
+                f"got {value}"
+            )
+        return value
 
 
 class LLMProviderCreate(LLMProviderBase):
