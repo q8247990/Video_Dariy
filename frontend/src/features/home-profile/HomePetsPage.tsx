@@ -320,7 +320,7 @@ export function HomePetsPage() {
   const rows = listQuery.data ?? []
   const options = optionsQuery.data
   if (!options) {
-    return <ApiErrorAlert message={t('home_profile.no_options_pets', '未获取到宠物选项')} />
+    return <ApiErrorAlert message={t('common.load_failed_retry')} />
   }
 
   return (

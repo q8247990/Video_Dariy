@@ -81,7 +81,7 @@ export function WebhooksPage() {
     mutationFn: createWebhook,
     onSuccess: () => {
       setShowCreate(false)
-      setMessage('Webhook 创建成功')
+      setMessage(t('webhooks.create_success'))
       queryClient.invalidateQueries({ queryKey: ['webhooks'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -91,7 +91,7 @@ export function WebhooksPage() {
     mutationFn: ({ id, payload }: { id: number; payload: WebhookUpdate }) => updateWebhook(id, payload),
     onSuccess: () => {
       setEditing(null)
-      setMessage('Webhook 更新成功')
+      setMessage(t('webhooks.update_success'))
       queryClient.invalidateQueries({ queryKey: ['webhooks'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -100,7 +100,7 @@ export function WebhooksPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteWebhook,
     onSuccess: () => {
-      setMessage('Webhook 删除成功')
+      setMessage(t('webhooks.delete_success'))
       queryClient.invalidateQueries({ queryKey: ['webhooks'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -108,12 +108,12 @@ export function WebhooksPage() {
 
   const testMutation = useMutation({
     mutationFn: testWebhook,
-    onSuccess: (data) => setMessage(data.message || '测试任务已触发'),
+    onSuccess: (data) => setMessage(data.message || t('webhooks.test_success_default')),
     onError: (error) => setMessage((error as Error).message),
   })
 
   if (listQuery.isLoading) {
-    return <LoadingBlock text="加载 Webhook 配置中" />
+    return <LoadingBlock text={t('webhooks.loading')} />
   }
 
   if (listQuery.error) {
@@ -141,7 +141,7 @@ export function WebhooksPage() {
     <div>
       <PageHeader
         title={t('webhooks.title')}
-        subtitle="配置外部通知推送规则"
+        subtitle={t('webhooks.subtitle')}
         actions={<button onClick={() => setShowCreate(true)}>{t('webhooks.add_webhook')}</button>}
       />
 
@@ -151,12 +151,12 @@ export function WebhooksPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>名称</th>
-              <th>URL</th>
-              <th>事件类型</th>
-              <th>状态</th>
-              <th>操作</th>
+              <th>{t('webhooks.table_col_id')}</th>
+              <th>{t('webhooks.table_col_name')}</th>
+              <th>{t('webhooks.table_col_url')}</th>
+              <th>{t('webhooks.table_col_events')}</th>
+              <th>{t('webhooks.table_col_status')}</th>
+              <th>{t('webhooks.table_col_actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -172,20 +172,20 @@ export function WebhooksPage() {
                 <td>
                   <div className="row-actions">
                     <button className="ghost" onClick={() => setEditing(item)}>
-                      编辑
+                      {t('webhooks.action_edit')}
                     </button>
                     <button className="ghost" onClick={() => testMutation.mutate(item.id)}>
-                      测试
+                      {t('webhooks.action_test')}
                     </button>
                     <button
                       className="ghost"
                       onClick={() => {
-                        if (window.confirm(`确认删除 Webhook「${item.name}」吗？`)) {
+                        if (window.confirm(t('webhooks.delete_confirm', { name: item.name }))) {
                           deleteMutation.mutate(item.id)
                         }
                       }}
                     >
-                      删除
+                      {t('webhooks.action_delete')}
                     </button>
                   </div>
                 </td>
@@ -194,7 +194,7 @@ export function WebhooksPage() {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="empty-cell">
-                  暂无 Webhook 配置
+                  {t('webhooks.empty')}
                 </td>
               </tr>
             ) : null}
@@ -204,14 +204,14 @@ export function WebhooksPage() {
 
       <div className="grid-two debug-sample-grid">
         <article className="card debug-sample-card">
-          <h3>Webhook 日报样例（结构化）</h3>
-          <p className="text-muted">事件类型：daily_summary_generated</p>
+          <h3>{t('webhooks.sample_daily_summary')}</h3>
+          <p className="text-muted">{t('webhooks.sample_daily_summary_subtitle')}</p>
           <pre>{JSON.stringify(webhookDailySummarySample, null, 2)}</pre>
         </article>
 
         <article className="card debug-sample-card">
-          <h3>MCP get_daily_summary 样例</h3>
-          <p className="text-muted">用于 MCP 客户端联调结构化日报字段</p>
+          <h3>{t('webhooks.sample_mcp_title')}</h3>
+          <p className="text-muted">{t('webhooks.sample_mcp_hint')}</p>
           <pre>{JSON.stringify(mcpDailySummarySample, null, 2)}</pre>
         </article>
       </div>

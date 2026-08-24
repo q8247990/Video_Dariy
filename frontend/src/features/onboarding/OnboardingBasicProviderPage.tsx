@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import type { ProviderCreate } from '../../types/api'
 import { createOnboardingProvider, testOnboardingProvider } from './api'
 import { useOnboardingDraftStore } from './state'
 
 export function OnboardingBasicProviderPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const provider = useOnboardingDraftStore((state) => state.provider)
   const setProvider = useOnboardingDraftStore((state) => state.setProvider)
@@ -21,7 +23,7 @@ export function OnboardingBasicProviderPage() {
     mutationFn: createOnboardingProvider,
     onSuccess: (data) => {
       setProvider({ provider_id: data.id, skipped: false })
-      setMessage('Provider 保存成功，请测试连接。')
+      setMessage(t('onboarding.step_basic_provider_save_success'))
     },
     onError: (error) => setMessage((error as Error).message),
   })
@@ -43,7 +45,7 @@ export function OnboardingBasicProviderPage() {
 
   const onSave = () => {
     const payload: ProviderCreate = {
-      provider_name: '默认 Provider',
+      provider_name: t('onboarding.step_basic_provider_default'),
       api_base_url: provider.api_base_url.trim(),
       api_key: provider.api_key.trim(),
       model_name: provider.model_name.trim(),
@@ -64,14 +66,17 @@ export function OnboardingBasicProviderPage() {
 
   return (
     <div>
-      <PageHeader title="阶段一 · 配置 Provider" subtitle="这一步决定分析、日报和问答是否可用" />
+      <PageHeader
+        title={t('onboarding.step_basic_provider_title')}
+        subtitle={t('onboarding.step_basic_provider_subtitle')}
+      />
       <div className="card config-form">
         {message ? <div className={provider.tested ? 'api-ok' : 'api-error'}>{message}</div> : null}
         {provider.skipped ? (
-          <div className="api-error">你已跳过 Provider，系统当前不算基础可运行，分析/日报/问答不可用。</div>
+          <div className="api-error">{t('onboarding.step_basic_provider_skip_warning')}</div>
         ) : null}
         <label>
-          API URL
+          {t('onboarding.form_api_url')}
           <input
             value={provider.api_base_url}
             onChange={(event) => setProvider({ api_base_url: event.target.value, tested: false })}
@@ -79,7 +84,7 @@ export function OnboardingBasicProviderPage() {
           />
         </label>
         <label>
-          API Key
+          {t('onboarding.form_api_key')}
           <input
             type="password"
             value={provider.api_key}
@@ -87,7 +92,7 @@ export function OnboardingBasicProviderPage() {
           />
         </label>
         <label>
-          模型名称
+          {t('onboarding.form_model_name')}
           <input
             value={provider.model_name}
             onChange={(event) => setProvider({ model_name: event.target.value, tested: false })}
@@ -96,7 +101,7 @@ export function OnboardingBasicProviderPage() {
 
         <div className="onboarding-actions">
           <button className="ghost" onClick={() => navigate('/onboarding/basic/video')}>
-            上一步
+            {t('onboarding.step_prev')}
           </button>
           <button
             className="ghost"
@@ -105,10 +110,10 @@ export function OnboardingBasicProviderPage() {
               navigate('/onboarding/basic/summary-time')
             }}
           >
-            跳过此步
+            {t('onboarding.step_skip')}
           </button>
           <button onClick={onSave} disabled={!canSave || createMutation.isPending}>
-            {createMutation.isPending ? '保存中...' : '保存'}
+            {createMutation.isPending ? t('onboarding.saving') : t('onboarding.step_save')}
           </button>
           <button
             onClick={() => {
@@ -118,7 +123,7 @@ export function OnboardingBasicProviderPage() {
             }}
             disabled={!provider.provider_id || testMutation.isPending}
           >
-            {testMutation.isPending ? '测试中...' : '测试连接并下一步'}
+            {testMutation.isPending ? t('onboarding.testing') : t('onboarding.step_test_and_next')}
           </button>
         </div>
       </div>

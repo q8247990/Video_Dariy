@@ -11,15 +11,15 @@ import {
   triggerDailySummary,
 } from './api'
 
-function levelLabel(level: string): string {
+function levelLabel(level: string, t: (key: string) => string): string {
   if (level === 'high') {
-    return '高'
+    return t('daily_summaries.level_high')
   }
   if (level === 'medium') {
-    return '中'
+    return t('daily_summaries.level_medium')
   }
   if (level === 'low') {
-    return '低'
+    return t('daily_summaries.level_low')
   }
   return level
 }
@@ -47,7 +47,7 @@ export function DailySummariesPage() {
   const triggerMutation = useMutation({
     mutationFn: (date: string) => triggerDailySummary(date || undefined),
     onSuccess: (data) => {
-      setMessage(`已触发日报生成任务：${data.task_id}`)
+      setMessage(`${t('daily_summaries.task_created')}：${data.task_id}`)
     },
     onError: (error) => setMessage((error as Error).message),
   })
@@ -56,8 +56,10 @@ export function DailySummariesPage() {
     mutationFn: triggerAllDailySummaries,
     onSuccess: (data) => {
       setMessage(
-        `已按 ${data.earliest_date} 到 ${data.latest_date} 的 ${data.target_dates.length} 个日期下发 ${data.queued_count} 个日报任务` +
-          (data.skipped_count > 0 ? `，跳过 ${data.skipped_count} 个运行中日期` : ''),
+        `${t('daily_summaries.batch_generated_part1')}${data.earliest_date}${t('daily_summaries.batch_generated_part3')}${data.latest_date}${t('daily_summaries.batch_generated_part2')}${data.target_dates.length}${t('daily_summaries.batch_generated_part4')}${data.queued_count}` +
+          (data.skipped_count > 0
+            ? t('daily_summaries.batch_generated_part5', { skipped: data.skipped_count })
+            : ''),
       )
     },
     onError: (error) => setMessage((error as Error).message),
@@ -73,7 +75,7 @@ export function DailySummariesPage() {
     <div>
       <PageHeader
         title={t('daily_summaries.title')}
-        subtitle="查看每日总结并支持手动触发生成"
+        subtitle={t('daily_summaries.subtitle')}
         actions={
           <div className="summary-generate">
             <input
@@ -82,19 +84,19 @@ export function DailySummariesPage() {
               onChange={(event) => setManualDate(event.target.value)}
             />
             <button onClick={() => triggerMutation.mutate(manualDate)} disabled={triggerMutation.isPending}>
-              {triggerMutation.isPending ? '触发中...' : '生成日报'}
+              {triggerMutation.isPending ? t('daily_summaries.triggering') : t('daily_summaries.generate')}
             </button>
             <button
               className="ghost"
               onClick={() => {
-                if (!window.confirm('确认按已分析完成的 Session 日期批量生成全部日报吗？')) {
+                if (!window.confirm(t('daily_summaries.batch_confirm'))) {
                   return
                 }
                 triggerAllMutation.mutate()
               }}
               disabled={triggerAllMutation.isPending}
             >
-              {triggerAllMutation.isPending ? '生成中...' : '生成全部日报'}
+              {triggerAllMutation.isPending ? t('daily_summaries.generating') : t('daily_summaries.generate_all')}
             </button>
           </div>
         }
@@ -104,16 +106,16 @@ export function DailySummariesPage() {
 
       <div className="grid-two">
         <div className="card">
-          <h3>日报列表</h3>
-          {listQuery.isLoading ? <LoadingBlock text="加载日报列表中" /> : null}
+          <h3>{t('daily_summaries.list_title')}</h3>
+          {listQuery.isLoading ? <LoadingBlock text={t('daily_summaries.loading')} /> : null}
           {listQuery.error ? <ApiErrorAlert message={(listQuery.error as Error).message} /> : null}
           {!listQuery.isLoading && !listQuery.error ? (
             <>
               <table className="table">
                 <thead>
                   <tr>
-                    <th>日期</th>
-                    <th>标题</th>
+                    <th>{t('daily_summaries.col_date')}</th>
+                    <th>{t('daily_summaries.col_title')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -124,7 +126,7 @@ export function DailySummariesPage() {
                       onClick={() => setSelectedDate(item.summary_date)}
                     >
                       <td>{item.summary_date}</td>
-                      <td>{item.summary_title || `${item.summary_date} 家庭日报`}</td>
+                      <td>{item.summary_title || t('daily_summaries.default_title', { date: item.summary_date })}</td>
                     </tr>
                   ))}
                   {(listQuery.data?.list.length ?? 0) === 0 ? (
@@ -139,17 +141,17 @@ export function DailySummariesPage() {
 
               <div className="pager">
                 <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-                  上一页
+                  {t('daily_summaries.pager_prev')}
                 </button>
                 <span>
-                  第 {page} / {totalPages} 页，共 {total} 条
+                  {t('daily_summaries.pager_info', { page, totalPages, total })}
                 </span>
                 <button
                   className="ghost"
                   disabled={page >= totalPages}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 >
-                  下一页
+                  {t('daily_summaries.pager_next')}
                 </button>
               </div>
             </>
@@ -157,29 +159,29 @@ export function DailySummariesPage() {
         </div>
 
         <div className="card">
-          <h3>日报详情</h3>
-          {!resolvedSelectedDate ? <p className="text-muted">请选择左侧一条日报查看详情</p> : null}
-          {detailQuery.isLoading ? <LoadingBlock text="加载详情中" /> : null}
+          <h3>{t('daily_summaries.detail_title')}</h3>
+          {!resolvedSelectedDate ? <p className="text-muted">{t('daily_summaries.select_prompt')}</p> : null}
+          {detailQuery.isLoading ? <LoadingBlock text={t('daily_summaries.loading_detail')} /> : null}
           {detailQuery.error ? <ApiErrorAlert message={(detailQuery.error as Error).message} /> : null}
           {detail ? (
             <div className="summary-four-grid">
               <section className="summary-field-block">
-                <p className="summary-field-label">标题</p>
-                <article>{detail.summary_title || `${detail.summary_date} 家庭日报`}</article>
+                <p className="summary-field-label">{t('daily_summaries.field_title')}</p>
+                <article>{detail.summary_title || t('daily_summaries.default_title', { date: detail.summary_date })}</article>
               </section>
 
               <section className="summary-field-block">
-                <p className="summary-field-label">日期</p>
+                <p className="summary-field-label">{t('daily_summaries.field_date')}</p>
                 <article>{detail.summary_date}</article>
               </section>
 
               <section className="summary-field-block">
-                <p className="summary-field-label">总览</p>
-                <article>{detail.overall_summary?.trim() || '暂无总览内容'}</article>
+                <p className="summary-field-label">{t('daily_summaries.field_overall')}</p>
+                <article>{detail.overall_summary?.trim() || t('daily_summaries.empty_overall')}</article>
               </section>
 
               <section className="summary-field-block">
-                <p className="summary-field-label">详情</p>
+                <p className="summary-field-label">{t('daily_summaries.field_details')}</p>
                 {subjectSections.length > 0 ? (
                   <div className="summary-subject-list">
                     {subjectSections.map((item, index) => (
@@ -187,7 +189,11 @@ export function DailySummariesPage() {
                         <header>
                           <strong>{item.subject_name}</strong>
                           <span className="text-muted">
-                            {item.subject_type === 'member' ? '成员' : '宠物'} · 活动度 {item.activity_score ?? 0}
+                            {item.subject_type === 'member'
+                              ? t('daily_summaries.field_subject_type_member')
+                              : t('daily_summaries.field_subject_type_pet')}
+                            {' · '}
+                            {t('daily_summaries.field_activity_score')} {item.activity_score ?? 0}
                           </span>
                         </header>
                         <p>{item.summary}</p>
@@ -195,10 +201,10 @@ export function DailySummariesPage() {
                     ))}
                   </div>
                 ) : (
-                  <article>暂无对象小结</article>
+                  <article>{t('daily_summaries.empty_subject_sections')}</article>
                 )}
 
-                <p className="summary-field-label">关注事项</p>
+                <p className="summary-field-label">{t('daily_summaries.field_attention_items')}</p>
                 {attentionItems.length > 0 ? (
                   <div className="summary-attention-list">
                     {attentionItems.map((item, index) => (
@@ -206,7 +212,7 @@ export function DailySummariesPage() {
                         <header>
                           <strong>{item.title}</strong>
                           <span className={`summary-level summary-level-${item.level}`}>
-                            {levelLabel(item.level)}
+                            {levelLabel(item.level, t)}
                           </span>
                         </header>
                         <p>{item.summary}</p>
@@ -214,7 +220,7 @@ export function DailySummariesPage() {
                     ))}
                   </div>
                 ) : (
-                  <article>暂无关注事项</article>
+                  <article>{t('daily_summaries.empty_attention_items')}</article>
                 )}
               </section>
             </div>

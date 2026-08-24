@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import type { VideoSourceCreate } from '../../types/api'
 import { createOnboardingVideoSource, testVideoSource, validateVideoPath } from './api'
 import { useOnboardingDraftStore } from './state'
 
 export function OnboardingBasicVideoPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const video = useOnboardingDraftStore((state) => state.video)
   const setVideo = useOnboardingDraftStore((state) => state.setVideo)
@@ -68,32 +70,35 @@ export function OnboardingBasicVideoPage() {
 
   return (
     <div>
-      <PageHeader title="阶段一 · 接入家庭监控视频" subtitle="先校验目录，再保存视频源" />
+      <PageHeader
+        title={t('onboarding.step_basic_video_title')}
+        subtitle={t('onboarding.step_basic_video_subtitle')}
+      />
       <div className="card config-form">
         {message ? <div className={video.validated ? 'api-ok' : 'api-error'}>{message}</div> : null}
         <label>
-          视频源名称
+          {t('onboarding.form_source_name')}
           <input
             value={video.source_name}
             onChange={(event) => setVideo({ source_name: event.target.value, validated: false })}
           />
         </label>
         <label>
-          摄像头名称
+          {t('onboarding.form_camera_name')}
           <input
             value={video.camera_name}
             onChange={(event) => setVideo({ camera_name: event.target.value, validated: false })}
           />
         </label>
         <label>
-          所在位置
+          {t('onboarding.form_location_name')}
           <input
             value={video.location_name}
             onChange={(event) => setVideo({ location_name: event.target.value, validated: false })}
           />
         </label>
         <label>
-          视频目录路径
+          {t('onboarding.form_root_path')}
           <input
             value={video.root_path}
             onChange={(event) => setVideo({ root_path: event.target.value, validated: false })}
@@ -107,10 +112,10 @@ export function OnboardingBasicVideoPage() {
             onClick={() => validateMutation.mutate(video.root_path.trim())}
             disabled={!video.root_path.trim() || validateMutation.isPending}
           >
-            {validateMutation.isPending ? '校验中...' : '校验路径'}
+            {validateMutation.isPending ? t('onboarding.verify_pending') : t('onboarding.verify_path')}
           </button>
           <button onClick={onSubmit} disabled={!canSubmit || createMutation.isPending}>
-            {createMutation.isPending ? '保存中...' : '保存并下一步'}
+            {createMutation.isPending ? t('onboarding.saving') : t('onboarding.save_next')}
           </button>
         </div>
       </div>

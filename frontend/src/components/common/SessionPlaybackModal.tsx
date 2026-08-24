@@ -27,20 +27,20 @@ export function SessionPlaybackModal({ sessionId, open, onClose }: SessionPlayba
     <div className="dialog-mask" onClick={onClose}>
       <div className="dialog dialog-wide" onClick={(event) => event.stopPropagation()}>
         <div className="playback-head">
-          <h3>{t('sessions.playback_title', 'Session #{{id}} 回放', { id: sessionId })}</h3>
+          <h3>{t('sessions.playback_title', { id: sessionId })}</h3>
           <button className="ghost" onClick={onClose}>
-            {t('common.close', '关闭')}
+            {t('sessions.playback_close')}
           </button>
         </div>
 
-        {playbackQuery.isLoading ? <LoadingBlock text={t('sessions.loading_playback', '加载回放列表中')} /> : null}
+        {playbackQuery.isLoading ? <LoadingBlock text={t('sessions.playback_loading')} /> : null}
         {playbackQuery.error ? <ApiErrorAlert message={(playbackQuery.error as Error).message} /> : null}
 
         {!playbackQuery.isLoading && !playbackQuery.error ? (
           <div className="playback-grid">
             {playbackQuery.data?.playback_url ? (
                 <article className="playback-item">
-                  <h4>{t('sessions.hls_playback', '拼接回放')}</h4>
+                  <h4>{t('sessions.merged_playback')}</h4>
                   <HlsVideoPlayer
                     src={
                       playbackQuery.data.playback_url.startsWith('/api/v1')
@@ -50,7 +50,7 @@ export function SessionPlaybackModal({ sessionId, open, onClose }: SessionPlayba
                   />
                 </article>
             ) : (
-              <div className="empty-cell">{t('sessions.empty_playback', '当前 Session 暂无可播放文件')}</div>
+              <div className="empty-cell">{t('sessions.playback_empty')}</div>
             )}
           </div>
         ) : null}

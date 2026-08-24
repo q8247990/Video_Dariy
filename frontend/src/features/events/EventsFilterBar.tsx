@@ -25,28 +25,28 @@ export function EventsFilterBar({
   return (
     <div className="card tool-row tool-row-inline">
       <label>
-        {t('events.filter_source_id', '视频源编号（可选）')}
+        {t('events.filter_source_id')}
         <input
           value={sourceId}
           onChange={(event) => onSourceIdChange(event.target.value)}
-          placeholder={t('events.filter_source_id_placeholder', '按视频源ID筛选')}
+          placeholder={t('events.filter_source_id_placeholder')}
         />
       </label>
       <label>
-        {t('events.filter_analysis_status', '分析状态')}
+        {t('events.filter_analysis_status')}
         <select
           value={analysisStatus}
           onChange={(event) => onAnalysisStatusChange(event.target.value)}
         >
           <option value="">{t('events.filter_all')}</option>
           <option value="sealed">{t('events.status_pending')}</option>
-          <option value="analyzing">{t('events.status_analyzing', '分析中')}</option>
-          <option value="success">{t('events.status_success', '成功')}</option>
+          <option value="analyzing">{t('events.status_analyzing')}</option>
+          <option value="success">{t('events.status_success')}</option>
           <option value="failed">{t('events.status_failed')}</option>
         </select>
       </label>
       <label>
-        {t('events.filter_start_time', '开始时间')}
+        {t('events.filter_start_time')}
         <input
           type="datetime-local"
           value={startTime}
@@ -54,7 +54,7 @@ export function EventsFilterBar({
         />
       </label>
       <label>
-        {t('events.filter_end_time', '结束时间')}
+        {t('events.filter_end_time')}
         <input
           type="datetime-local"
           value={endTime}

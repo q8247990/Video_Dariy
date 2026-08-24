@@ -30,15 +30,15 @@ export function LoginPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <h1>家庭监控智能分析后台</h1>
-        <p>登录后可管理视频源、模型与任务流程</p>
+        <h1>{t('login.subtitle')}</h1>
+        <p>{t('login.logged_in_hint')}</p>
         <form onSubmit={handleSubmit}>
           <label>
             {t('login.username')}
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="请输入管理员账号"
+              placeholder={t('login.username_placeholder')}
               required
             />
           </label>
@@ -48,7 +48,7 @@ export function LoginPage() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="请输入密码"
+              placeholder={t('login.password_placeholder')}
               required
             />
           </label>

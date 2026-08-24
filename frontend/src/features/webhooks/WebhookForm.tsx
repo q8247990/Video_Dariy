@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
   WebhookConfig,
   WebhookCreate,
@@ -95,8 +96,12 @@ function getInitialState(initialValue?: WebhookConfig): FormState {
 }
 
 export function WebhookForm({ initialValue, pending, onCancel, onSubmit }: WebhookFormProps) {
+  const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
-  const submitLabel = useMemo(() => (initialValue ? '保存修改' : '创建 Webhook'), [initialValue])
+  const submitLabel = useMemo(
+    () => (initialValue ? t('webhooks.form_save_changes') : t('webhooks.form_create')),
+    [initialValue, t],
+  )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -129,7 +134,7 @@ export function WebhookForm({ initialValue, pending, onCancel, onSubmit }: Webho
   return (
     <form className="dialog-form" onSubmit={handleSubmit}>
       <label>
-        Webhook 名称
+        {t('webhooks.form_name_label')}
         <input
           required
           value={form.name}
@@ -138,17 +143,17 @@ export function WebhookForm({ initialValue, pending, onCancel, onSubmit }: Webho
       </label>
 
       <label>
-        回调地址 URL
+        {t('webhooks.form_callback_url')}
         <input
           required
           value={form.url}
           onChange={(event) => setForm((old) => ({ ...old, url: event.target.value }))}
-          placeholder="https://example.com/webhook"
+          placeholder={t('webhooks.form_url_placeholder')}
         />
       </label>
 
       <label>
-        订阅规则（event@version，逗号分隔）
+        {t('webhooks.form_event_filter')}
         <input
           value={form.eventTypesText}
           onChange={(event) => setForm((old) => ({ ...old, eventTypesText: event.target.value }))}
@@ -157,11 +162,11 @@ export function WebhookForm({ initialValue, pending, onCancel, onSubmit }: Webho
       </label>
 
       <label>
-        自定义请求头（每行 `key: value`）
+        {t('webhooks.form_headers_label')}
         <textarea
           value={form.headersText}
           onChange={(event) => setForm((old) => ({ ...old, headersText: event.target.value }))}
-          placeholder={'Authorization: Bearer xxx\nX-Source: video-diary'}
+          placeholder={t('webhooks.form_headers_placeholder')}
         />
       </label>
 
@@ -171,15 +176,15 @@ export function WebhookForm({ initialValue, pending, onCancel, onSubmit }: Webho
           checked={form.enabled}
           onChange={(event) => setForm((old) => ({ ...old, enabled: event.target.checked }))}
         />
-        启用该 Webhook
+        {t('webhooks.form_enabled_label')}
       </label>
 
       <div className="dialog-actions">
         <button type="button" className="ghost" onClick={onCancel}>
-          取消
+          {t('webhooks.form_cancel')}
         </button>
         <button type="submit" disabled={pending}>
-          {pending ? '处理中...' : submitLabel}
+          {pending ? t('webhooks.form_submitting') : submitLabel}
         </button>
       </div>
     </form>

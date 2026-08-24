@@ -23,6 +23,16 @@ import { VideoSourceForm } from './VideoSourceForm'
 import { VideoSourceStatusDialog } from './VideoSourceStatusDialog'
 import { analysisStateText } from './utils'
 
+function mapValidateStatusLabel(status: string | null, t: (key: string) => string): string {
+  if (status === 'success') {
+    return t('video_sources.verify_complete_success')
+  }
+  if (status === 'failed') {
+    return t('video_sources.verify_complete_failed')
+  }
+  return t('video_sources.verify_complete_unknown')
+}
+
 export function VideoSourcesPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -45,7 +55,7 @@ export function VideoSourcesPage() {
     mutationFn: createVideoSource,
     onSuccess: () => {
       setShowCreate(false)
-      setMessage('视频源创建成功')
+      setMessage(t('video_sources.create_success'))
       queryClient.invalidateQueries({ queryKey: ['video-sources'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -57,9 +67,9 @@ export function VideoSourcesPage() {
     onSuccess: (data) => {
       setEditing(null)
       if (data.last_validate_status === null) {
-        setMessage('视频源更新成功。配置已变更，请先重新校验，再执行扫描。')
+        setMessage(t('video_sources.save_success_reverify'))
       } else {
-        setMessage('视频源更新成功')
+        setMessage(t('video_sources.update_success'))
       }
       queryClient.invalidateQueries({ queryKey: ['video-sources'] })
     },
@@ -68,24 +78,30 @@ export function VideoSourcesPage() {
 
   const scanMutation = useMutation({
     mutationFn: triggerFullScan,
-    onSuccess: (data) => setMessage(`已触发全量扫描任务：${data.task_id}`),
-    onError: (error) => setMessage(formatScanErrorMessage(error as Error)),
+    onSuccess: (data) =>
+      setMessage(`${t('video_sources.scan_triggered')}：${data.task_id}`),
+    onError: (error) => setMessage(formatScanErrorMessage(error as Error, t)),
   })
 
   const deleteMutation = useMutation({
     mutationFn: deleteVideoSource,
     onSuccess: () => {
-      setMessage('视频源删除成功')
+      setMessage(t('video_sources.delete_success'))
       queryClient.invalidateQueries({ queryKey: ['video-sources'] })
       queryClient.invalidateQueries({ queryKey: ['video-source-status'] })
     },
-    onError: (error) => setMessage(formatDeleteErrorMessage(error as Error)),
+    onError: (error) => setMessage(formatDeleteErrorMessage(error as Error, t)),
   })
 
   const testMutation = useMutation({
     mutationFn: testVideoSource,
     onSuccess: (data) => {
-      setMessage(`校验完成：${data.last_validate_status ?? 'unknown'}，${data.message}`)
+      setMessage(
+        t('video_sources.verify_complete_format', {
+          status: mapValidateStatusLabel(data.last_validate_status ?? null, t),
+          message: data.message,
+        }),
+      )
       queryClient.invalidateQueries({ queryKey: ['video-sources'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] })
     },
@@ -95,7 +111,7 @@ export function VideoSourcesPage() {
   const pauseSourceMutation = useMutation({
     mutationFn: pauseVideoSource,
     onSuccess: () => {
-      setMessage('已暂停视频源，停止接收新文件与自动处理')
+      setMessage(t('video_sources.pause_success'))
       queryClient.invalidateQueries({ queryKey: ['video-sources'] })
       queryClient.invalidateQueries({ queryKey: ['video-source-status', statusSource?.id] })
     },
@@ -105,7 +121,7 @@ export function VideoSourcesPage() {
   const resumeSourceMutation = useMutation({
     mutationFn: resumeVideoSource,
     onSuccess: () => {
-      setMessage('已恢复视频源，重新开始接收与自动处理')
+      setMessage(t('video_sources.resume_success'))
       queryClient.invalidateQueries({ queryKey: ['video-sources'] })
       queryClient.invalidateQueries({ queryKey: ['video-source-status', statusSource?.id] })
     },
@@ -136,7 +152,7 @@ export function VideoSourcesPage() {
   })
 
   if (listQuery.isLoading) {
-    return <LoadingBlock text="加载视频源中" />
+    return <LoadingBlock text={t('video_sources.loading')} />
   }
 
   if (listQuery.error) {
@@ -154,14 +170,14 @@ export function VideoSourcesPage() {
 
   function sourceRowStatusText(item: VideoSource): string {
     if (!item.enabled) {
-      return '已禁用'
+      return t('video_sources.source_row_disabled')
     }
     if (item.source_paused) {
-      return '已暂停'
+      return t('video_sources.source_row_paused')
     }
     const status = statusMap.get(item.id)
     if (!status) {
-      return '状态加载中'
+      return t('video_sources.source_row_status_loading')
     }
     return analysisStateText(status.analysis_state)
   }
@@ -169,16 +185,18 @@ export function VideoSourcesPage() {
   function sourceRowFreshnessText(item: VideoSource): string {
     const status = statusMap.get(item.id)
     if (!status || status.minutes_since_last_new_video === null) {
-      return '最近新视频：-'
+      return t('video_sources.freshness_empty')
     }
-    return `最近新视频：${status.minutes_since_last_new_video} 分钟前`
+    return t('video_sources.freshness_with_minutes', {
+      minutes: status.minutes_since_last_new_video,
+    })
   }
 
   return (
     <div>
       <PageHeader
         title={t('video_sources.title')}
-        subtitle="配置摄像头目录和识别上下文"
+        subtitle={t('video_sources.subtitle')}
         actions={<button onClick={() => setShowCreate(true)}>{t('video_sources.add_source')}</button>}
       />
 
@@ -186,7 +204,7 @@ export function VideoSourcesPage() {
         <input
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
-          placeholder="按视频源或摄像头名称搜索"
+          placeholder={t('video_sources.search_placeholder')}
         />
       </div>
 
@@ -196,14 +214,14 @@ export function VideoSourcesPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>视频源名称</th>
-              <th>摄像头</th>
-              <th>位置</th>
-              <th>状态</th>
-              <th>最近校验</th>
-              <th>最近扫描</th>
-              <th>操作</th>
+              <th>{t('video_sources.table_col_id')}</th>
+              <th>{t('video_sources.table_col_source_name')}</th>
+              <th>{t('video_sources.table_col_camera')}</th>
+              <th>{t('video_sources.table_col_location')}</th>
+              <th>{t('video_sources.table_col_status')}</th>
+              <th>{t('video_sources.table_col_last_validate')}</th>
+              <th>{t('video_sources.table_col_last_scan')}</th>
+              <th>{t('video_sources.table_col_actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -222,19 +240,19 @@ export function VideoSourcesPage() {
                     </div>
                   </div>
                 </td>
-                <td>{item.last_validate_status ?? '-'}</td>
+                <td>{mapValidateStatusLabel(item.last_validate_status ?? null, t)}</td>
                 <td>{item.last_scan_at ?? '-'}</td>
                 <td>
                   <div className="row-actions">
                     <button className="ghost" onClick={() => setEditing(item)}>
-                      编辑
+                      {t('video_sources.action_edit')}
                     </button>
                     <button
                       className="ghost"
                       disabled={testMutation.isPending}
                       onClick={() => testMutation.mutate(item.id)}
                     >
-                      校验
+                      {t('video_sources.action_verify')}
                     </button>
                     <button
                       className="ghost"
@@ -246,22 +264,22 @@ export function VideoSourcesPage() {
                       }
                       onClick={() => scanMutation.mutate(item.id)}
                     >
-                      全量扫描
+                      {t('video_sources.action_full_scan')}
                     </button>
                     <button className="ghost" onClick={() => setSelectedStatusSourceId(item.id)}>
-                      查看状态
+                      {t('video_sources.action_view_status')}
                     </button>
                     <button
                       className="ghost"
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        if (!window.confirm(`确认删除视频源「${item.source_name}」吗？`)) {
+                        if (!window.confirm(t('video_sources.delete_confirm', { name: item.source_name }))) {
                           return
                         }
                         deleteMutation.mutate(item.id)
                       }}
                     >
-                      删除
+                      {t('video_sources.action_delete')}
                     </button>
                   </div>
                 </td>
@@ -306,27 +324,33 @@ export function VideoSourcesPage() {
   )
 }
 
-function formatScanErrorMessage(error: Error): string {
+function formatScanErrorMessage(
+  error: Error,
+  t: (key: string) => string,
+): string {
   const text = error.message || ''
   if (text.includes('source_not_validated')) {
-    return '该视频源尚未校验通过，请先执行校验。'
+    return t('video_sources.verify_not_passed')
   }
   if (text.includes('source_disabled')) {
-    return '该视频源已禁用，请先启用后再扫描。'
+    return t('video_sources.verify_source_disabled')
   }
   if (text.includes('source_type_not_supported')) {
-    return '该视频源类型当前不支持扫描。'
+    return t('video_sources.verify_type_unsupported')
   }
   if (text.includes('source_paused')) {
-    return '该视频源已暂停，请先恢复后再扫描。'
+    return t('video_sources.verify_source_paused')
   }
   return text
 }
 
-function formatDeleteErrorMessage(error: Error): string {
+function formatDeleteErrorMessage(
+  error: Error,
+  t: (key: string) => string,
+): string {
   const text = error.message || ''
   if (text.includes('running task')) {
-    return '该视频源仍有运行中的任务，请稍后重试删除。'
+    return t('video_sources.verify_running_task')
   }
   return text
 }

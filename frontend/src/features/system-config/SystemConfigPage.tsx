@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
@@ -52,6 +53,7 @@ function toFormState(data: SystemConfig): FormState {
 }
 
 export function SystemConfigPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [message, setMessage] = useState('')
 
@@ -63,14 +65,14 @@ export function SystemConfigPage() {
   const mutation = useMutation({
     mutationFn: updateSystemConfig,
     onSuccess: () => {
-      setMessage('系统配置已保存')
+      setMessage(t('system_config.save_success'))
       queryClient.invalidateQueries({ queryKey: ['system-config'] })
     },
     onError: (error) => setMessage((error as Error).message),
   })
 
   if (query.isLoading) {
-    return <LoadingBlock text="加载系统配置中" />
+    return <LoadingBlock text={t('system_config.loading')} />
   }
 
   if (query.error) {
@@ -79,7 +81,7 @@ export function SystemConfigPage() {
 
   return (
     <div>
-      <PageHeader title="系统配置" subtitle="设置扫描、归并和功能开关" />
+      <PageHeader title={t('system_config.title')} subtitle={t('system_config.subtitle')} />
 
       {message ? <div className="api-ok">{message}</div> : null}
 
@@ -128,12 +130,13 @@ type SystemConfigFormProps = {
 }
 
 function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormProps) {
+  const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(initialForm)
 
   return (
     <div className="card config-form">
         <label>
-          日报生成时间（HH:mm）
+          {t('system_config.daily_summary_time')}
           <input
             value={form.daily_summary_schedule}
             onChange={(event) => setForm((old) => ({ ...old, daily_summary_schedule: event.target.value }))}
@@ -143,7 +146,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
 
         <div className="inline-fields">
           <label>
-            扫描间隔（秒）
+            {t('system_config.scan_interval')}
             <input
               type="number"
               min={10}
@@ -155,7 +158,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            热窗口（小时）
+            {t('system_config.scan_hot_window')}
             <input
               type="number"
               min={1}
@@ -167,7 +170,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            迟到容忍（秒）
+            {t('system_config.scan_late_tolerance')}
             <input
               type="number"
               min={0}
@@ -179,7 +182,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            延迟告警阈值（秒）
+            {t('system_config.latency_alert_threshold')}
             <input
               type="number"
               min={30}
@@ -191,7 +194,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            告警连续触发次数
+            {t('system_config.alert_consecutive_required')}
             <input
               type="number"
               min={1}
@@ -203,7 +206,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            告警通知冷却（分钟）
+            {t('system_config.alert_notify_cooldown')}
             <input
               type="number"
               min={1}
@@ -215,7 +218,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            Session 归并间隔（秒）
+            {t('system_config.session_merge_gap')}
             <input
               type="number"
               min={1}
@@ -235,7 +238,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
               setForm((old) => ({ ...old, tag_recommendation_enabled: event.target.checked }))
             }
           />
-          启用标签推荐
+          {t('system_config.tag_recommendation')}
         </label>
 
         <label className="checkbox-field">
@@ -244,21 +247,21 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
             checked={form.mcp_enabled}
             onChange={(event) => setForm((old) => ({ ...old, mcp_enabled: event.target.checked }))}
           />
-          启用 MCP 接口（AstrBot 通过 /mcp 接入）
+          {t('system_config.mcp_enabled')}
         </label>
 
         <label>
-          MCP Token（供 Streamable HTTP 鉴权）
+          {t('system_config.mcp_token')}
           <input
             value={form.mcp_token}
             onChange={(event) => setForm((old) => ({ ...old, mcp_token: event.target.value }))}
-            placeholder="请输入 MCP Token"
+            placeholder={t('system_config.mcp_token_placeholder')}
           />
         </label>
 
         <div className="dialog-actions">
           <button onClick={() => onSubmit(form)} disabled={pending}>
-            {pending ? '保存中...' : '保存配置'}
+            {pending ? t('common.saving') : t('system_config.save_button')}
           </button>
         </div>
       </div>

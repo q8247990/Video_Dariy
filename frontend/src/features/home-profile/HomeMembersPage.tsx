@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -262,6 +263,7 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
 }
 
 export function HomeMembersPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [message, setMessage] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -318,7 +320,7 @@ export function HomeMembersPage() {
   const rows = listQuery.data ?? []
   const options = optionsQuery.data
   if (!options) {
-    return <ApiErrorAlert message="未获取到成员选项" />
+    return <ApiErrorAlert message={t('common.load_failed_retry')} />
   }
 
   return (

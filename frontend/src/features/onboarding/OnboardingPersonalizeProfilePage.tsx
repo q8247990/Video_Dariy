@@ -54,14 +54,14 @@ export function OnboardingPersonalizeProfilePage() {
   const saveMutation = useMutation({
     mutationFn: saveHomeProfile,
     onSuccess: () => {
-      setMessage(t('home_profile.profile_saved', '家庭整体档案已保存'))
+      setMessage(t('onboarding.home_profile_save_success'))
       navigate('/onboarding/personalize/camera-notes')
     },
     onError: (error) => setMessage((error as Error).message),
   })
 
   if (profileQuery.isLoading || optionsQuery.isLoading) {
-    return <LoadingBlock text={t('home_profile.loading_profile', '加载家庭档案中')} />
+    return <LoadingBlock text={t('onboarding.home_profile_load_failed')} />
   }
   if (profileQuery.error) {
     return <ApiErrorAlert message={(profileQuery.error as Error).message} />
@@ -72,18 +72,21 @@ export function OnboardingPersonalizeProfilePage() {
 
   const options = optionsQuery.data
   if (!options) {
-    return <ApiErrorAlert message={t('home_profile.error_load_options', '选项加载失败')} />
+    return <ApiErrorAlert message={t('onboarding.home_profile_options_load_failed')} />
   }
 
   const canSave = homeProfile.home_name.trim().length > 0
 
   return (
     <div>
-      <PageHeader title={t('onboarding.profile_title', '阶段二 · 家庭整体档案')} subtitle={t('onboarding.profile_subtitle', '这一步让系统更懂你的家庭背景，成员和宠物可稍后再补充')} />
+      <PageHeader
+        title={t('onboarding.step_personalize_profile_title')}
+        subtitle={t('onboarding.step_personalize_profile_subtitle')}
+      />
       <div className="card config-form">
         {message ? <div className="api-ok">{message}</div> : null}
         <label>
-          {t('home_profile.field_home_name', '家庭名称')}
+          {t('onboarding.home_profile_field_home_name')}
           <input
             value={homeProfile.home_name}
             onChange={(event) => setHomeProfile({ home_name: event.target.value })}
@@ -91,7 +94,7 @@ export function OnboardingPersonalizeProfilePage() {
         </label>
 
         <div>
-          <p className="text-muted">{t('home_profile.field_family_tags', '家庭构成标签')}</p>
+          <p className="text-muted">{t('onboarding.home_profile_field_family_tags')}</p>
           <div className="inline-fields">
             {options.family_tags.map((item) => (
               <label className="checkbox-field" key={item}>
@@ -109,7 +112,7 @@ export function OnboardingPersonalizeProfilePage() {
         </div>
 
         <div>
-          <p className="text-muted">{t('home_profile.field_focus_points', '关注重点')}</p>
+          <p className="text-muted">{t('onboarding.home_profile_field_focus_points')}</p>
           <div className="inline-fields">
             {options.focus_points.map((item) => (
               <label className="checkbox-field" key={item}>
@@ -127,7 +130,7 @@ export function OnboardingPersonalizeProfilePage() {
         </div>
 
         <label>
-          {t('home_profile.field_home_note', '家庭补充说明（可选）')}
+          {t('onboarding.home_profile_field_home_note')}
           <textarea
             value={homeProfile.home_note}
             onChange={(event) => setHomeProfile({ home_note: event.target.value })}
@@ -136,7 +139,7 @@ export function OnboardingPersonalizeProfilePage() {
 
         <div className="onboarding-actions">
           <button className="ghost" onClick={() => navigate('/onboarding/basic/done')}>
-            {t('common.prev_step', '上一步')}
+            {t('onboarding.step_prev')}
           </button>
           <button
             onClick={() =>
@@ -152,7 +155,7 @@ export function OnboardingPersonalizeProfilePage() {
             }
             disabled={!canSave || saveMutation.isPending}
           >
-            {saveMutation.isPending ? t('common.saving', '保存中...') : t('common.save_and_next', '保存并下一步')}
+            {saveMutation.isPending ? t('onboarding.saving') : t('onboarding.home_profile_save_and_next')}
           </button>
         </div>
       </div>

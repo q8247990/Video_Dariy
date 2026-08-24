@@ -79,7 +79,7 @@ export function HomeProfilePage() {
 
   const options = optionsQuery.data
   if (!options) {
-    return <ApiErrorAlert message="未获取到家庭档案选项" />
+    return <ApiErrorAlert message={t('common.load_failed_retry')} />
   }
 
   return (

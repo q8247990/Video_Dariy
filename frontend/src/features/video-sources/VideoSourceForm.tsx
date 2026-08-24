@@ -41,7 +41,13 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
   const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
 
-  const submitLabel = useMemo(() => (initialValue ? t('video_sources.save_changes', '保存修改') : t('video_sources.add_source', '创建视频源')), [initialValue, t])
+  const submitLabel = useMemo(
+    () =>
+      initialValue
+        ? t('video_sources.save_changes')
+        : t('video_sources.submit_create'),
+    [initialValue, t],
+  )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -60,7 +66,7 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
   return (
     <form className="dialog-form" onSubmit={handleSubmit}>
       <label>
-        {t('video_sources.form_source_name', '视频源名称')}
+        {t('video_sources.form_source_name')}
         <input
           required
           value={form.source_name}
@@ -68,7 +74,7 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
         />
       </label>
       <label>
-        {t('video_sources.form_camera_name', '摄像头名称')}
+        {t('video_sources.form_camera_name')}
         <input
           required
           value={form.camera_name}
@@ -76,7 +82,7 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
         />
       </label>
       <label>
-        {t('video_sources.form_location_name', '所在位置')}
+        {t('video_sources.form_location_name')}
         <input
           required
           value={form.location_name}
@@ -84,7 +90,7 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
         />
       </label>
       <label>
-        {t('video_sources.form_root_path', '目录路径')}
+        {t('video_sources.form_root_path')}
         <input
           required
           value={form.root_path}
@@ -93,14 +99,14 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
         />
       </label>
       <label>
-        {t('video_sources.form_description', '描述')}
+        {t('video_sources.form_description')}
         <textarea
           value={form.description}
           onChange={(event) => setForm((old) => ({ ...old, description: event.target.value }))}
         />
       </label>
       <label>
-        {t('video_sources.form_prompt_text', '识别提示词')}
+        {t('video_sources.form_prompt_text')}
         <textarea
           value={form.prompt_text}
           onChange={(event) => setForm((old) => ({ ...old, prompt_text: event.target.value }))}
@@ -112,14 +118,14 @@ export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: V
           checked={form.enabled}
           onChange={(event) => setForm((old) => ({ ...old, enabled: event.target.checked }))}
         />
-        {t('video_sources.form_enabled', '启用该视频源')}
+        {t('video_sources.form_enabled')}
       </label>
       <div className="dialog-actions">
         <button type="button" className="ghost" onClick={onCancel}>
-          {t('video_sources.form_cancel', '取消')}
+          {t('video_sources.form_cancel')}
         </button>
         <button type="submit" disabled={pending}>
-          {pending ? t('video_sources.form_processing', '处理中...') : submitLabel}
+          {pending ? t('video_sources.form_processing') : submitLabel}
         </button>
       </div>
     </form>

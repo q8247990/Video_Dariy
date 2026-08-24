@@ -42,7 +42,7 @@ export function ProvidersPage() {
     mutationFn: createProvider,
     onSuccess: () => {
       setShowCreate(false)
-      setMessage('Provider 创建成功')
+      setMessage(t('providers.create_success'))
       queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -52,7 +52,7 @@ export function ProvidersPage() {
     mutationFn: ({ id, payload }: { id: number; payload: ProviderUpdate }) => updateProvider(id, payload),
     onSuccess: () => {
       setEditing(null)
-      setMessage('Provider 更新成功')
+      setMessage(t('providers.update_success'))
       queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -61,7 +61,7 @@ export function ProvidersPage() {
   const defaultVisionMutation = useMutation({
     mutationFn: setDefaultVisionProvider,
     onSuccess: () => {
-      setMessage('视觉 LLM 已更新')
+      setMessage(t('providers.set_vision_success'))
       queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -70,7 +70,7 @@ export function ProvidersPage() {
   const defaultQaMutation = useMutation({
     mutationFn: setDefaultQaProvider,
     onSuccess: () => {
-      setMessage('问答 LLM 已更新')
+      setMessage(t('providers.set_qa_success'))
       queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -88,7 +88,7 @@ export function ProvidersPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteProvider,
     onSuccess: () => {
-      setMessage('Provider 删除成功')
+      setMessage(t('providers.delete_success'))
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       queryClient.invalidateQueries({ queryKey: ['provider-usage-daily'] })
     },
@@ -119,7 +119,7 @@ export function ProvidersPage() {
   }, [latestUsageDay])
 
   if (listQuery.isLoading) {
-    return <LoadingBlock text="加载 Provider 中" />
+    return <LoadingBlock text={t('providers.loading')} />
   }
 
   if (listQuery.error) {
@@ -130,7 +130,7 @@ export function ProvidersPage() {
     <div>
       <PageHeader
         title={t('providers.title')}
-        subtitle="统一管理视觉与问答模型配置"
+        subtitle={t('providers.subtitle')}
         actions={
           <button onClick={() => setShowCreate(true)}>{t('providers.add_provider')}</button>
         }
@@ -138,30 +138,33 @@ export function ProvidersPage() {
 
       <div className="card tool-row tool-row-inline">
         <label>
-          类型筛选
+          {t('providers.type_filter_label')}
           <select value={providerType} onChange={(event) => setProviderType(event.target.value)}>
-            <option value="">全部</option>
-            <option value="vision_provider">视觉模型</option>
-            <option value="qa_provider">问答模型</option>
+            <option value="">{t('providers.type_filter_all')}</option>
+            <option value="vision_provider">{t('providers.type_filter_vision')}</option>
+            <option value="qa_provider">{t('providers.type_filter_qa')}</option>
           </select>
         </label>
       </div>
 
       <div className="card">
         <div>
-          <strong>近7天Token统计</strong>
+          <strong>{t('providers.token_usage_7d')}</strong>
         </div>
         {usageQuery.isLoading ? (
-          <div>统计中...</div>
+          <div>{t('providers.token_usage_loading')}</div>
         ) : usageQuery.error ? (
           <div className="api-error">{(usageQuery.error as Error).message}</div>
         ) : latestUsageDay ? (
           <div>
-            日期 {latestUsageDay.date} | 总token {latestUsageDay.total_tokens}（prompt{' '}
-            {latestUsageDay.prompt_tokens} / completion {latestUsageDay.completion_tokens}）
+            {latestUsageDay.date} |{' '}
+            {t('providers.token_total', {
+              prompt: latestUsageDay.prompt_tokens,
+              completion: latestUsageDay.completion_tokens,
+            })}
           </div>
         ) : (
-          <div>暂无token统计数据</div>
+          <div>{t('providers.token_usage_empty')}</div>
         )}
       </div>
 
@@ -171,16 +174,16 @@ export function ProvidersPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>名称</th>
-              <th>能力</th>
-              <th>模型</th>
-              <th>状态</th>
-              <th>当前使用</th>
-              <th>最近测试</th>
-              <th>可用性</th>
-              <th>今日Token</th>
-              <th>操作</th>
+              <th>{t('providers.table_col_id')}</th>
+              <th>{t('providers.table_col_name')}</th>
+              <th>{t('providers.table_col_capability')}</th>
+              <th>{t('providers.table_col_model')}</th>
+              <th>{t('providers.table_col_status')}</th>
+              <th>{t('providers.table_col_in_use')}</th>
+              <th>{t('providers.table_col_last_test')}</th>
+              <th>{t('providers.table_col_availability')}</th>
+              <th>{t('providers.table_col_today_tokens')}</th>
+              <th>{t('providers.table_col_actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -190,9 +193,9 @@ export function ProvidersPage() {
                 <td>{item.provider_name}</td>
                 <td>
                   {[
-                    item.supports_vision ? '视觉' : '',
-                    item.supports_qa ? '问答' : '',
-                    item.supports_tool_calling ? '工具调用' : '',
+                    item.supports_vision ? t('providers.vision_label') : '',
+                    item.supports_qa ? t('providers.qa_label') : '',
+                    item.supports_tool_calling ? t('providers.tool_calling_label') : '',
                   ]
                     .filter(Boolean)
                     .join(' + ') || '-'}
@@ -202,9 +205,9 @@ export function ProvidersPage() {
                   <StatusTag status={item.enabled ? 'enabled' : 'disabled'} />
                 </td>
                 <td>
-                  {item.id === activeVisionProviderId ? '视觉' : ''}
+                  {item.id === activeVisionProviderId ? t('providers.vision_label') : ''}
                   {item.id === activeVisionProviderId && item.id === activeQaProviderId ? ' + ' : ''}
-                  {item.id === activeQaProviderId ? '问答' : ''}
+                  {item.id === activeQaProviderId ? t('providers.qa_label') : ''}
                   {item.id !== activeVisionProviderId && item.id !== activeQaProviderId ? '-' : ''}
                 </td>
                 <td>{item.last_test_status ?? '-'}</td>
@@ -216,35 +219,35 @@ export function ProvidersPage() {
                 <td>
                   <div className="row-actions">
                     <button className="ghost" onClick={() => setEditing(item)}>
-                      编辑
+                      {t('providers.action_edit')}
                     </button>
                     <button
                       className={item.id === activeVisionProviderId ? 'ghost role-action-active' : 'ghost'}
                       disabled={!item.supports_vision || defaultVisionMutation.isPending}
                       onClick={() => defaultVisionMutation.mutate(item.id)}
                     >
-                      设为视觉LLM
+                      {t('providers.set_vision')}
                     </button>
                     <button
                       className={item.id === activeQaProviderId ? 'ghost role-action-active' : 'ghost'}
                       disabled={!item.supports_qa || defaultQaMutation.isPending}
                       onClick={() => defaultQaMutation.mutate(item.id)}
                     >
-                      设为问答LLM
+                      {t('providers.set_qa')}
                     </button>
                     <button className="ghost" onClick={() => testMutation.mutate(item.id)}>
-                      测试
+                      {t('providers.test_button')}
                     </button>
                     <button
                       className="ghost"
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        if (window.confirm(`确认删除 Provider ${item.provider_name} 吗？`)) {
+                        if (window.confirm(t('providers.delete_confirm', { name: item.provider_name }))) {
                           deleteMutation.mutate(item.id)
                         }
                       }}
                     >
-                      删除
+                      {t('providers.action_delete')}
                     </button>
                   </div>
                 </td>

@@ -51,7 +51,7 @@ export function EventsPage() {
   const analyzeMutation = useMutation({
     mutationFn: (sessionId: number) => triggerSessionAnalyze(sessionId),
     onSuccess: () => {
-      setMessage(t('events.reanalyze_submitted', '已提交重新识别任务'))
+      setMessage(t('events.reanalyze_submitted'))
       queryClient.invalidateQueries({ queryKey: ['events'] })
     },
     onError: (error) => {
@@ -82,7 +82,7 @@ export function EventsPage() {
   }
 
   if (query.isLoading) {
-    return <LoadingBlock text={t('events.loading', '加载事件列表中')} />
+    return <LoadingBlock text={t('events.loading')} />
   }
 
   if (query.error) {
@@ -96,7 +96,7 @@ export function EventsPage() {
 
   return (
     <div>
-      <PageHeader title={t('events.title')} subtitle={t('events.subtitle', '按 Session 归并查看事件，再展开查看具体明细')} />
+      <PageHeader title={t('events.title')} subtitle={t('events.subtitle')} />
 
       {message ? <div className="api-ok">{message}</div> : null}
 
@@ -127,12 +127,12 @@ export function EventsPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>Session ID</th>
-              <th>{t('events.col_start_time', '开始时间')}</th>
-              <th>{t('events.col_duration', '时长')}</th>
-              <th>{t('events.col_summary', '摘要')}</th>
-              <th>{t('events.col_actions', '操作')}</th>
-              <th>{t('events.col_status', '状态')}</th>
+              <th>{t('events.col_session_id')}</th>
+              <th>{t('events.col_start_time')}</th>
+              <th>{t('events.col_duration')}</th>
+              <th>{t('events.col_summary')}</th>
+              <th>{t('events.col_actions')}</th>
+              <th>{t('events.col_status')}</th>
             </tr>
           </thead>
           <tbody>
@@ -151,17 +151,17 @@ export function EventsPage() {
                           setExpandedSessionId((old) => (old === item.id ? null : item.id))
                         }
                       >
-                        {expandedSessionId === item.id ? t('events.collapse_events', '收起事件') : t('events.expand_events', '展开事件')}
+                        {expandedSessionId === item.id ? t('events.collapse_events') : t('events.expand_events')}
                       </button>
                       <button className="ghost" onClick={() => setSelectedSessionId(item.id)}>
-                        {t('events.view_playback', '查看回放')}
+                        {t('events.view_playback')}
                       </button>
                       <button
                         className="ghost"
                         onClick={() => void handleReanalyze(item.id)}
                         disabled={analyzingSessionIds.has(item.id)}
                       >
-                        {analyzingSessionIds.has(item.id) ? t('events.reanalyzing', '重新识别中...') : t('events.reanalyze', '重新识别')}
+                        {analyzingSessionIds.has(item.id) ? t('events.reanalyzing') : t('events.reanalyze')}
                       </button>
                     </div>
                   </td>
@@ -211,13 +211,13 @@ export function EventsPage() {
 function formatAnalyzeErrorMessage(error: Error, t: TFunction): string {
   const text = error.message || ''
   if (text.includes('Session is open')) {
-    return t('events.error_session_open', '该 Session 仍在采集中，暂不能重新识别。')
+    return t('events.error_session_open')
   }
   if (text.includes('Session is analyzing')) {
-    return t('events.error_session_analyzing', '该 Session 正在识别中，请稍后再试。')
+    return t('events.error_session_analyzing')
   }
   if (text.includes('Session not found')) {
-    return t('events.error_session_not_found', 'Session 不存在，可能已被删除。')
+    return t('events.error_session_not_found')
   }
   return text
 }
@@ -228,5 +228,5 @@ function formatDurationMinutes(seconds: number | null, t: TFunction): string {
   }
 
   const minutes = (seconds / 60).toFixed(1).replace(/\.0$/, '')
-  return t('events.minutes_format', '{{minutes}} 分钟', { minutes })
+  return t('events.minutes_format', { minutes })
 }

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Provider, ProviderCreate, ProviderUpdate } from '../../types/api'
 import { testProvider } from './api'
 import type { TestProviderResult } from './api'
@@ -45,11 +46,15 @@ export function ProviderForm({
   onCancel,
   onSubmit,
 }: ProviderFormProps) {
+  const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestProviderResult | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
-  const submitLabel = useMemo(() => (initialValue ? '保存修改' : '创建 Provider'), [initialValue])
+  const submitLabel = useMemo(
+    () => (initialValue ? t('providers.submit_save_edit') : t('providers.submit_create')),
+    [initialValue, t],
+  )
   const capabilityError = !form.supports_vision && !form.supports_qa
 
   const handleTest = async () => {
@@ -68,7 +73,7 @@ export function ProviderForm({
         }))
       }
     } catch (e: unknown) {
-      setTestError(e instanceof Error ? e.message : '测试请求失败')
+      setTestError(e instanceof Error ? e.message : t('providers.test_request_failed'))
     } finally {
       setTesting(false)
     }
@@ -116,16 +121,7 @@ export function ProviderForm({
   return (
     <form className="dialog-form" onSubmit={handleSubmit}>
       <label>
-        Provider 名称
-        <input
-          required
-          value={form.provider_name}
-          onChange={(event) => setForm((old) => ({ ...old, provider_name: event.target.value }))}
-        />
-      </label>
-
-      <label>
-        模型能力
+        {t('providers.form_capability_label')}
         <div className="capability-buttons">
           <button
             type="button"
@@ -137,7 +133,7 @@ export function ProviderForm({
               }))
             }
           >
-            视觉能力
+            {t('providers.form_capability_vision')}
           </button>
           <button
             type="button"
@@ -149,7 +145,7 @@ export function ProviderForm({
               }))
             }
           >
-            问答能力
+            {t('providers.form_capability_qa')}
           </button>
           <button
             type="button"
@@ -161,24 +157,33 @@ export function ProviderForm({
               }))
             }
           >
-            工具调用
+            {t('providers.form_capability_tool_calling')}
           </button>
         </div>
       </label>
-      {capabilityError ? <div className="api-error">请至少选择一种模型能力</div> : null}
+      {capabilityError ? <div className="api-error">{t('providers.capability_required')}</div> : null}
 
       <label>
-        接口地址
+        {t('providers.provider_name_label')}
         <input
           required
-          value={form.api_base_url}
-          onChange={(event) => setForm((old) => ({ ...old, api_base_url: event.target.value }))}
-          placeholder="https://api.openai.com/v1"
+          value={form.provider_name}
+          onChange={(event) => setForm((old) => ({ ...old, provider_name: event.target.value }))}
         />
       </label>
 
       <label>
-        模型名称
+        {t('providers.form_api_base_url')}
+        <input
+          required
+          value={form.api_base_url}
+          onChange={(event) => setForm((old) => ({ ...old, api_base_url: event.target.value }))}
+          placeholder={t('providers.form_api_base_url_placeholder')}
+        />
+      </label>
+
+      <label>
+        {t('providers.form_model_name')}
         <input
           required
           value={form.model_name}
@@ -187,7 +192,8 @@ export function ProviderForm({
       </label>
 
       <label>
-        API Key {initialValue ? '(留空表示不更新)' : ''}
+        {t('providers.form_api_key_label')}
+        {initialValue ? ` ${t('providers.form_api_key_keep_blank')}` : ''}
         <input
           type="password"
           required={!initialValue}
@@ -198,7 +204,7 @@ export function ProviderForm({
 
       <div className="inline-fields">
         <label>
-          超时时间(秒)
+          {t('providers.form_timeout')}
           <input
             type="number"
             min={1}
@@ -209,7 +215,7 @@ export function ProviderForm({
           />
         </label>
         <label>
-          重试次数
+          {t('providers.form_retry_count')}
           <input
             type="number"
             min={0}
@@ -227,7 +233,7 @@ export function ProviderForm({
           checked={form.enabled}
           onChange={(event) => setForm((old) => ({ ...old, enabled: event.target.checked }))}
         />
-        启用该 Provider
+        {t('providers.form_enabled_label')}
       </label>
 
       {initialValue ? (
@@ -238,15 +244,27 @@ export function ProviderForm({
             disabled={testing}
             onClick={handleTest}
           >
-            {testing ? '检测中...' : '测试能力'}
+            {testing ? t('providers.testing') : t('providers.test_capability')}
           </button>
           {testResult ? (
             <div className={testResult.success ? 'test-result test-result-success' : 'test-result test-result-fail'}>
-              <span>连通性: {testResult.success ? 'OK' : '失败'}</span>
+              <span>
+                {testResult.success
+                  ? t('providers.test_connectivity_ok')
+                  : t('providers.test_connectivity_failed')}
+              </span>
               {testResult.success ? (
                 <>
-                  <span>视觉: {testResult.supports_vision ? 'OK' : '不支持'}</span>
-                  <span>工具调用: {testResult.supports_tool_calling ? 'OK' : '不支持'}</span>
+                  <span>
+                    {testResult.supports_vision
+                      ? t('providers.test_vision_ok')
+                      : t('providers.test_vision_unsupported')}
+                  </span>
+                  <span>
+                    {testResult.supports_tool_calling
+                      ? t('providers.test_tool_calling_ok')
+                      : t('providers.test_tool_calling_unsupported')}
+                  </span>
                 </>
               ) : null}
               <span className="test-result-message">{testResult.message}</span>
@@ -258,10 +276,10 @@ export function ProviderForm({
 
       <div className="dialog-actions">
         <button type="button" className="ghost" onClick={onCancel}>
-          取消
+          {t('common.cancel')}
         </button>
         <button type="submit" disabled={pending || capabilityError}>
-          {pending ? '处理中...' : submitLabel}
+          {pending ? t('providers.submit_pending') : submitLabel}
         </button>
       </div>
     </form>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { systemStyleLabel } from '../home-profile/labels'
 import { saveHomeProfile } from './api'
@@ -9,6 +10,7 @@ import { useOnboardingDraftStore } from './state'
 const STYLE_OPTIONS = ['concise_summary', 'family_companion', 'focus_alert'] as const
 
 export function OnboardingPersonalizeStylePage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const homeProfile = useOnboardingDraftStore((state) => state.homeProfile)
   const setHomeProfile = useOnboardingDraftStore((state) => state.setHomeProfile)
@@ -22,7 +24,7 @@ export function OnboardingPersonalizeStylePage() {
   const mutation = useMutation({
     mutationFn: saveHomeProfile,
     onSuccess: () => {
-      setMessage('系统风格设置已保存')
+      setMessage(t('onboarding.system_style_save_success'))
       navigate('/onboarding/personalize/done')
     },
     onError: (error) => setMessage((error as Error).message),
@@ -30,7 +32,10 @@ export function OnboardingPersonalizeStylePage() {
 
   return (
     <div>
-      <PageHeader title="阶段二 · 系统风格与系统名称" subtitle="定义系统说话风格与称呼" />
+      <PageHeader
+        title={t('onboarding.step_personalize_style_title')}
+        subtitle={t('onboarding.step_personalize_style_subtitle')}
+      />
       <div className="card config-form">
         {message ? <div className="api-ok">{message}</div> : null}
 
@@ -48,16 +53,16 @@ export function OnboardingPersonalizeStylePage() {
         </div>
 
         <label>
-          系统名称
+          {t('onboarding.form_assistant_name')}
           <input
             value={homeProfile.assistant_name}
             onChange={(event) => setHomeProfile({ assistant_name: event.target.value })}
-            placeholder="家庭助手"
+            placeholder={t('onboarding.form_assistant_name_placeholder')}
           />
         </label>
 
         <label>
-          风格补充偏好（可选）
+          {t('onboarding.step_personalize_style_label')}
           <textarea
             value={homeProfile.style_preference_text}
             onChange={(event) => setHomeProfile({ style_preference_text: event.target.value })}
@@ -66,23 +71,23 @@ export function OnboardingPersonalizeStylePage() {
 
         <div className="onboarding-actions">
           <button className="ghost" onClick={() => navigate('/onboarding/personalize/camera-notes')}>
-            上一步
+            {t('onboarding.step_prev')}
           </button>
           <button
             onClick={() =>
               mutation.mutate({
-                home_name: homeProfile.home_name.trim() || '我的家庭',
+                home_name: homeProfile.home_name.trim() || t('onboarding.system_style_default_home_name'),
                 family_tags: homeProfile.family_tags,
                 focus_points: homeProfile.focus_points,
                 system_style: homeProfile.system_style,
                 style_preference_text: homeProfile.style_preference_text.trim(),
-                assistant_name: homeProfile.assistant_name.trim() || '家庭助手',
+                assistant_name: homeProfile.assistant_name.trim() || t('onboarding.system_style_default_assistant_name'),
                 home_note: homeProfile.home_note.trim(),
               })
             }
             disabled={mutation.isPending}
           >
-            {mutation.isPending ? '保存中...' : '保存并下一步'}
+            {mutation.isPending ? t('onboarding.saving') : t('onboarding.save_next')}
           </button>
         </div>
       </div>

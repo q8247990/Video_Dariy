@@ -46,12 +46,12 @@ export function ChatPage() {
 
   return (
     <div>
-      <PageHeader title={t('chat.title')} subtitle="按自然语言检索安防事件" />
+      <PageHeader title={t('chat.title')} subtitle={t('chat.subtitle')} />
 
       <div className="card chat-ask-card">
         <form onSubmit={handleSubmit}>
           <label>
-            请输入问题
+            {t('chat.form_question_label')}
             <textarea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
@@ -61,7 +61,7 @@ export function ChatPage() {
           </label>
           <div className="dialog-actions">
             <button type="submit" disabled={askMutation.isPending}>
-              {askMutation.isPending ? '分析中...' : t('chat.send')}
+              {askMutation.isPending ? t('chat.submit_pending') : t('chat.send')}
             </button>
           </div>
         </form>
@@ -71,13 +71,13 @@ export function ChatPage() {
 
       {answerCard ? (
         <div className="card chat-answer-card">
-          <h3>最新回答</h3>
+          <h3>{t('chat.latest_answer')}</h3>
           <div className="chat-answer-main">
             <p className="chat-q">Q：{answerCard.question}</p>
             <p className="chat-a">A：{answerCard.answer_text}</p>
           </div>
           <div>
-            <h4>关联事件</h4>
+            <h4>{t('chat.referenced_events')}</h4>
             <ul className="list-simple">
               {(answerCard.referenced_events ?? []).slice(0, 10).map((event) => (
                 <li key={event.id}>
@@ -90,8 +90,8 @@ export function ChatPage() {
       ) : null}
 
       <div className="card">
-        <h3>历史记录</h3>
-        {historyQuery.isLoading ? <LoadingBlock text="加载问答历史中" /> : null}
+        <h3>{t('chat.history')}</h3>
+        {historyQuery.isLoading ? <LoadingBlock text={t('chat.loading')} /> : null}
         {historyQuery.error ? <ApiErrorAlert message={(historyQuery.error as Error).message} /> : null}
         {!historyQuery.isLoading && !historyQuery.error ? (
           <ul className="chat-history-list">
@@ -103,7 +103,7 @@ export function ChatPage() {
               </li>
             ))}
             {(historyQuery.data?.list.length ?? 0) === 0 ? (
-              <li className="empty-cell">暂无历史问答记录</li>
+              <li className="empty-cell">{t('chat.history_empty')}</li>
             ) : null}
           </ul>
         ) : null}

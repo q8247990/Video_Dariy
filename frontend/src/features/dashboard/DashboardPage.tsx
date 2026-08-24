@@ -7,17 +7,17 @@ import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { fetchDashboardOverview } from './api'
 import type { DashboardSystemStatusItem } from '../../types/api'
 
-function statusText(status: DashboardSystemStatusItem['status']): string {
+function statusText(status: DashboardSystemStatusItem['status'], t: (key: string) => string): string {
   if (status === 'ok') {
-    return '正常'
+    return t('dashboard.status_ok')
   }
   if (status === 'partial') {
-    return '部分完成'
+    return t('dashboard.status_partial')
   }
   if (status === 'error') {
-    return '异常'
+    return t('dashboard.status_error')
   }
-  return '未完成'
+  return t('dashboard.status_uncompleted')
 }
 
 function formatDateTime(value: string | null): string {
@@ -62,7 +62,7 @@ export function DashboardPage() {
   }
 
   if (!data) {
-    return <ApiErrorAlert message="未获取到数据" />
+    return <ApiErrorAlert message={t('common.load_failed_retry')} />
   }
 
   const showDetailAction =
@@ -99,7 +99,7 @@ export function DashboardPage() {
             <li key={item.key}>
               <span>{item.label}</span>
               <strong className={`dashboard-item-status dashboard-item-${item.status}`}>
-                {statusText(item.status)}
+                {statusText(item.status, t)}
               </strong>
             </li>
           ))}

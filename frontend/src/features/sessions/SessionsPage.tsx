@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { HlsVideoPlayer } from '../../components/common/HlsVideoPlayer'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -8,6 +9,7 @@ import { StatusTag } from '../../components/common/StatusTag'
 import { getSessionPlayback, getSessions } from './api'
 
 export function SessionsPage() {
+  const { t } = useTranslation()
   const [page, setPage] = useState(1)
   const [sourceId, setSourceId] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState('')
@@ -30,7 +32,7 @@ export function SessionsPage() {
   })
 
   if (listQuery.isLoading) {
-    return <LoadingBlock text="加载 Session 列表中" />
+    return <LoadingBlock text={t('sessions.loading')} />
   }
 
   if (listQuery.error) {
@@ -43,22 +45,22 @@ export function SessionsPage() {
 
   return (
     <div>
-      <PageHeader title="Session 列表" subtitle="查看连续视频片段与分析状态" />
+      <PageHeader title={t('sessions.title')} subtitle={t('sessions.subtitle')} />
 
       <div className="card tool-row tool-row-inline">
         <label>
-          source_id
+          {t('sessions.filter_by_source_id')}
           <input
             value={sourceId}
             onChange={(event) => {
               setSourceId(event.target.value)
               setPage(1)
             }}
-            placeholder="按视频源ID筛选"
+            placeholder={t('sessions.filter_by_source_id_placeholder')}
           />
         </label>
         <label>
-          分析状态
+          {t('sessions.filter_analysis_status')}
           <select
             value={analysisStatus}
             onChange={(event) => {
@@ -66,12 +68,12 @@ export function SessionsPage() {
               setPage(1)
             }}
           >
-            <option value="">全部</option>
-            <option value="open">采集中</option>
-            <option value="sealed">待识别</option>
-            <option value="analyzing">分析中</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
+            <option value="">{t('sessions.filter_all')}</option>
+            <option value="open">{t('common.status_open')}</option>
+            <option value="sealed">{t('common.status_sealed')}</option>
+            <option value="analyzing">{t('common.status_analyzing')}</option>
+            <option value="success">{t('common.status_success')}</option>
+            <option value="failed">{t('common.status_failed')}</option>
           </select>
         </label>
       </div>
@@ -80,16 +82,16 @@ export function SessionsPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>来源</th>
-              <th>开始时间</th>
-              <th>结束时间</th>
-              <th>时长(秒)</th>
-              <th>活动级别</th>
-              <th>重要事件</th>
-              <th>摘要</th>
-              <th>状态</th>
-              <th>操作</th>
+              <th>{t('sessions.table_col_id')}</th>
+              <th>{t('sessions.table_col_source')}</th>
+              <th>{t('sessions.table_col_start_time')}</th>
+              <th>{t('sessions.table_col_end_time')}</th>
+              <th>{t('sessions.table_col_duration')}</th>
+              <th>{t('sessions.table_col_activity')}</th>
+              <th>{t('sessions.table_col_important')}</th>
+              <th>{t('sessions.table_col_summary')}</th>
+              <th>{t('sessions.table_col_status')}</th>
+              <th>{t('sessions.table_col_actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -101,14 +103,20 @@ export function SessionsPage() {
                 <td>{item.session_end_time}</td>
                 <td>{item.total_duration_seconds ?? '-'}</td>
                 <td>{item.activity_level ?? '-'}</td>
-                <td>{item.has_important_event === null ? '-' : item.has_important_event ? '是' : '否'}</td>
+                <td>
+                  {item.has_important_event === null
+                    ? '-'
+                    : item.has_important_event
+                    ? t('sessions.yes')
+                    : t('sessions.no')}
+                </td>
                 <td>{item.summary_text ?? '-'}</td>
                 <td>
                   <StatusTag status={item.analysis_status} />
                 </td>
                 <td>
                   <button className="ghost" onClick={() => setSelectedSessionId(item.id)}>
-                    查看回放
+                    {t('sessions.action_view_playback')}
                   </button>
                 </td>
               </tr>
@@ -116,7 +124,7 @@ export function SessionsPage() {
             {list.length === 0 ? (
               <tr>
                 <td colSpan={10} className="empty-cell">
-                  暂无符合条件的 Session
+                  {t('sessions.empty')}
                 </td>
               </tr>
             ) : null}
@@ -125,17 +133,17 @@ export function SessionsPage() {
 
         <div className="pager">
           <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-            上一页
+            {t('sessions.pager_prev')}
           </button>
           <span>
-            第 {page} / {totalPages} 页，共 {total} 条
+            {t('sessions.pager_format', { page, totalPages, total })}
           </span>
           <button
             className="ghost"
             disabled={page >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
           >
-            下一页
+            {t('sessions.pager_next')}
           </button>
         </div>
       </div>
@@ -143,20 +151,20 @@ export function SessionsPage() {
       {selectedSessionId !== null ? (
         <div className="card playback-card">
           <div className="playback-head">
-            <h3>Session #{selectedSessionId} 回放</h3>
+            <h3>{t('sessions.playback_title', { id: selectedSessionId })}</h3>
             <button className="ghost" onClick={() => setSelectedSessionId(null)}>
-              关闭
+              {t('sessions.playback_close')}
             </button>
           </div>
 
-          {playbackQuery.isLoading ? <LoadingBlock text="加载回放列表中" /> : null}
+          {playbackQuery.isLoading ? <LoadingBlock text={t('sessions.playback_loading')} /> : null}
           {playbackQuery.error ? <ApiErrorAlert message={(playbackQuery.error as Error).message} /> : null}
 
           {!playbackQuery.isLoading && !playbackQuery.error ? (
             <div className="playback-grid">
               {playbackQuery.data?.playback_url ? (
                 <article className="playback-item">
-                  <h4>拼接回放</h4>
+                  <h4>{t('sessions.merged_playback')}</h4>
                   <HlsVideoPlayer
                     src={
                       playbackQuery.data.playback_url.startsWith('/api/v1')
@@ -166,7 +174,7 @@ export function SessionsPage() {
                   />
                 </article>
               ) : (
-                <div className="empty-cell">当前 Session 暂无可播放文件</div>
+                <div className="empty-cell">{t('sessions.playback_empty')}</div>
               )}
             </div>
           ) : null}

@@ -51,11 +51,11 @@ export function EventDetailPage() {
   })
 
   if (!Number.isFinite(eventId) || eventId <= 0) {
-    return <ApiErrorAlert message={t('events.error_invalid_id', '无效事件ID')} />
+    return <ApiErrorAlert message={t('events.error_invalid_id')} />
   }
 
   if (detailQuery.isLoading) {
-    return <LoadingBlock text={t('events.loading_detail', '正在加载事件详情')} />
+    return <LoadingBlock text={t('events.loading_detail')} />
   }
 
   if (detailQuery.error) {
@@ -63,7 +63,7 @@ export function EventDetailPage() {
   }
 
   if (!detailQuery.data) {
-    return <ApiErrorAlert message={t('events.error_no_detail', '未获取到事件详情')} />
+    return <ApiErrorAlert message={t('events.error_no_detail')} />
   }
 
   const detail = detailQuery.data
@@ -74,22 +74,22 @@ export function EventDetailPage() {
   return (
     <div>
       <PageHeader
-        title={t('events.detail_title', '事件详情 #{{id}}', { id: detail.id })}
+        title={t('events.detail_title', { id: detail.id })}
         subtitle={`${detail.camera_name} · ${detail.location_name}`}
         actions={
           <div className="row-actions">
             <button className="ghost" onClick={() => navigate('/events')}>
-              {t('events.back_to_list', '返回事件列表')}
+              {t('events.back_to_list')}
             </button>
             <button className="ghost" onClick={() => setPlaybackSessionId(detail.session_id)}>
-              {t('events.view_playback', '查看回放')}
+              {t('events.view_playback')}
             </button>
             <button
               className="ghost"
               disabled={reanalyzeMutation.isPending}
               onClick={() => reanalyzeMutation.mutate(detail.session_id)}
             >
-              {reanalyzeMutation.isPending ? t('events.reanalyzing', '重新识别中...') : t('events.reanalyze_session', '重新识别该Session')}
+              {reanalyzeMutation.isPending ? t('events.reanalyzing') : t('events.reanalyze_session')}
             </button>
           </div>
         }
@@ -97,53 +97,53 @@ export function EventDetailPage() {
 
       <article className="card dashboard-text-list">
         <p>
-          <strong>{t('events.detail_field_title', '标题：')}</strong>
+          <strong>{t('events.detail_field_title')}</strong>
           {detail.title ?? '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_summary', '摘要：')}</strong>
+          <strong>{t('events.detail_field_summary')}</strong>
           {detail.summary ?? detail.description}
         </p>
         <p>
-          <strong>{t('events.detail_field_description', '详细记录：')}</strong>
+          <strong>{t('events.detail_field_description')}</strong>
           {detail.detail ?? detail.summary ?? detail.description}
         </p>
         <p>
-          <strong>{t('events.detail_field_time', '发生时间：')}</strong>
+          <strong>{t('events.detail_field_time')}</strong>
           {formatDateTime(detail.event_start_time)}
         </p>
         <p>
-          <strong>{t('events.detail_field_object_type', '对象类型：')}</strong>
+          <strong>{t('events.detail_field_object_type')}</strong>
           {detail.object_type ?? '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_event_type', '事件类型：')}</strong>
+          <strong>{t('events.detail_field_event_type')}</strong>
           {detail.event_type ?? detail.action_type ?? '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_importance', '重要性：')}</strong>
+          <strong>{t('events.detail_field_importance')}</strong>
           {detail.importance_level ?? '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_relative_time', '相对时间：')}</strong>
+          <strong>{t('events.detail_field_relative_time')}</strong>
           {detail.offset_start_sec !== null && detail.offset_end_sec !== null
             ? `${detail.offset_start_sec}s ~ ${detail.offset_end_sec}s`
             : '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_observed_actions', '观察动作：')}</strong>
+          <strong>{t('events.detail_field_observed_actions')}</strong>
           {observedActions.length > 0 ? observedActions.join('、') : '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_interpreted_states', '解释状态：')}</strong>
+          <strong>{t('events.detail_field_interpreted_states')}</strong>
           {interpretedStates.length > 0 ? interpretedStates.join('、') : '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_related_entities', '关联对象：')}</strong>
+          <strong>{t('events.detail_field_related_entities')}</strong>
           {relatedEntities.length > 0
             ? relatedEntities
                 .map((item) => {
-                  const name = String(item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity', '未命名对象'))
+                  const name = String(item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity'))
                   const status = String(item.recognition_status ?? 'unknown')
                   return `${name}(${status})`
                 })
@@ -151,20 +151,20 @@ export function EventDetailPage() {
             : '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_session_id', '会话ID：')}</strong>
+          <strong>{t('events.detail_field_session_id')}</strong>
           {detail.session_id}
         </p>
         <p>
-          <strong>{t('events.detail_field_tags', '标签：')}</strong>
+          <strong>{t('events.detail_field_tags')}</strong>
           {detail.tags && detail.tags.length > 0
             ? detail.tags.map((tag) => tag.tag_name).join('、')
-            : t('events.none', '无')}
+            : t('events.none')}
         </p>
       </article>
 
       <article className="card summary-detail">
-        <h3>{t('events.all_session_events', '同 Session 全部事件（Session #{{id}}）', { id: detail.session_id })}</h3>
-        {sessionEventsQuery.isLoading ? <LoadingBlock text={t('events.loading_session_events', '加载同会话事件中')} /> : null}
+        <h3>{t('events.all_session_events', { id: detail.session_id })}</h3>
+        {sessionEventsQuery.isLoading ? <LoadingBlock text={t('events.loading_session_events')} /> : null}
         {sessionEventsQuery.error ? (
           <ApiErrorAlert message={(sessionEventsQuery.error as Error).message} />
         ) : null}
@@ -172,10 +172,10 @@ export function EventDetailPage() {
           <table className="table table-sub">
             <thead>
               <tr>
-                <th>{t('events.col_event_time', '发生时间')}</th>
-                <th>{t('events.col_event_title', '事件')}</th>
-                <th>{t('events.col_importance', '重要性')}</th>
-                <th>{t('events.col_actions', '操作')}</th>
+                <th>{t('events.col_event_time')}</th>
+                <th>{t('events.col_event_title')}</th>
+                <th>{t('events.col_importance')}</th>
+                <th>{t('events.col_actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -186,7 +186,7 @@ export function EventDetailPage() {
                   <td>{item.importance_level ?? '-'}</td>
                   <td>
                     <button className="ghost" onClick={() => navigate(`/events/${item.id}`)}>
-                      {t('events.view_detail', '查看事件')}
+                      {t('events.view_detail')}
                     </button>
                   </td>
                 </tr>
@@ -197,7 +197,7 @@ export function EventDetailPage() {
       </article>
 
       <article className="card summary-detail">
-        <h3>{t('events.raw_result_title', '原始识别结果')}</h3>
+        <h3>{t('events.raw_result_title')}</h3>
         <article>{JSON.stringify(detail.raw_result, null, 2)}</article>
       </article>
 

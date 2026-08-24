@@ -41,12 +41,12 @@ export function DashboardLayout() {
 
   const homeProfileChildren = useMemo(() => [
     { to: '/home-profile/overview', label: t('home_profile.title'), icon: House },
-    { to: '/home-profile/members', label: '家庭成员', icon: Users },
-    { to: '/home-profile/pets', label: '宠物档案', icon: PawPrint },
+    { to: '/home-profile/members', label: t('home_profile.members'), icon: Users },
+    { to: '/home-profile/pets', label: t('home_profile.pets'), icon: PawPrint },
   ], [t])
 
   const settingsChildren = useMemo(() => [
-    { to: '/system-config', label: '日报与提醒', icon: SlidersHorizontal },
+    { to: '/system-config', label: t('settings.entry_daily_summary_title'), icon: SlidersHorizontal },
     { to: '/video-sources', label: t('video_sources.title'), icon: Camera },
     { to: '/providers', label: t('providers.title'), icon: Bot },
     { to: '/system-status', label: t('system_status.title'), icon: Activity },
@@ -70,7 +70,7 @@ export function DashboardLayout() {
   const settingsExpanded = settingsActive || settingsExpandedState
 
   if (!bootstrapped) {
-    return <LoadingBlock text="登录状态初始化中..." />
+    return <LoadingBlock text={t('common.init_login_loading')} />
   }
 
   if (!token) {
@@ -94,7 +94,7 @@ export function DashboardLayout() {
             ) : null}
             <span>Video Diary</span>
           </span>
-          <small>家庭监控智能平台</small>
+          <small>{t('common.platform_subtitle')}</small>
         </div>
         <nav>
           {topLinks.map((link) => {
@@ -117,7 +117,7 @@ export function DashboardLayout() {
             onClick={() => setHomeProfileExpanded((old) => !old)}
           >
             <House size={16} />
-            <span>家庭档案</span>
+            <span>{t('home_profile.title')}</span>
             <ChevronDown size={14} className={homeProfileExpanded ? 'nav-chevron open' : 'nav-chevron'} />
           </button>
 
@@ -147,7 +147,7 @@ export function DashboardLayout() {
             onClick={() => setSettingsExpanded((old) => !old)}
           >
             <Settings size={16} />
-            <span>设置</span>
+            <span>{t('layouts.settings')}</span>
             <ChevronDown size={14} className={settingsExpanded ? 'nav-chevron open' : 'nav-chevron'} />
           </button>
 
@@ -182,8 +182,8 @@ export function DashboardLayout() {
       <main className="content-area">
         <header className="topbar">
           <div>
-            <h2>家庭助手</h2>
-            <p>欢迎回来，{username ?? '家人'}</p>
+            <h2>{t('common.family_assistant')}</h2>
+            <p>{t('common.welcome_back', { username: username ?? t('common.default_username') })}</p>
           </div>
           <button onClick={onLogout}>{t('layouts.logout')}</button>
         </header>
