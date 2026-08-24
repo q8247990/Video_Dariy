@@ -20,6 +20,7 @@ class SessionVideoChunk:
     start_offset_seconds: int
     duration_seconds: int
     file_paths: list[str]
+    file_durations: list[int] | None = None
 
 
 @dataclass
@@ -50,6 +51,7 @@ def build_session_video_chunks(
     video_files = get_session_video_files(db, session_id)
     chunks: list[SessionVideoChunk] = []
     current_paths: list[str] = []
+    current_durations: list[int] = []
     current_duration = 0
     current_start_offset = 0
     accumulated_offset = 0
@@ -66,9 +68,11 @@ def build_session_video_chunks(
                     start_offset_seconds=current_start_offset,
                     duration_seconds=current_duration,
                     file_paths=current_paths,
+                    file_durations=list(current_durations),
                 )
             )
             current_paths = []
+            current_durations = []
             current_duration = 0
             current_start_offset = accumulated_offset
 
@@ -76,6 +80,7 @@ def build_session_video_chunks(
             current_start_offset = accumulated_offset
 
         current_paths.append(video_file.file_path)
+        current_durations.append(file_duration)
         current_duration += file_duration
         accumulated_offset += file_duration
 
@@ -86,6 +91,7 @@ def build_session_video_chunks(
                 start_offset_seconds=current_start_offset,
                 duration_seconds=current_duration,
                 file_paths=current_paths,
+                file_durations=list(current_durations),
             )
         )
 
@@ -99,22 +105,31 @@ def build_chunk_sub_chunks(
     db: Session,
     sub_chunk_seconds: int = 300,
 ) -> list[SubChunk]:
-    """将 10 分钟 SessionVideoChunk 切分为 ≤ sub_chunk_seconds 的 SubChunk。"""
+    """将 10 分钟 SessionVideoChunk 切分为 ≤ sub_chunk_seconds 的 SubChunk。
+
+    优先使用 ``chunk.file_durations``（由 ``build_session_video_chunks`` 从
+    VideoFile.duration_seconds 填充，避免 ffprobe 子进程开销）。回退到
+    60s 估计仅当 file_durations 缺失或长度不匹配 file_paths。
+    """
     del db
     if sub_chunk_seconds <= 0:
         raise ValueError("sub_chunk_seconds must be greater than 0")
     if not chunk.file_paths:
         raise ValueError("chunk has no source files")
 
+    if chunk.file_durations is None or len(chunk.file_durations) != len(chunk.file_paths):
+        file_durations = [60] * len(chunk.file_paths)
+    else:
+        file_durations = list(chunk.file_durations)
+
     sub_chunks: list[SubChunk] = []
     current_paths: list[str] = []
+    current_durations: list[int] = []
     current_duration = 0
     current_start_offset = chunk.start_offset_seconds
     accumulated_offset = chunk.start_offset_seconds
 
-    for file_path in chunk.file_paths:
-        file_duration = _resolve_file_path_duration_seconds(file_path)
-
+    for file_path, file_duration in zip(chunk.file_paths, file_durations, strict=True):
         if current_paths and current_duration + file_duration > sub_chunk_seconds:
             sub_chunks.append(
                 SubChunk(
@@ -126,6 +141,7 @@ def build_chunk_sub_chunks(
                 )
             )
             current_paths = []
+            current_durations = []
             current_duration = 0
             current_start_offset = accumulated_offset
 
@@ -133,6 +149,7 @@ def build_chunk_sub_chunks(
             current_start_offset = accumulated_offset
 
         current_paths.append(file_path)
+        current_durations.append(file_duration)
         current_duration += file_duration
         accumulated_offset += file_duration
 
@@ -224,38 +241,6 @@ def _resolve_file_duration_seconds(video_file) -> int:
     if estimated > 0:
         return estimated
     return 60
-
-
-def _resolve_file_path_duration_seconds(file_path: str) -> int:
-    """Fallback for sub-chunk splitting when DB metadata isn't available.
-
-    Uses ffprobe if available, else defaults to 60s.
-    """
-    try:
-        import json as _json
-        import subprocess as _sp
-
-        result = _sp.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=duration",
-                "-of",
-                "json",
-                file_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        data = _json.loads(result.stdout or "{}")
-        return max(1, int(float(data["streams"][0]["duration"])))
-    except Exception:  # noqa: BLE001 - best-effort estimate
-        return 60
 
 
 def _concat_video_files_to_mp4_bytes(file_paths: list[str]) -> bytes:

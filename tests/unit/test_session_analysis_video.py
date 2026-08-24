@@ -103,19 +103,14 @@ def test_concat_video_delegates_to_run_ffmpeg_concat(monkeypatch) -> None:
     assert calls[0] == ["/tmp/a.mp4", "/tmp/b.mp4"]
 
 
-def test_build_chunk_sub_chunks_splits_into_300s(monkeypatch: object) -> None:
-    del monkeypatch
+def test_build_chunk_sub_chunks_splits_into_300s() -> None:
     chunk = SessionVideoChunk(
         chunk_index=0,
         start_offset_seconds=0,
         duration_seconds=600,
         file_paths=[f"/fake/f{i}.mp4" for i in range(10)],
+        file_durations=[60] * 10,
     )
-
-    def _fake_resolve(path: str) -> int:
-        return 60
-
-    sav._resolve_file_path_duration_seconds = _fake_resolve  # type: ignore[assignment]
 
     sub_chunks = build_chunk_sub_chunks(chunk, db=None, sub_chunk_seconds=300)
 
@@ -132,16 +127,14 @@ def test_build_chunk_sub_chunks_splits_into_300s(monkeypatch: object) -> None:
     assert len(sub_chunks[1].file_paths) == 5
 
 
-def test_build_chunk_sub_chunks_does_not_split_short_parent(monkeypatch: object) -> None:
-    del monkeypatch
+def test_build_chunk_sub_chunks_does_not_split_short_parent() -> None:
     chunk = SessionVideoChunk(
         chunk_index=2,
         start_offset_seconds=0,
         duration_seconds=60,
         file_paths=["/fake/short.mp4"],
+        file_durations=[60],
     )
-
-    sav._resolve_file_path_duration_seconds = lambda _p: 60  # type: ignore[assignment]
 
     sub_chunks = build_chunk_sub_chunks(chunk, db=None, sub_chunk_seconds=300)
 
@@ -151,21 +144,82 @@ def test_build_chunk_sub_chunks_does_not_split_short_parent(monkeypatch: object)
     assert sub_chunks[0].duration_seconds == 60
 
 
-def test_build_chunk_sub_chunks_preserves_absolute_offset(monkeypatch: object) -> None:
-    del monkeypatch
+def test_build_chunk_sub_chunks_preserves_absolute_offset() -> None:
     chunk = SessionVideoChunk(
         chunk_index=1,
         start_offset_seconds=600,
         duration_seconds=600,
         file_paths=[f"/fake/f{i}.mp4" for i in range(10)],
+        file_durations=[60] * 10,
     )
-
-    sav._resolve_file_path_duration_seconds = lambda _p: 60  # type: ignore[assignment]
 
     sub_chunks = build_chunk_sub_chunks(chunk, db=None, sub_chunk_seconds=300)
 
     assert sub_chunks[0].start_offset_seconds == 600
     assert sub_chunks[1].start_offset_seconds == 900
+
+
+def test_build_chunk_sub_chunks_falls_back_to_60s_when_durations_missing() -> None:
+    chunk = SessionVideoChunk(
+        chunk_index=0,
+        start_offset_seconds=0,
+        duration_seconds=600,
+        file_paths=[f"/fake/f{i}.mp4" for i in range(10)],
+        file_durations=None,
+    )
+
+    sub_chunks = build_chunk_sub_chunks(chunk, db=None, sub_chunk_seconds=300)
+
+    assert len(sub_chunks) == 2
+    assert sub_chunks[0].duration_seconds == 300
+    assert sub_chunks[1].duration_seconds == 300
+
+
+def test_build_session_video_chunks_populates_file_durations() -> None:
+    db = _new_db_session()
+    try:
+        session = VideoSession(
+            source_id=1,
+            session_start_time=datetime(2026, 3, 14, 9, 0, 0),
+            session_end_time=datetime(2026, 3, 14, 9, 2, 0),
+            total_duration_seconds=120,
+            analysis_status="pending",
+        )
+        db.add(session)
+        db.flush()
+
+        base = datetime(2026, 3, 14, 9, 0, 0)
+        for index in range(2):
+            start_time = base + timedelta(minutes=index)
+            end_time = start_time + timedelta(minutes=1)
+            vf = VideoFile(
+                source_id=1,
+                file_name=f"{index:04d}.mp4",
+                file_path=f"/tmp/{index:04d}.mp4",
+                storage_type="local_file",
+                file_format="mp4",
+                start_time=start_time,
+                end_time=end_time,
+                duration_seconds=60,
+                parse_status="parsed",
+            )
+            db.add(vf)
+            db.flush()
+            db.add(
+                VideoSessionFileRel(
+                    session_id=session.id,
+                    video_file_id=vf.id,
+                    sort_index=index,
+                )
+            )
+        db.commit()
+
+        chunks = build_session_video_chunks(db, session.id, chunk_seconds=600)
+
+        assert len(chunks) == 1
+        assert chunks[0].file_durations == [60, 60]
+    finally:
+        db.close()
 
 
 def test_build_chunk_keyframe_payload_uses_ascending_indices_and_jpeg_url(
