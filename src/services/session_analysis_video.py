@@ -205,9 +205,7 @@ def build_chunk_video_data_url(chunk: SessionVideoChunk) -> str:
     return f"data:video/mp4;base64,{video_base64}"
 
 
-def session_chunk_from_sub_chunk(
-    sub_chunk: SubChunk, parent_chunk_index: int
-) -> SessionVideoChunk:
+def session_chunk_from_sub_chunk(sub_chunk: SubChunk, parent_chunk_index: int) -> SessionVideoChunk:
     """Project a SubChunk back to a SessionVideoChunk shape (for raw_mp4 fallback)."""
     return SessionVideoChunk(
         chunk_index=parent_chunk_index,

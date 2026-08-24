@@ -114,9 +114,7 @@ def test_multi_file_indices_offset_by_prior_duration(
     monkeypatch.setattr("pathlib.Path.is_file", lambda self: True)
     base = np.zeros((90, 160, 3), dtype=np.uint8)
     frames_a = [base.copy() for _ in range(10)]
-    frames_b = [np.full((90, 160, 3), 255, dtype=np.uint8)] + [
-        base.copy() for _ in range(9)
-    ]
+    frames_b = [np.full((90, 160, 3), 255, dtype=np.uint8)] + [base.copy() for _ in range(9)]
 
     probe_calls = {"n": 0}
 
@@ -180,6 +178,7 @@ def test_emit_jpeg_base64_produces_valid_jpeg() -> None:
     frame = np.full((480, 640, 3), 128, dtype=np.uint8)
     b64 = ke._emit_jpeg_base64(frame, jpeg_quality=90)
     import base64 as _b64
+
     raw = _b64.b64decode(b64)
     assert raw[:3] == b"\xff\xd8\xff"
 
@@ -197,11 +196,7 @@ def test_periodic_anchor_resets_after_fire(
             frames.append(base.copy())
 
     monkeypatch.setattr(ke, "_probe_video", lambda _p: (20.0, 10.0))
-    monkeypatch.setattr(
-        ke, "_decode_file_with_ffmpeg_pipe", lambda _p, _f: iter(frames)
-    )
+    monkeypatch.setattr(ke, "_decode_file_with_ffmpeg_pipe", lambda _p, _f: iter(frames))
 
-    ks = extract_keyframes_for_sub_chunk(
-        ["/fake/a.mp4"], target_n=10, periodic_anchor_seconds=4
-    )
+    ks = extract_keyframes_for_sub_chunk(["/fake/a.mp4"], target_n=10, periodic_anchor_seconds=4)
     assert ks.extra["periodic_anchors"] >= 1

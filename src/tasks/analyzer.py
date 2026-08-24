@@ -345,14 +345,12 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             )
             client, provider = _build_provider_client(db)
             preprocess_mode = (
-                getattr(provider, "video_preprocess_mode", "keyframe") or "keyframe"
-            ).strip().lower()
-            keyframe_target_n = int(
-                getattr(provider, "video_keyframe_target_n", 64) or 64
+                (getattr(provider, "video_preprocess_mode", "keyframe") or "keyframe")
+                .strip()
+                .lower()
             )
-            keyframe_jpeg_quality = int(
-                getattr(provider, "video_keyframe_jpeg_quality", 88) or 88
-            )
+            keyframe_target_n = int(getattr(provider, "video_keyframe_target_n", 64) or 64)
+            keyframe_jpeg_quality = int(getattr(provider, "video_keyframe_jpeg_quality", 88) or 88)
             fallback_to_mp4 = settings.ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4
 
             parse_modes: list[str] = []
