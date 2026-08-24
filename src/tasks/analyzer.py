@@ -41,8 +41,11 @@ from src.services.prompt_builder.v2.video_recognition import build_strategy_note
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_required_enabled_provider
 from src.services.session_analysis_video import (
     SessionVideoChunk,
+    build_chunk_keyframe_payload,
+    build_chunk_sub_chunks,
     build_chunk_video_data_url,
     build_session_video_chunks,
+    session_chunk_from_sub_chunk,
 )
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
@@ -341,10 +344,23 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
             )
             client, provider = _build_provider_client(db)
+            preprocess_mode = (
+                getattr(provider, "video_preprocess_mode", "keyframe") or "keyframe"
+            ).strip().lower()
+            keyframe_target_n = int(
+                getattr(provider, "video_keyframe_target_n", 64) or 64
+            )
+            keyframe_jpeg_quality = int(
+                getattr(provider, "video_keyframe_jpeg_quality", 88) or 88
+            )
+            fallback_to_mp4 = settings.ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4
 
             parse_modes: list[str] = []
             events_to_persist: list[EventRecord] = []
             structured_results: list[tuple[int, RecognitionResultDTO]] = []
+            sub_chunk_count = 0
+            keyframe_fallback_count = 0
+            keyframe_total_count = 0
             for chunk in chunks:
                 ensure_task_not_cancelled(
                     db,
@@ -352,52 +368,124 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                     default_message=f"Analysis cancelled for session {session_id}",
                 )
                 last_chunk_index = chunk.chunk_index
-                video_data_url = build_chunk_video_data_url(chunk)
-                system_prompt, user_prompt = _build_prompts(source, home_context, session, chunk)
-                last_prompt_text = user_prompt
-                enforce_token_quota(db, provider)
-
-                response_text = client.chat_completion(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "video_url", "video_url": {"url": video_data_url}},
-                                {"type": "text", "text": user_prompt},
-                            ],
-                        },
-                    ],
-                    temperature=0,
-                    max_tokens=8192,
-                    response_format={"type": "json_object"},
-                )
-                last_response_text = response_text
-                last_raw_response_text = client.get_last_raw_response_text()
-                record_token_usage(
+                sub_chunks = build_chunk_sub_chunks(
+                    chunk,
                     db,
-                    provider_id=provider.id,
-                    provider_name_snapshot=provider.provider_name,
-                    scene="video_analysis",
-                    usage=client.get_last_usage(),
+                    sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS,
                 )
-
-                if not response_text:
-                    raise ValueError(
-                        f"Empty response from vision provider for chunk {chunk.chunk_index}"
+                for sub_chunk in sub_chunks:
+                    ensure_task_not_cancelled(
+                        db,
+                        task_log.id,
+                        default_message=(
+                            f"Analysis cancelled for session {session_id}, "
+                            f"chunk {chunk.chunk_index}-{sub_chunk.sub_chunk_index}"
+                        ),
                     )
+                    last_chunk_index = chunk.chunk_index
 
-                recognition_result = parse_video_recognition_output(response_text)
-                parse_modes.append("new")
-                structured_results.append((chunk.chunk_index, recognition_result))
-                for item in recognition_result.events:
-                    events_to_persist.append(
-                        build_event_record_from_recognized_event(
-                            session,
-                            item,
-                            base_offset_seconds=chunk.start_offset_seconds,
+                    effective_mode = preprocess_mode
+                    extra_body: dict[str, Any] | None = None
+                    video_part: dict[str, Any]
+
+                    if effective_mode == "keyframe":
+                        try:
+                            payload = build_chunk_keyframe_payload(
+                                sub_chunk,
+                                target_n=keyframe_target_n,
+                                jpeg_quality=keyframe_jpeg_quality,
+                                mad_threshold=settings.ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD,
+                                phash_threshold=settings.ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD,
+                                periodic_anchor_seconds=settings.ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS,
+                            )
+                            keyframe_total_count += 1
+                            extra_body = {"media_io_kwargs": payload.media_io_kwargs}
+                            video_part = {
+                                "type": "video_url",
+                                "video_url": {"url": payload.jpeg_data_url},
+                            }
+                        except Exception as exc:
+                            if not fallback_to_mp4:
+                                logger.exception(
+                                    "keyframe extraction failed for session %s "
+                                    "chunk %s-%s; fallback disabled",
+                                    session_id,
+                                    chunk.chunk_index,
+                                    sub_chunk.sub_chunk_index,
+                                )
+                                raise
+                            logger.warning(
+                                "keyframe extraction failed for session %s "
+                                "chunk %s-%s, falling back to raw_mp4: %s",
+                                session_id,
+                                chunk.chunk_index,
+                                sub_chunk.sub_chunk_index,
+                                exc,
+                            )
+                            keyframe_fallback_count += 1
+                            effective_mode = "raw_mp4"
+
+                    if effective_mode == "raw_mp4":
+                        fallback_chunk = session_chunk_from_sub_chunk(
+                            sub_chunk, parent_chunk_index=chunk.chunk_index
                         )
+                        video_data_url = build_chunk_video_data_url(fallback_chunk)
+                        extra_body = None
+                        video_part = {
+                            "type": "video_url",
+                            "video_url": {"url": video_data_url},
+                        }
+
+                    system_prompt, user_prompt = _build_prompts(
+                        source, home_context, session, chunk
                     )
+                    last_prompt_text = user_prompt
+                    enforce_token_quota(db, provider)
+
+                    response_text = client.chat_completion(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {
+                                "role": "user",
+                                "content": [
+                                    video_part,
+                                    {"type": "text", "text": user_prompt},
+                                ],
+                            },
+                        ],
+                        temperature=0,
+                        max_tokens=8192,
+                        response_format={"type": "json_object"},
+                        extra_body=extra_body,
+                    )
+                    last_response_text = response_text
+                    last_raw_response_text = client.get_last_raw_response_text()
+                    record_token_usage(
+                        db,
+                        provider_id=provider.id,
+                        provider_name_snapshot=provider.provider_name,
+                        scene="video_analysis",
+                        usage=client.get_last_usage(),
+                    )
+
+                    if not response_text:
+                        raise ValueError(
+                            f"Empty response from vision provider for chunk "
+                            f"{chunk.chunk_index}-{sub_chunk.sub_chunk_index}"
+                        )
+
+                    recognition_result = parse_video_recognition_output(response_text)
+                    parse_modes.append("new")
+                    structured_results.append((chunk.chunk_index, recognition_result))
+                    for item in recognition_result.events:
+                        events_to_persist.append(
+                            build_event_record_from_recognized_event(
+                                session,
+                                item,
+                                base_offset_seconds=sub_chunk.start_offset_seconds,
+                            )
+                        )
+                    sub_chunk_count += 1
 
             ensure_task_not_cancelled(
                 db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
@@ -411,14 +499,19 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             finalize_task_log(
                 task_log,
                 TaskStatus.SUCCESS,
-                f"Analyzed session in {len(chunks)} chunks, "
-                f"created {len(events_to_persist)} events.",
+                f"Analyzed session in {len(chunks)} chunks / "
+                f"{sub_chunk_count} sub-chunks, created {len(events_to_persist)} events.",
                 {
                     "session_id": session_id,
                     "events_created": len(events_to_persist),
                     "events_replaced_deleted": replaced_deleted_count,
                     "chunk_count": len(chunks),
+                    "sub_chunk_count": sub_chunk_count,
                     "chunk_seconds": settings.ANALYZER_SEGMENT_SECONDS,
+                    "llm_chunk_seconds": settings.ANALYZER_LLM_CHUNK_SECONDS,
+                    "preprocess_mode": preprocess_mode,
+                    "keyframe_total": keyframe_total_count,
+                    "keyframe_fallback": keyframe_fallback_count,
                     "parse_modes": parse_modes,
                     "priority": priority,
                 },
@@ -427,6 +520,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             return {
                 "events_created": len(events_to_persist),
                 "chunk_count": len(chunks),
+                "sub_chunk_count": sub_chunk_count,
             }
 
         except TaskCancellationRequested as exc:

@@ -83,7 +83,9 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
             temperature=0,
             max_tokens=None,
             response_format=None,
+            extra_body=None,
         ):
+            del messages, temperature, max_tokens, response_format, extra_body
             return response_text
 
         def get_last_usage(self):
