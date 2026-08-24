@@ -41,6 +41,7 @@ from src.services.prompt_builder.v2.video_recognition import build_strategy_note
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_required_enabled_provider
 from src.services.session_analysis_video import (
     SessionVideoChunk,
+    SubChunk,
     build_chunk_keyframe_payload,
     build_chunk_sub_chunks,
     build_chunk_video_data_url,
@@ -184,7 +185,7 @@ def _build_prompts(
     source: VideoSource,
     home_context: dict[str, Any],
     session: VideoSession,
-    chunk: SessionVideoChunk,
+    chunk: SessionVideoChunk | SubChunk,
 ) -> tuple[str, str]:
     ingest_type = _resolve_ingest_type(source)
     strategy_note = build_strategy_note(ingest_type=ingest_type, source_type=source.source_type)
@@ -220,7 +221,7 @@ def _build_prompts(
 
 def _aggregate_session_fields(
     session: VideoSession,
-    structured_results: list[tuple[int, RecognitionResultDTO]],
+    structured_results: list[tuple[int, int, RecognitionResultDTO]],
     events: list[EventRecord],
 ) -> None:
     if not structured_results:
@@ -237,10 +238,12 @@ def _aggregate_session_fields(
 
     summary_lines: list[str] = []
     if len(structured_results) == 1:
-        summary_lines.append(structured_results[0][1].session_summary.summary_text)
+        summary_lines.append(structured_results[0][2].session_summary.summary_text)
     else:
-        for chunk_index, result in structured_results:
-            summary_lines.append(f"片段{chunk_index + 1}: {result.session_summary.summary_text}")
+        for chunk_index, sub_index, result in structured_results:
+            summary_lines.append(
+                f"片段{chunk_index + 1}-{sub_index + 1}: {result.session_summary.summary_text}"
+            )
 
     activity_score = {"low": 1, "medium": 2, "high": 3}
     highest_activity = "low"
@@ -250,7 +253,7 @@ def _aggregate_session_fields(
     notes_seen: set[tuple[str, str]] = set()
     has_important_event = any(event.importance_level in {"high", "medium"} for event in events)
 
-    for _, result in structured_results:
+    for _, _, result in structured_results:
         summary = result.session_summary
         if activity_score[summary.activity_level] > activity_score[highest_activity]:
             highest_activity = summary.activity_level
@@ -310,6 +313,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
     with task_db_session() as db:
         session = None
         last_chunk_index: int | None = None
+        last_sub_chunk_index: int | None = None
         last_prompt_text: str | None = None
         last_response_text: str | None = None
         last_raw_response_text: str | None = None
@@ -355,7 +359,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
 
             parse_modes: list[str] = []
             events_to_persist: list[EventRecord] = []
-            structured_results: list[tuple[int, RecognitionResultDTO]] = []
+            structured_results: list[tuple[int, int, RecognitionResultDTO]] = []
             sub_chunk_count = 0
             keyframe_fallback_count = 0
             keyframe_total_count = 0
@@ -381,6 +385,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                         ),
                     )
                     last_chunk_index = chunk.chunk_index
+                    last_sub_chunk_index = sub_chunk.sub_chunk_index
 
                     effective_mode = preprocess_mode
                     extra_body: dict[str, Any] | None = None
@@ -435,7 +440,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                         }
 
                     system_prompt, user_prompt = _build_prompts(
-                        source, home_context, session, chunk
+                        source, home_context, session, sub_chunk
                     )
                     last_prompt_text = user_prompt
                     enforce_token_quota(db, provider)
@@ -474,7 +479,9 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
 
                     recognition_result = parse_video_recognition_output(response_text)
                     parse_modes.append("new")
-                    structured_results.append((chunk.chunk_index, recognition_result))
+                    structured_results.append(
+                        (chunk.chunk_index, sub_chunk.sub_chunk_index, recognition_result)
+                    )
                     for item in recognition_result.events:
                         events_to_persist.append(
                             build_event_record_from_recognized_event(
@@ -542,6 +549,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                     "session_id": session_id,
                     "cancelled": True,
                     "failed_chunk_index": last_chunk_index,
+                    "failed_sub_chunk_index": last_sub_chunk_index,
                     "priority": priority,
                 },
             )
@@ -550,6 +558,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 "cancelled": True,
                 "session_id": session_id,
                 "chunk_index": last_chunk_index,
+                "sub_chunk_index": last_sub_chunk_index,
             }
 
         except Exception as e:
@@ -581,6 +590,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 {
                     "session_id": session_id,
                     "failed_chunk_index": last_chunk_index,
+                    "failed_sub_chunk_index": last_sub_chunk_index,
                     "error_type": type(e).__name__,
                     "prompt_text": truncate_text(last_prompt_text, 4000),
                     "raw_response_excerpt": truncate_text(last_response_text, 1500),
