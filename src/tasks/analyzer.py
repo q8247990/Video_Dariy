@@ -433,7 +433,13 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                             sub_chunk, parent_chunk_index=chunk.chunk_index
                         )
                         video_data_url = build_chunk_video_data_url(fallback_chunk)
-                        extra_body = None
+                        extra_body = {
+                            "media_io_kwargs": {
+                                "video": {
+                                    "num_frames": keyframe_target_n,
+                                }
+                            }
+                        }
                         video_part = {
                             "type": "video_url",
                             "video_url": {"url": video_data_url},

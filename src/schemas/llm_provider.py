@@ -23,7 +23,7 @@ class LLMProviderBase(BaseModel):
     supports_tool_calling: bool = False
     is_default_vision: bool = False
     is_default_qa: bool = False
-    video_preprocess_mode: str = "keyframe"
+    video_preprocess_mode: str = "raw_mp4"
     video_keyframe_target_n: int = 120
     video_keyframe_jpeg_quality: int = 88
 

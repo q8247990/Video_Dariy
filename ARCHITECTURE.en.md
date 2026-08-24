@@ -284,8 +284,8 @@ Workflow:
 2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds (10-min session-level chunk)
 3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 60 seconds) into sub-chunks; one LLM call per sub-chunk
 4. Branch on `LLMProvider.video_preprocess_mode`:
-   - `keyframe` (default): client-side ffmpeg single-pass decode of source mp4 (2fps sample + online MAD/pHash decision + top-N JPEG keyframes, where N is `video_keyframe_target_n`, default 64). Assemble `data:video/jpeg;base64,<J1>,<J2>,...` plus `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}` (REPORT §4.2).
-   - `raw_mp4`: legacy `data:video/mp4;base64,...` path.
+   - `raw_mp4` (default): sends the 60s mp4 directly to vLLM as base64 with `media_io_kwargs.video.num_frames=120`; vLLM uniformly samples 120 frames at 2fps under the 100M pixel budget (1216x672 per frame ≈ 88.7% of 720p). No client-side ffmpeg decode or cv2/numpy required.
+   - `keyframe`: client-side ffmpeg single-pass decode of source mp4 (2fps sample + online MAD/pHash decision + top-N JPEG keyframes, where N is `video_keyframe_target_n`, default 120). Assemble `data:video/jpeg;base64,<J1>,<J2>,...` plus `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}` (REPORT §4.2).
    - When `keyframe` extraction fails AND `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4=true`, automatically fall back to `raw_mp4`.
 5. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
 6. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)

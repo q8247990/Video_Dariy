@@ -22,9 +22,9 @@ def _base_kwargs() -> dict:
     }
 
 
-def test_video_preprocess_mode_default_is_keyframe() -> None:
+def test_video_preprocess_mode_default_is_raw_mp4() -> None:
     obj = LLMProviderBase(**_base_kwargs())
-    assert obj.video_preprocess_mode == "keyframe"
+    assert obj.video_preprocess_mode == "raw_mp4"
 
 
 def test_video_preprocess_mode_accepts_raw_mp4() -> None:

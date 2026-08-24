@@ -290,8 +290,8 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒（10 分钟 session-level chunk）
 3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 60 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
 4. 根据 `LLMProvider.video_preprocess_mode` 决定 LLM 载荷：
-   - `keyframe`（默认）：客户端 ffmpeg 单遍解码源 mp4，2fps 采样 + 在线 MAD/pHash 决策 + top-N JPEG 关键帧（`video_keyframe_target_n` 控制 N，默认 64）。组装 `data:video/jpeg;base64,<J1>,<J2>,...` 并附加 `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}`（REPORT §4.2）。
-   - `raw_mp4`：回退到旧路径 `data:video/mp4;base64,...`。
+   - `raw_mp4`（默认）：直接将 60 秒 mp4 base64 传给 vLLM，通过 `media_io_kwargs.video.num_frames=120` 让 vLLM 均匀采 120 帧（2fps），100M 预算下每帧 1216×672 ≈ 720p 88.7%。无需客户端 ffmpeg 解码或 cv2/numpy。
+   - `keyframe`：客户端 ffmpeg 单遍解码源 mp4，2fps 采样 + 在线 MAD/pHash 决策 + top-N JPEG 关键帧。组装 `data:video/jpeg;base64,<J1>,<J2>,...` 并附加 `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}`（REPORT §4.2）。
    - `keyframe` 提取失败时，若 `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4=true`，自动 fallback 到 `raw_mp4`。
 5. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
 6. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）

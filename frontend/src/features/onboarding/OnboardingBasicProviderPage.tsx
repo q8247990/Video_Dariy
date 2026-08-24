@@ -58,7 +58,7 @@ export function OnboardingBasicProviderPage() {
       supports_tool_calling: false,
       is_default_vision: true,
       is_default_qa: true,
-      video_preprocess_mode: 'keyframe',
+      video_preprocess_mode: 'raw_mp4',
       video_keyframe_target_n: 120,
       video_keyframe_jpeg_quality: 88,
     }

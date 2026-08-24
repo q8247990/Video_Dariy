@@ -26,7 +26,7 @@ class LLMProvider(Base):
     is_default_vision: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_default_qa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     video_preprocess_mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="keyframe"
+        String(16), nullable=False, server_default="raw_mp4"
     )
     video_keyframe_target_n: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="120"
