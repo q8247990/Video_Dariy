@@ -49,6 +49,16 @@ export type OnboardingDraftState = {
   clear: () => void
 }
 
+type StoredProviderDraft = Omit<ProviderDraft, 'api_key'>
+
+type StoredOnboardingDraft = {
+  video: VideoDraft
+  provider: StoredProviderDraft
+  summary: SummaryDraft
+  homeProfile: HomeProfileDraft
+  cameraNotes: Record<number, string>
+}
+
 const defaultState = {
   video: {
     source_name: '',
@@ -81,12 +91,24 @@ const defaultState = {
   cameraNotes: {},
 }
 
-function saveToStorage(state: Omit<OnboardingDraftState, 'setVideo' | 'setProvider' | 'setSummary' | 'setHomeProfile' | 'setCameraNote' | 'hydrate' | 'clear'>): void {
+function saveToStorage(
+  state: Omit<
+    OnboardingDraftState,
+    'setVideo' | 'setProvider' | 'setSummary' | 'setHomeProfile' | 'setCameraNote' | 'hydrate' | 'clear'
+  >,
+): void {
+  const provider: StoredProviderDraft = {
+    api_base_url: state.provider.api_base_url,
+    model_name: state.provider.model_name,
+    provider_id: state.provider.provider_id,
+    tested: state.provider.tested,
+    skipped: state.provider.skipped,
+  }
   localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({
       video: state.video,
-      provider: state.provider,
+      provider,
       summary: state.summary,
       homeProfile: state.homeProfile,
       cameraNotes: state.cameraNotes,
@@ -142,10 +164,10 @@ export const useOnboardingDraftStore = create<OnboardingDraftState>((set) => ({
       return
     }
     try {
-      const parsed = JSON.parse(raw) as Partial<typeof defaultState>
+      const parsed = JSON.parse(raw) as Partial<StoredOnboardingDraft>
       set({
         video: { ...defaultState.video, ...(parsed.video ?? {}) },
-        provider: { ...defaultState.provider, ...(parsed.provider ?? {}) },
+        provider: { ...defaultState.provider, ...(parsed.provider ?? {}), api_key: '' },
         summary: { ...defaultState.summary, ...(parsed.summary ?? {}) },
         homeProfile: { ...defaultState.homeProfile, ...(parsed.homeProfile ?? {}) },
         cameraNotes: parsed.cameraNotes ?? {},

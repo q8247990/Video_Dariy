@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { recoverFromUnauthorized } from './authRecovery'
 import { useAuthStore } from '../store/authStore'
 import { useLocaleStore } from '../store/localeStore'
 
@@ -29,12 +30,18 @@ apiClient.interceptors.response.use(
   (response) => {
     const payload = response.data as ApiResponse<unknown>
     if (typeof payload?.code === 'number' && payload.code !== 0) {
+      if (payload.code === 4011) {
+        recoverFromUnauthorized()
+      }
       return Promise.reject(new Error(payload.message || '请求失败'))
     }
     return response
   },
   (error: unknown) => {
     if (axios.isAxiosError(error)) {
+      if (error.response?.status === 401) {
+        recoverFromUnauthorized()
+      }
       const message = error.response?.data?.message || error.message || '网络错误'
       return Promise.reject(new Error(message))
     }

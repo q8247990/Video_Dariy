@@ -1,11 +1,13 @@
 # 以此项目纪念我亲爱的糖糖，愿你在喵星，也能看到家里，看到你的栗子哥哥，和永远爱你的爸爸妈妈。
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from src.api.error_status import ResponseStatusMiddleware
 from src.api.v1.api import api_router
 from src.core.celery_app import celery_app  # noqa: F401
 from src.core.config import settings
@@ -42,6 +44,7 @@ app = FastAPI(
 )
 
 app.add_middleware(LocaleMiddleware)
+app.add_middleware(ResponseStatusMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,8 +58,28 @@ app.add_middleware(
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     return JSONResponse(
-        status_code=200,
+        status_code=status.HTTP_400_BAD_REQUEST,
         content={"code": 4000, "message": str(exc), "data": None},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"code": 4000, "message": "Request validation failed", "data": None},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    code = 4011 if exc.status_code == status.HTTP_401_UNAUTHORIZED else exc.status_code
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": code, "message": str(exc.detail), "data": None},
+        headers=exc.headers,
     )
 
 

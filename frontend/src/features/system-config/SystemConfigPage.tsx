@@ -253,6 +253,7 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
         <label>
           {t('system_config.mcp_token')}
           <input
+            type="password"
             value={form.mcp_token}
             onChange={(event) => setForm((old) => ({ ...old, mcp_token: event.target.value }))}
             placeholder={t('system_config.mcp_token_placeholder')}
