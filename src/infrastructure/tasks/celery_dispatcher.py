@@ -123,7 +123,10 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
             kwargs={"priority": command.priority},
             task_type=TaskType.SESSION_ANALYSIS,
             task_target_id=command.session_id,
-            detail_json={"priority": command.priority},
+            detail_json={
+                "priority": command.priority,
+                "recovery_attempt": command.recovery_attempt,
+            },
             queue=queue,
         )
 

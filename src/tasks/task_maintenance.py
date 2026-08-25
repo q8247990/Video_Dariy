@@ -11,15 +11,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from math import ceil
 
 from sqlalchemy.orm import Session
 
-from src.application.pipeline.commands import SessionBuildCommand
+from src.application.pipeline.commands import AnalyzeSessionCommand, SessionBuildCommand
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.db.session import task_db_session
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
+from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -36,6 +36,10 @@ CLEANUP_DAYS = 7
 HOT_BUILD_TIMEOUT_SECONDS = 3600
 FULL_BUILD_TIMEOUT_SECONDS = 259200  # 3 days
 ANALYSIS_BASE_TIMEOUT_SECONDS = 600
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
 def _terminal_statuses() -> list[str]:
@@ -78,14 +82,26 @@ def _task_timeout_seconds(db: Session, task_log: TaskLog) -> int:
 
     if task_log.task_type == TaskType.SESSION_ANALYSIS:
         if task_log.task_target_id is None:
-            return ANALYSIS_BASE_TIMEOUT_SECONDS
-        session = db.query(VideoSession).filter(VideoSession.id == task_log.task_target_id).first()
-        if not session:
-            return ANALYSIS_BASE_TIMEOUT_SECONDS
-        segment_seconds = max(1, int(settings.ANALYZER_SEGMENT_SECONDS or 600))
-        total_duration = int(session.total_duration_seconds or 0)
-        chunk_count = max(1, ceil(total_duration / segment_seconds))
-        return ANALYSIS_BASE_TIMEOUT_SECONDS * chunk_count
+            return settings.ANALYSIS_PROGRESS_GRACE_SECONDS
+        checkpoint_count = (
+            db.query(SessionAnalysisCheckpoint)
+            .filter(
+                SessionAnalysisCheckpoint.session_id == task_log.task_target_id,
+                SessionAnalysisCheckpoint.state == "success",
+            )
+            .count()
+        )
+        attempt_count = (
+            db.query(SessionAnalysisCheckpoint)
+            .filter(SessionAnalysisCheckpoint.session_id == task_log.task_target_id)
+            .with_entities(SessionAnalysisCheckpoint.attempt_count)
+            .all()
+        )
+        retry_grace = max((row[0] for row in attempt_count), default=0) * 60
+        progress_grace = settings.ANALYSIS_PROGRESS_GRACE_SECONDS + retry_grace
+        if checkpoint_count:
+            return max(settings.ANALYSIS_PROGRESS_GRACE_SECONDS, progress_grace)
+        return max(ANALYSIS_BASE_TIMEOUT_SECONDS, progress_grace)
 
     if task_log.task_type == TaskType.DAILY_SUMMARY_GENERATION:
         return 300
@@ -93,15 +109,99 @@ def _task_timeout_seconds(db: Session, task_log: TaskLog) -> int:
     return ANALYSIS_BASE_TIMEOUT_SECONDS
 
 
+def _analysis_last_progress_at(db: Session, session_id: int) -> datetime | None:
+    row = (
+        db.query(SessionAnalysisCheckpoint.completed_at)
+        .filter(
+            SessionAnalysisCheckpoint.session_id == session_id,
+            SessionAnalysisCheckpoint.state == "success",
+            SessionAnalysisCheckpoint.completed_at.is_not(None),
+        )
+        .order_by(SessionAnalysisCheckpoint.completed_at.desc())
+        .first()
+    )
+    return _as_utc(row[0]) if row is not None else None
+
+
+def _resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
+    if task_log.task_target_id is None or task_log.cancel_requested:
+        return False
+    next_attempt = task_log.recovery_attempt + 1
+    session = db.query(VideoSession).filter(VideoSession.id == task_log.task_target_id).first()
+    if next_attempt > settings.ANALYSIS_RECOVERY_MAX_ATTEMPTS:
+        claimed = (
+            db.query(TaskLog)
+            .filter(TaskLog.id == task_log.id, TaskLog.status == TaskStatus.RUNNING)
+            .update(
+                {
+                    TaskLog.status: TaskStatus.TIMEOUT,
+                    TaskLog.finished_at: now,
+                    TaskLog.message: (
+                        f"Automatic recovery limit reached for session {task_log.task_target_id}"
+                    ),
+                    TaskLog.recovery_attempt: next_attempt,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not claimed:
+            db.rollback()
+            return False
+        if session is not None and session.analysis_status == SessionAnalysisStatus.ANALYZING:
+            session.analysis_status = SessionAnalysisStatus.SEALED
+        return False
+
+    claimed = (
+        db.query(TaskLog)
+        .filter(TaskLog.id == task_log.id, TaskLog.status == TaskStatus.RUNNING)
+        .update(
+            {
+                TaskLog.status: TaskStatus.TIMEOUT,
+                TaskLog.finished_at: now,
+                TaskLog.message: (
+                    f"Analysis worker lease expired; automatic recovery {next_attempt} scheduled"
+                ),
+                TaskLog.recovery_attempt: next_attempt,
+            },
+            synchronize_session=False,
+        )
+    )
+    if not claimed:
+        db.rollback()
+        return False
+    if session is not None and session.analysis_status == SessionAnalysisStatus.ANALYZING:
+        session.analysis_status = SessionAnalysisStatus.SEALED
+    db.commit()
+    priority = "hot"
+    if isinstance(task_log.detail_json, dict):
+        priority = str(task_log.detail_json.get("priority") or priority)
+    CeleryTaskDispatcher().dispatch_analyze_session(
+        AnalyzeSessionCommand(
+            session_id=task_log.task_target_id,
+            priority=priority,
+            recovery_attempt=next_attempt,
+        )
+    )
+    return True
+
+
 def _recover_timed_out_tasks(db: Session, now: datetime) -> int:
-    """Find and mark timed-out running tasks."""
     running_tasks = db.query(TaskLog).filter(TaskLog.status == TaskStatus.RUNNING).all()
     timeout_count = 0
 
     for item in running_tasks:
-        started_at = item.started_at or item.created_at
+        if item.cancel_requested:
+            continue
+        started_at = _as_utc(item.started_at or item.created_at)
         timeout_seconds = _task_timeout_seconds(db, item)
-        if started_at + timedelta(seconds=timeout_seconds) > now:
+        last_progress = (
+            _analysis_last_progress_at(db, item.task_target_id)
+            if item.task_type == TaskType.SESSION_ANALYSIS and item.task_target_id is not None
+            else None
+        )
+        timeout_anchor = _as_utc(last_progress or item.last_heartbeat_at or started_at)
+        lease_expired = item.lease_expires_at is not None and _as_utc(item.lease_expires_at) <= now
+        if timeout_anchor + timedelta(seconds=timeout_seconds) > now or not lease_expired:
             continue
 
         if item.queue_task_id:
@@ -110,15 +210,12 @@ def _recover_timed_out_tasks(db: Session, now: datetime) -> int:
             except Exception:
                 logger.exception("Failed to revoke timed-out task_id=%s", item.queue_task_id)
 
-        item.status = TaskStatus.TIMEOUT
-        item.message = f"Task timed out after {timeout_seconds} seconds"
-        item.finished_at = now
-
-        # Reset session status if analysis timed out
-        if item.task_type == TaskType.SESSION_ANALYSIS and item.task_target_id is not None:
-            session = db.query(VideoSession).filter(VideoSession.id == item.task_target_id).first()
-            if session is not None and session.analysis_status == SessionAnalysisStatus.ANALYZING:
-                session.analysis_status = SessionAnalysisStatus.SEALED
+        if item.task_type == TaskType.SESSION_ANALYSIS:
+            _resume_lost_analysis(db, item, now)
+        else:
+            item.status = TaskStatus.TIMEOUT
+            item.message = f"Task timed out after {timeout_seconds} seconds"
+            item.finished_at = now
 
         timeout_count += 1
 
@@ -126,8 +223,7 @@ def _recover_timed_out_tasks(db: Session, now: datetime) -> int:
 
 
 def _recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
-    """Mark stale pending tasks (>120s old with no worker) as timed out."""
-    stale_before = now - timedelta(seconds=120)
+    stale_before = now - timedelta(seconds=settings.ANALYSIS_PENDING_GRACE_SECONDS)
     pending_tasks = (
         db.query(TaskLog)
         .filter(TaskLog.status == TaskStatus.PENDING, TaskLog.created_at <= stale_before)
@@ -137,20 +233,18 @@ def _recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
 
     recovered = 0
     for item in pending_tasks:
-        if item.queue_task_id:
-            state = celery_app.AsyncResult(item.queue_task_id).state
-            if state not in {"PENDING", "SUCCESS", "FAILURE", "REVOKED"}:
-                continue
-
-        item.status = TaskStatus.TIMEOUT
-        item.finished_at = now
-        item.message = "Pending task orphaned"
-
-        # Reset session status if analysis orphaned
-        if item.task_type == TaskType.SESSION_ANALYSIS and item.task_target_id is not None:
-            session = db.query(VideoSession).filter(VideoSession.id == item.task_target_id).first()
-            if session is not None and session.analysis_status == SessionAnalysisStatus.ANALYZING:
-                session.analysis_status = SessionAnalysisStatus.SEALED
+        if (
+            item.cancel_requested
+            or item.lease_expires_at is None
+            or _as_utc(item.lease_expires_at) > now
+        ):
+            continue
+        if item.task_type == TaskType.SESSION_ANALYSIS:
+            _resume_lost_analysis(db, item, now)
+        else:
+            item.status = TaskStatus.TIMEOUT
+            item.finished_at = now
+            item.message = "Pending task orphaned after expired worker lease"
 
         recovered += 1
 

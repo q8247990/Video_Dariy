@@ -12,6 +12,7 @@ class SessionBuildCommand:
 class AnalyzeSessionCommand:
     session_id: int
     priority: str = "hot"  # "hot" | "full"
+    recovery_attempt: int = 0
 
 
 @dataclass(frozen=True)

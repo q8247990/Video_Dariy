@@ -20,6 +20,14 @@ class TaskLog(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    recovery_attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lease_owner: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     detail_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
 

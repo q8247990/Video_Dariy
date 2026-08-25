@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
 from src.models.task_log import TaskLog
 from src.services.pipeline_constants import TaskStatus, TaskType
 
@@ -159,6 +160,7 @@ def create_pending_task_log(
                 task_target_id=task_target_id,
                 dedupe_key=dedupe_key,
                 status=TaskStatus.PENDING,
+                recovery_attempt=int(detail_payload.get("recovery_attempt") or 0),
                 detail_json=detail_payload,
             )
             .on_conflict_do_nothing(
@@ -188,6 +190,7 @@ def create_pending_task_log(
         task_target_id=task_target_id,
         dedupe_key=dedupe_key,
         status=TaskStatus.PENDING,
+        recovery_attempt=int(detail_payload.get("recovery_attempt") or 0),
         detail_json=detail_payload,
     )
     db.add(task_log)
@@ -256,6 +259,9 @@ def bind_or_create_running_task_log(  # noqa: C901
         target.queue_task_id = queue_task_id or target.queue_task_id
         target.status = TaskStatus.RUNNING
         target.started_at = target.started_at or now
+        target.lease_owner = queue_task_id or target.lease_owner
+        target.last_heartbeat_at = now
+        target.lease_expires_at = now + timedelta(seconds=settings.ANALYSIS_LEASE_SECONDS)
         target.message = None
         target.detail_json = merged
         return target
@@ -320,10 +326,23 @@ def bind_or_create_running_task_log(  # noqa: C901
         queue_task_id=queue_task_id,
         status=TaskStatus.RUNNING,
         started_at=now,
+        lease_owner=queue_task_id or None,
+        last_heartbeat_at=now,
+        lease_expires_at=now + timedelta(seconds=settings.ANALYSIS_LEASE_SECONDS),
         detail_json=detail_payload,
     )
     db.add(task_log)
     return task_log
+
+
+def renew_task_lease(db: Session, task_log_id: int, lease_owner: str | None = None) -> None:
+    task_log = get_task_log_for_update(db, task_log_id)
+    if task_log is None or task_log.status != TaskStatus.RUNNING:
+        return
+    now = datetime.now(timezone.utc)
+    task_log.lease_owner = lease_owner or task_log.lease_owner
+    task_log.last_heartbeat_at = now
+    task_log.lease_expires_at = now + timedelta(seconds=settings.ANALYSIS_LEASE_SECONDS)
 
 
 def finalize_task_log(

@@ -60,6 +60,7 @@ from src.services.task_dispatch_control import (
     finalize_cancelled_task_log,
     finalize_task_log,
     get_task_log_for_update,
+    renew_task_lease,
 )
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.mapper import build_event_record_from_recognized_event
@@ -597,6 +598,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                         continue
                     current_checkpoint.state = "processing"
                     current_checkpoint.attempt_count += 1
+                    renew_task_lease(db, task_log.id, queue_task_id or None)
                     db.commit()
                     enforce_token_quota(db, provider)
 
@@ -646,6 +648,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                         session_id=session.id,
                         analysis_checkpoint_id=current_checkpoint.id,
                     )
+                    renew_task_lease(db, task_log.id, queue_task_id or None)
                     db.commit()
                     parse_modes.append("new")
                     sub_chunk_count += 1
