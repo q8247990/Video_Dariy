@@ -10,9 +10,10 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from src.application.pipeline.commands import AnalyzeSessionCommand
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
-from src.models.task_log import TaskLog
+from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import (
@@ -25,9 +26,6 @@ from src.services.session_builder import SessionBuilder
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
-    build_dedupe_key,
-    create_pending_task_log,
-    ensure_dict_detail,
     ensure_task_not_cancelled,
     finalize_cancelled_task_log,
     finalize_task_log,
@@ -89,62 +87,15 @@ def _dispatch_analysis_for_sealed(
     每 60 秒被 heartbeat 触发一次时对同一 Session 重复派发分析任务。
     """
     dispatched: list[dict] = []
+    dispatcher = CeleryTaskDispatcher()
     for info in sealed_sessions:
-        queue = "analysis_hot" if info.priority == ScanMode.HOT else "analysis_full"
-        pending_log: TaskLog | None = None
         try:
-            detail_payload = ensure_dict_detail({"priority": info.priority})
-            dedupe_key = build_dedupe_key(
-                TaskType.SESSION_ANALYSIS, info.session_id, detail_payload
+            task_id = dispatcher.dispatch_analyze_session(
+                AnalyzeSessionCommand(session_id=info.session_id, priority=info.priority)
             )
-            detail_payload["dedupe_key"] = dedupe_key
-
-            pending_log, created = create_pending_task_log(
-                db,
-                task_type=TaskType.SESSION_ANALYSIS,
-                task_target_id=info.session_id,
-                detail_json=detail_payload,
-            )
-            if not created:
-                logger.info(
-                    "跳过重复分析派发: session=%s 已有活跃任务 task_log_id=%s",
-                    info.session_id,
-                    pending_log.id,
-                )
-                continue
-
-            task = celery_app.send_task(
-                "src.tasks.analyzer.analyze_session_task",
-                args=[info.session_id],
-                kwargs={"priority": info.priority},
-                queue=queue,
-            )
-            pending_log.queue_task_id = str(task.id)
-            pending_log.message = "Queued"
-            db.commit()
-            dispatched.append(
-                {
-                    "session_id": info.session_id,
-                    "task_id": str(task.id),
-                    "queue": queue,
-                }
-            )
-        except Exception as exc:
+            dispatched.append({"session_id": info.session_id, "task_id": task_id})
+        except Exception:
             logger.exception("Failed to dispatch analysis for session %s", info.session_id)
-            if isinstance(pending_log, TaskLog):
-                try:
-                    db.rollback()
-                    pending_log.status = TaskStatus.FAILED
-                    pending_log.finished_at = datetime.now(timezone.utc)
-                    pending_log.message = f"Failed to enqueue: {exc}"
-                    db.add(pending_log)
-                    db.commit()
-                except Exception:
-                    logger.exception(
-                        "Failed to mark pending_log FAILED for session %s",
-                        info.session_id,
-                    )
-                    db.rollback()
     return dispatched
 
 

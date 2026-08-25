@@ -15,9 +15,11 @@ from math import ceil
 
 from sqlalchemy.orm import Session
 
+from src.application.pipeline.commands import SessionBuildCommand
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.db.session import task_db_session
+from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -27,7 +29,6 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
-from src.services.task_dispatch_control import is_singleton_task_running
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +49,20 @@ def _terminal_statuses() -> list[str]:
 
 
 def _dispatch_hot_builds(db: Session) -> list[dict]:
-    """Launch hot_build_task for each enabled, non-paused source that has no active hot task."""
+    """Atomically queue one hot build per source without publishing duplicates."""
     sources = (
         db.query(VideoSource)
         .filter(VideoSource.enabled.is_(True), VideoSource.source_paused.is_(False))
         .all()
     )
     dispatched: list[dict] = []
+    dispatcher = CeleryTaskDispatcher()
     for source in sources:
-        if is_singleton_task_running(db, TaskType.SESSION_BUILD, source.id, scan_mode=ScanMode.HOT):
-            continue
         try:
-            task = celery_app.send_task(
-                "src.tasks.session_build.hot_build_task",
-                kwargs={"source_id": source.id},
+            task_id = dispatcher.dispatch_session_build(
+                SessionBuildCommand(source_id=source.id, scan_mode=ScanMode.HOT)
             )
-            dispatched.append({"source_id": source.id, "task_id": str(task.id)})
+            dispatched.append({"source_id": source.id, "task_id": task_id})
         except Exception:
             logger.exception("Failed to dispatch hot build for source %s", source.id)
     return dispatched

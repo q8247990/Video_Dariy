@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -78,6 +79,8 @@ class SessionBuilder:
         video_records.sort(key=lambda r: r["start_time"])
         result.files_found = len(video_records)
 
+        self._acquire_source_mutation_lock(db, source_id)
+
         if not video_records:
             # No new files; in hot mode check seal buffer for latest open session
             if scan_mode == ScanMode.HOT:
@@ -142,6 +145,10 @@ class SessionBuilder:
         result.sealed_sessions = sealed
 
         return result
+
+    def _acquire_source_mutation_lock(self, db: Session, source_id: int) -> None:
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            db.execute(select(func.pg_advisory_xact_lock(source_id)))
 
     # ------------------------------------------------------------------
     # File operations

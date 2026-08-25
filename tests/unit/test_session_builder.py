@@ -282,3 +282,31 @@ def test_build_does_not_merge_older_files_into_latest_open_session(monkeypatch) 
         assert sessions[2].session_end_time == historical_records[1]["end_time"]
     finally:
         db.close()
+
+
+def test_build_uses_noop_advisory_lock_fallback_for_sqlite(monkeypatch) -> None:
+    db = _new_db_session()
+    try:
+        lock_calls: list[int] = []
+        records = [_record(datetime(2026, 3, 15, 9, 4, 4), "a")]
+        monkeypatch.setattr(
+            "src.services.session_builder.XiaomiDirectoryParser.scan_directory",
+            lambda self, min_time=None, max_time=None, cancel_check=None: records,
+        )
+        monkeypatch.setattr(
+            "src.services.session_builder.SessionBuilder._acquire_source_mutation_lock",
+            lambda self, session, source_id: lock_calls.append(source_id),
+        )
+
+        SessionBuilder().build(
+            db,
+            source_id=1,
+            root_path="/tmp/videos",
+            scan_mode=ScanMode.FULL,
+            scan_start=datetime(2026, 3, 15, 0, 0, 0),
+            scan_end=datetime(2026, 3, 16, 0, 0, 0),
+        )
+
+        assert lock_calls == [1]
+    finally:
+        db.close()

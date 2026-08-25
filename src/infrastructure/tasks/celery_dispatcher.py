@@ -16,7 +16,8 @@ from src.services.task_dispatch_control import (
     build_dedupe_key,
     create_pending_task_log,
     ensure_dict_detail,
-    find_duplicate_active_task,
+    record_deferred_hot_scan,
+    supersede_active_hot_scan,
 )
 
 
@@ -39,10 +40,6 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
             detail_payload = ensure_dict_detail(detail_json)
             detail_payload["dedupe_key"] = dedupe_key
 
-            duplicate = find_duplicate_active_task(db, task_type, task_target_id, dedupe_key)
-            if duplicate:
-                return duplicate.queue_task_id or str(duplicate.id)
-
             pending_log, created = create_pending_task_log(
                 db,
                 task_type=task_type,
@@ -50,7 +47,36 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
                 detail_json=detail_payload,
             )
             if not created:
-                return pending_log.queue_task_id or str(pending_log.id)
+                active_scan_mode = ensure_dict_detail(pending_log.detail_json).get("scan_mode")
+                if (
+                    task_type == TaskType.SESSION_BUILD
+                    and detail_payload.get("scan_mode") == ScanMode.HOT
+                    and active_scan_mode == ScanMode.FULL
+                    and task_target_id is not None
+                ):
+                    deferred_log = record_deferred_hot_scan(db, task_target_id, pending_log)
+                    db.commit()
+                    return str(deferred_log.id)
+                if (
+                    task_type == TaskType.SESSION_BUILD
+                    and detail_payload.get("scan_mode") == ScanMode.FULL
+                    and active_scan_mode == ScanMode.HOT
+                    and task_target_id is not None
+                ):
+                    supersede_active_hot_scan(db, task_target_id, pending_log)
+                    pending_log, created = create_pending_task_log(
+                        db,
+                        task_type=task_type,
+                        task_target_id=task_target_id,
+                        detail_json=detail_payload,
+                    )
+                    if not created:
+                        raise RuntimeError(
+                            "Full scan claim not created after hot supersession "
+                            f"for source {task_target_id}"
+                        )
+                else:
+                    return pending_log.queue_task_id or str(pending_log.id)
 
             send_kwargs: dict = {"args": args or [], "kwargs": kwargs or {}}
             if queue:

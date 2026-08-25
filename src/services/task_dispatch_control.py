@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import TaskStatus
+from src.services.pipeline_constants import TaskStatus, TaskType
 
 
 class TaskCancellationRequested(Exception):
@@ -41,7 +41,7 @@ def build_dedupe_key(
     task_type: str, task_target_id: Optional[int], detail_json: dict[str, Any]
 ) -> str:
     if task_type == "session_build":
-        return "|".join([task_type, str(task_target_id), str(detail_json.get("scan_mode") or "")])
+        return f"source_scan:{task_target_id}"
     if task_type == "session_analysis":
         return "|".join([task_type, str(task_target_id)])
     if task_type == "daily_summary_generation":
@@ -74,6 +74,18 @@ def find_duplicate_active_task(
     task_target_id: Optional[int],
     dedupe_key: str,
 ) -> Optional[TaskLog]:
+    if task_type == TaskType.SESSION_BUILD:
+        return (
+            db.query(TaskLog)
+            .filter(
+                TaskLog.task_type == task_type,
+                TaskLog.task_target_id == task_target_id,
+                TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+            )
+            .order_by(TaskLog.created_at.desc())
+            .first()
+        )
+
     active_by_key = (
         db.query(TaskLog)
         .filter(
@@ -182,6 +194,47 @@ def create_pending_task_log(
     db.flush()
     db.refresh(task_log)
     return task_log, True
+
+
+def record_deferred_hot_scan(
+    db: Session,
+    source_id: int,
+    active_task_log: TaskLog,
+) -> TaskLog:
+    detail = ensure_dict_detail(active_task_log.detail_json)
+    deferred_log = TaskLog(
+        task_type=TaskType.SESSION_BUILD,
+        task_target_id=source_id,
+        dedupe_key=build_dedupe_key(TaskType.SESSION_BUILD, source_id, detail),
+        status=TaskStatus.SKIPPED,
+        message=f"Deferred hot scan: full scan in progress for source {source_id}",
+        detail_json={
+            "scan_mode": "hot",
+            "source_id": source_id,
+            "deferred": True,
+            "reason": "full_scan_in_progress",
+            "active_task_log_id": active_task_log.id,
+        },
+    )
+    db.add(deferred_log)
+    db.flush()
+    return deferred_log
+
+
+def supersede_active_hot_scan(
+    db: Session,
+    source_id: int,
+    active_task_log: TaskLog,
+) -> None:
+    active_task_log.status = TaskStatus.CANCELLED
+    active_task_log.finished_at = datetime.now(timezone.utc)
+    active_task_log.message = f"Superseded by full scan request for source {source_id}"
+    active_task_log.detail_json = {
+        **ensure_dict_detail(active_task_log.detail_json),
+        "superseded": True,
+        "superseded_by": "full_scan_request",
+    }
+    db.flush()
 
 
 def bind_or_create_running_task_log(  # noqa: C901
