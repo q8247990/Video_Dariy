@@ -9,6 +9,7 @@ from src.api.v1.endpoints.video_sources import (
     get_video_sources_status_batch,
     update_video_source,
 )
+from src.models.event_record import EventRecord
 from src.models.system_config import SystemConfig
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
@@ -24,6 +25,7 @@ def _new_db_session() -> Session:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     VideoSource.__table__.create(bind=engine)
     VideoSourceRuntimeState.__table__.create(bind=engine)
+    EventRecord.__table__.create(bind=engine)
     TaskLog.__table__.create(bind=engine)
     SystemConfig.__table__.create(bind=engine)
     VideoFile.__table__.create(bind=engine)
@@ -96,6 +98,45 @@ def test_delete_video_source_blocks_running_task() -> None:
         )
         assert resp.code == 4004
         assert "running task" in str(resp.message)
+    finally:
+        db.close()
+
+
+def test_delete_video_source_restricts_retained_event_history() -> None:
+    db = _new_db_session()
+    try:
+        source = VideoSource(
+            source_name="history",
+            camera_name="cam-history",
+            location_name="test",
+            source_type="local_directory",
+        )
+        db.add(source)
+        db.flush()
+        session = VideoSession(
+            source_id=source.id,
+            session_start_time=datetime(2026, 3, 10, 10, 0, 0),
+            session_end_time=datetime(2026, 3, 10, 10, 1, 0),
+            analysis_status="success",
+        )
+        db.add(session)
+        db.flush()
+        db.add(
+            EventRecord(
+                source_id=source.id,
+                session_id=session.id,
+                event_start_time=datetime(2026, 3, 10, 10, 0, 0),
+                description="retained history",
+            )
+        )
+        db.commit()
+
+        response = delete_video_source(
+            db=db, current_user=_current_user(), locale="zh-CN", id=source.id
+        )
+
+        assert response.code == 4004
+        assert db.get(VideoSource, source.id) is not None
     finally:
         db.close()
 

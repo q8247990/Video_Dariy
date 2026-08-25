@@ -15,7 +15,9 @@ class VideoSession(Base):
     __tablename__ = "video_session"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_source.id"), nullable=False)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("video_source.id", ondelete="RESTRICT"), nullable=False
+    )
     session_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     session_end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     total_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

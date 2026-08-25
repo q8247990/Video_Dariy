@@ -1,17 +1,16 @@
-import json
-import threading
+import fcntl
+import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.services.media_signing import SEGMENT_TTL_SECONDS, MediaCapability, MediaSigningService
 from src.services.session_video import get_session_video_files
-
-_SESSION_LOCKS: dict[int, threading.Lock] = {}
-_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass
@@ -20,27 +19,28 @@ class HlsManifestInfo:
     manifest_url: str
 
 
+@contextmanager
+def _manifest_write_lock(manifest_path: Path) -> Iterator[None]:
+    lock_path = manifest_path.with_suffix(".lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 def get_or_create_session_hls_manifest(db: Session, session_id: int) -> HlsManifestInfo:
-    lock = _get_session_lock(session_id)
-    with lock:
-        manifest_path = _get_session_manifest_path(session_id)
+    manifest_path = _get_session_manifest_path(session_id)
+    with _manifest_write_lock(manifest_path):
         video_files = get_session_video_files(db, session_id)
-        _write_index_manifest(
-            session_id=session_id, manifest_path=manifest_path, file_ids=[v.id for v in video_files]
-        )
-        return HlsManifestInfo(
-            manifest_path=manifest_path,
-            manifest_url=f"/media/sessions/{session_id}/hls/index.m3u8",
-        )
-
-
-def _get_session_lock(session_id: int) -> threading.Lock:
-    with _LOCKS_GUARD:
-        lock = _SESSION_LOCKS.get(session_id)
-        if lock is None:
-            lock = threading.Lock()
-            _SESSION_LOCKS[session_id] = lock
-    return lock
+        available_file_ids = [video.id for video in video_files if not video.file_missing]
+        _write_index_manifest(session_id, manifest_path, available_file_ids)
+    return HlsManifestInfo(
+        manifest_path=manifest_path,
+        manifest_url=f"/media/sessions/{session_id}/hls/index.m3u8",
+    )
 
 
 def _get_hls_cache_root() -> Path:
@@ -57,16 +57,14 @@ def _get_session_manifest_path(session_id: int) -> Path:
 
 def _write_index_manifest(session_id: int, manifest_path: Path, file_ids: list[int]) -> None:
     if not file_ids:
-        raise ValueError(f"Session {session_id} has no playable video files")
+        raise ValueError(f"Session {session_id} has no available video files")
 
-    target_duration = 60
     lines = [
         "#EXTM3U",
         "#EXT-X-VERSION:3",
-        f"#EXT-X-TARGETDURATION:{target_duration}",
+        "#EXT-X-TARGETDURATION:60",
         "#EXT-X-MEDIA-SEQUENCE:0",
     ]
-
     signing_service = MediaSigningService.from_settings()
     expires_at = int(time.time()) + SEGMENT_TTL_SECONDS
     for file_id in file_ids:
@@ -83,14 +81,7 @@ def _write_index_manifest(session_id: int, manifest_path: Path, file_ids: list[i
                 f"{settings.API_V1_STR}/media/files/{file_id}/stream", capability
             )
         )
-
     lines.append("#EXT-X-ENDLIST")
-    payload = "\n".join(lines) + "\n"
-
     tmp_manifest = manifest_path.with_suffix(".m3u8.tmp")
-    tmp_manifest.write_text(payload, encoding="utf-8")
+    tmp_manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp_manifest.replace(manifest_path)
-
-    meta_path = manifest_path.with_name("meta.json")
-    meta_payload = {"session_id": session_id, "file_ids": file_ids}
-    meta_path.write_text(json.dumps(meta_payload, ensure_ascii=True), encoding="utf-8")

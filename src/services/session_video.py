@@ -1,4 +1,4 @@
-import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -10,10 +10,49 @@ from src.models.video_session_file_rel import VideoSessionFileRel
 from src.services.ffmpeg_utils import run_ffmpeg_concat_to_file
 
 
+class SessionVideoUnavailableError(ValueError):
+    pass
+
+
+def resolve_video_file_path(video_file: VideoFile) -> Path | None:
+    root = Path(settings.VIDEO_ROOT_PATH).resolve()
+    candidate = Path(video_file.file_path)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def is_video_file_available(video_file: VideoFile) -> bool:
+    path = resolve_video_file_path(video_file)
+    return path is not None and path.is_file()
+
+
+def mark_missing_video_file(video_file: VideoFile) -> None:
+    if not video_file.file_missing:
+        video_file.file_missing = True
+        video_file.missing_at = datetime.now(timezone.utc)
+
+
+def mark_missing_source_video_files(db: Session, source_id: int) -> int:
+    marked_count = 0
+    video_files = db.query(VideoFile).filter(VideoFile.source_id == source_id).all()
+    for video_file in video_files:
+        if not is_video_file_available(video_file):
+            was_missing = video_file.file_missing
+            mark_missing_video_file(video_file)
+            marked_count += int(not was_missing)
+    return marked_count
+
+
 def get_session_video_files(db: Session, session_id: int) -> list[VideoFile]:
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:
-        raise ValueError(f"Session {session_id} not found")
+        raise SessionVideoUnavailableError(f"Session {session_id} not found")
 
     rel_rows = (
         db.query(VideoSessionFileRel)
@@ -22,17 +61,27 @@ def get_session_video_files(db: Session, session_id: int) -> list[VideoFile]:
         .all()
     )
     if not rel_rows:
-        raise ValueError(f"Session {session_id} has no related video files")
+        raise SessionVideoUnavailableError(f"Session {session_id} has no related video files")
 
     files: list[VideoFile] = []
     for rel in rel_rows:
         video = db.query(VideoFile).filter(VideoFile.id == rel.video_file_id).first()
-        if video:
+        if video is not None:
+            if not is_video_file_available(video):
+                mark_missing_video_file(video)
             files.append(video)
 
     if not files:
-        raise ValueError(f"Session {session_id} has no playable video files")
+        raise SessionVideoUnavailableError(f"Session {session_id} has no video file records")
     return files
+
+
+def get_available_session_video_files(db: Session, session_id: int) -> list[VideoFile]:
+    files = get_session_video_files(db, session_id)
+    available = [video for video in files if is_video_file_available(video)]
+    if not available:
+        raise SessionVideoUnavailableError(f"Session {session_id} has no available video files")
+    return available
 
 
 def get_merged_video_path(session_id: int) -> Path:
@@ -49,29 +98,14 @@ def ensure_merged_video(db: Session, session_id: int) -> str:
     if target_path.exists() and target_path.stat().st_size > 0:
         return str(target_path)
 
-    video_files = get_session_video_files(db, session_id)
+    video_files = get_available_session_video_files(db, session_id)
     source_paths: list[str] = []
     for video in video_files:
-        if not video.file_path or not os.path.exists(video.file_path):
-            raise ValueError(f"Video file missing on disk: {video.file_path}")
-        source_paths.append(video.file_path)
-
+        path = resolve_video_file_path(video)
+        if path is not None:
+            source_paths.append(str(path))
     if len(source_paths) == 1:
         return source_paths[0]
 
     run_ffmpeg_concat_to_file(source_paths, str(target_path))
     return str(target_path)
-
-
-def _build_concat_file(paths: list[str]) -> str:
-    import shlex
-    import tempfile
-
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
-    try:
-        for path in paths:
-            escaped_path = shlex.quote(path)
-            tmp.write(f"file {escaped_path}\n")
-    finally:
-        tmp.close()
-    return tmp.name

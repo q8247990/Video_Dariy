@@ -25,7 +25,9 @@ class VideoFile(Base):
     __tablename__ = "video_file"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_source.id"), nullable=False)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("video_source.id", ondelete="CASCADE"), nullable=False
+    )
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_path_hash: Mapped[str] = mapped_column(
@@ -43,6 +45,8 @@ class VideoFile(Base):
     file_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     parse_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     parse_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    file_missing: Mapped[bool] = mapped_column(default=False, nullable=False)
+    missing_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="video_files")
 

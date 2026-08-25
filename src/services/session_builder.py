@@ -25,6 +25,7 @@ from src.services.pipeline_constants import (
     SessionAnalysisStatus,
 )
 from src.services.pipeline_state import transition_session
+from src.services.session_video import mark_missing_source_video_files
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class SessionBuilder:
         result.files_found = len(video_records)
 
         self._acquire_source_mutation_lock(db, source_id)
+        mark_missing_source_video_files(db, source_id)
 
         if not video_records:
             # No new files; in hot mode check seal buffer for latest open session

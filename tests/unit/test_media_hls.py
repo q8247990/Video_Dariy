@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sqlalchemy import create_engine
@@ -22,9 +23,11 @@ def _new_db_session() -> Session:
 
 def test_session_playback_returns_stream_and_manifest() -> None:
     db = _new_db_session()
-    with TemporaryDirectory() as tmp_dir:
+    with TemporaryDirectory() as tmp_dir, TemporaryDirectory() as video_root:
         old_cache_root = settings.PLAYBACK_CACHE_ROOT
+        old_video_root = settings.VIDEO_ROOT_PATH
         settings.PLAYBACK_CACHE_ROOT = tmp_dir
+        settings.VIDEO_ROOT_PATH = video_root
         try:
             session = VideoSession(
                 source_id=1,
@@ -39,7 +42,7 @@ def test_session_playback_returns_stream_and_manifest() -> None:
             file_a = VideoFile(
                 source_id=1,
                 file_name="0800.mp4",
-                file_path="/tmp/0800.mp4",
+                file_path=str(Path(video_root) / "0800.mp4"),
                 storage_type="local_file",
                 file_format="mp4",
                 start_time=datetime(2026, 3, 14, 8, 0, 0),
@@ -50,7 +53,7 @@ def test_session_playback_returns_stream_and_manifest() -> None:
             file_b = VideoFile(
                 source_id=1,
                 file_name="0801.mp4",
-                file_path="/tmp/0801.mp4",
+                file_path=str(Path(video_root) / "0801.mp4"),
                 storage_type="local_file",
                 file_format="mp4",
                 start_time=datetime(2026, 3, 14, 8, 1, 0),
@@ -61,6 +64,8 @@ def test_session_playback_returns_stream_and_manifest() -> None:
             db.add(file_a)
             db.add(file_b)
             db.flush()
+            Path(file_a.file_path).touch()
+            Path(file_b.file_path).touch()
 
             db.add(
                 VideoSessionFileRel(session_id=session.id, video_file_id=file_a.id, sort_index=0)
@@ -95,4 +100,78 @@ def test_session_playback_returns_stream_and_manifest() -> None:
             assert manifest_resp.headers["cache-control"] == "no-store"
         finally:
             settings.PLAYBACK_CACHE_ROOT = old_cache_root
+            settings.VIDEO_ROOT_PATH = old_video_root
+            db.close()
+
+
+def test_session_playback_marks_missing_segments_and_keeps_available_segment() -> None:
+    db = _new_db_session()
+    with TemporaryDirectory() as cache_dir, TemporaryDirectory() as video_root:
+        old_cache_root = settings.PLAYBACK_CACHE_ROOT
+        old_video_root = settings.VIDEO_ROOT_PATH
+        settings.PLAYBACK_CACHE_ROOT = cache_dir
+        settings.VIDEO_ROOT_PATH = video_root
+        try:
+            session = VideoSession(
+                source_id=1,
+                session_start_time=datetime(2026, 3, 14, 8, 0, 0),
+                session_end_time=datetime(2026, 3, 14, 8, 2, 0),
+                analysis_status="pending",
+            )
+            db.add(session)
+            db.flush()
+            available_path = Path(video_root) / "available.mp4"
+            available_path.touch()
+            available = VideoFile(
+                source_id=1,
+                file_name="available.mp4",
+                file_path=str(available_path),
+                storage_type="local_file",
+                start_time=datetime(2026, 3, 14, 8, 0, 0),
+                end_time=datetime(2026, 3, 14, 8, 1, 0),
+                parse_status="parsed",
+            )
+            missing = VideoFile(
+                source_id=1,
+                file_name="missing.mp4",
+                file_path=str(Path(video_root) / "missing.mp4"),
+                storage_type="local_file",
+                start_time=datetime(2026, 3, 14, 8, 1, 0),
+                end_time=datetime(2026, 3, 14, 8, 2, 0),
+                parse_status="parsed",
+            )
+            db.add_all([available, missing])
+            db.flush()
+            db.add_all(
+                [
+                    VideoSessionFileRel(
+                        session_id=session.id, video_file_id=available.id, sort_index=0
+                    ),
+                    VideoSessionFileRel(
+                        session_id=session.id, video_file_id=missing.id, sort_index=1
+                    ),
+                ]
+            )
+            db.commit()
+
+            playback = get_session_playback(session.id, db, "zh-CN", None)
+
+            assert playback.data["availability"] == "partial"
+            assert playback.data["files"][0]["available"] is True
+            assert playback.data["files"][1]["available"] is False
+            assert playback.data["files"][1]["stream_url"] is None
+            assert db.get(VideoFile, missing.id).file_missing is True
+            assert db.get(VideoFile, missing.id).missing_at is not None
+            manifest = stream_session_hls_manifest(
+                session.id,
+                db,
+                "zh-CN",
+                playback.data["hls_url"].split("token=", maxsplit=1)[1],
+            )
+            assert f"/files/{available.id}/stream?token=" in manifest.body.decode()
+            assert f"/files/{missing.id}/stream?token=" not in manifest.body.decode()
+            assert not (Path(cache_dir) / f"session_{session.id}" / "meta.json").exists()
+        finally:
+            settings.PLAYBACK_CACHE_ROOT = old_cache_root
+            settings.VIDEO_ROOT_PATH = old_video_root
             db.close()

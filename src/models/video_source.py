@@ -35,11 +35,15 @@ class VideoSource(Base):
     )
 
     video_files: Mapped[list["VideoFile"]] = relationship(
-        "VideoFile", back_populates="source", lazy="select"
+        "VideoFile", back_populates="source", lazy="select", passive_deletes=True
     )
     sessions: Mapped[list["VideoSession"]] = relationship(
-        "VideoSession", back_populates="source", lazy="select"
+        "VideoSession", back_populates="source", lazy="select", passive_deletes=True
     )
     runtime_state: Mapped[Optional["VideoSourceRuntimeState"]] = relationship(
-        "VideoSourceRuntimeState", back_populates="source", uselist=False, lazy="select"
+        "VideoSourceRuntimeState",
+        back_populates="source",
+        uselist=False,
+        lazy="select",
+        passive_deletes=True,
     )

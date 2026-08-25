@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 import src.api.deps as api_deps
 from src.api.v1.endpoints import media
+from src.core.config import settings
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
@@ -84,35 +85,42 @@ def _seed_playable_session(db: Session, video_path: Path) -> tuple[int, int]:
 def test_media_routes_require_scoped_signed_capabilities_and_preserve_ranges(
     client: TestClient, db: Session, tmp_path: Path
 ) -> None:
+    old_video_root = settings.VIDEO_ROOT_PATH
+    settings.VIDEO_ROOT_PATH = str(tmp_path)
     video_path = tmp_path / "clip.mp4"
-    video_path.write_bytes(b"abcdefghij")
-    session_id, file_id = _seed_playable_session(db, video_path)
+    try:
+        video_path.write_bytes(b"abcdefghij")
+        session_id, file_id = _seed_playable_session(db, video_path)
 
-    unsigned = client.get(f"/api/v1/media/files/{file_id}/stream")
-    playback = client.get(f"/api/v1/media/sessions/{session_id}/playback")
+        unsigned = client.get(f"/api/v1/media/files/{file_id}/stream")
+        playback = client.get(f"/api/v1/media/sessions/{session_id}/playback")
 
-    assert unsigned.status_code == 401
-    assert playback.status_code == 200
-    playback_data = playback.json()["data"]
-    file_url = playback_data["files"][0]["stream_url"]
-    manifest_url = playback_data["hls_url"]
-    ranged = client.get(f"/api/v1{file_url}", headers={"Range": "bytes=3-6"})
-    manifest = client.get(f"/api/v1{manifest_url}")
+        assert unsigned.status_code == 401
+        assert playback.status_code == 200
+        playback_data = playback.json()["data"]
+        file_url = playback_data["files"][0]["stream_url"]
+        manifest_url = playback_data["hls_url"]
+        ranged = client.get(f"/api/v1{file_url}", headers={"Range": "bytes=3-6"})
+        manifest = client.get(f"/api/v1{manifest_url}")
 
-    assert ranged.status_code == 206
-    assert ranged.content == b"defg"
-    assert ranged.headers["cache-control"] == "no-store"
-    assert manifest.status_code == 200
-    assert manifest.headers["cache-control"] == "no-store"
-    segment_url = next(
-        line for line in manifest.text.splitlines() if line.startswith("/api/v1/media/files/")
-    )
-    segment = client.get(segment_url)
-    cross_resource = client.get(f"/api/v1{file_url.replace(f'/{file_id}/', f'/{file_id + 1}/')}")
+        assert ranged.status_code == 206
+        assert ranged.content == b"defg"
+        assert ranged.headers["cache-control"] == "no-store"
+        assert manifest.status_code == 200
+        assert manifest.headers["cache-control"] == "no-store"
+        segment_url = next(
+            line for line in manifest.text.splitlines() if line.startswith("/api/v1/media/files/")
+        )
+        segment = client.get(segment_url)
+        cross_resource = client.get(
+            f"/api/v1{file_url.replace(f'/{file_id}/', f'/{file_id + 1}/')}"
+        )
 
-    assert segment.status_code == 200
-    assert segment.content == b"abcdefghij"
-    assert cross_resource.status_code == 403
+        assert segment.status_code == 200
+        assert segment.content == b"abcdefghij"
+        assert cross_resource.status_code == 403
+    finally:
+        settings.VIDEO_ROOT_PATH = old_video_root
 
 
 def test_hls_manifest_url_contains_a_signed_query_capability(

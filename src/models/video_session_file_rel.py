@@ -8,8 +8,12 @@ class VideoSessionFileRel(Base):
     __tablename__ = "video_session_file_rel"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_session.id"), nullable=False)
-    video_file_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_file.id"), nullable=False)
+    session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("video_session.id", ondelete="CASCADE"), nullable=False
+    )
+    video_file_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("video_file.id", ondelete="CASCADE"), nullable=False
+    )
     sort_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (

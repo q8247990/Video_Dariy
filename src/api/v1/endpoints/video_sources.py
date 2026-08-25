@@ -6,6 +6,8 @@ from sqlalchemy import or_
 
 from src.api.deps import DB, CurrentUser, Locale
 from src.core.i18n import t
+from src.models.event_record import EventRecord
+from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.schemas.video_source import (
@@ -184,6 +186,14 @@ def delete_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: i
             message=t("source.has_running_task", locale, task_type=running_task_type),
         )
 
+    has_retained_history = db.query(EventRecord.id).filter(EventRecord.source_id == id).first()
+    if has_retained_history is not None:
+        return BaseResponse(
+            code=4004,
+            message="Cannot delete video source while retained event history exists",
+        )
+
+    db.query(VideoSession).filter(VideoSession.source_id == id).delete(synchronize_session=False)
     db.delete(source)
     db.commit()
     return BaseResponse(data={})

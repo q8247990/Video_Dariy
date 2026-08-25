@@ -15,8 +15,12 @@ class EventRecord(Base):
     __tablename__ = "event_record"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_source.id"), nullable=False)
-    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_session.id"), nullable=False)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("video_source.id", ondelete="RESTRICT"), nullable=False
+    )
+    session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("video_session.id", ondelete="CASCADE"), nullable=False
+    )
     event_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     event_end_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

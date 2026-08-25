@@ -15,7 +15,7 @@ class VideoSourceRuntimeState(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(
-        ForeignKey("video_source.id"), nullable=False, unique=True
+        ForeignKey("video_source.id", ondelete="CASCADE"), nullable=False, unique=True
     )
 
     latency_alert_counter: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

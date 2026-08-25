@@ -19,7 +19,13 @@ from src.services.media_signing import (
     MediaSigningService,
 )
 from src.services.session_playback import get_or_create_session_hls_manifest
-from src.services.session_video import ensure_merged_video
+from src.services.session_video import (
+    SessionVideoUnavailableError,
+    ensure_merged_video,
+    is_video_file_available,
+    mark_missing_video_file,
+    resolve_video_file_path,
+)
 
 router = APIRouter()
 
@@ -117,11 +123,13 @@ def stream_video(
     if not video_file:
         raise HTTPException(status_code=404, detail=t("media.video_file_not_found", locale))
 
-    path = video_file.file_path
-    if not os.path.exists(path):
+    path = resolve_video_file_path(video_file)
+    if path is None or not path.is_file():
+        mark_missing_video_file(video_file)
+        db.commit()
         raise HTTPException(status_code=404, detail=t("media.physical_file_not_found", locale))
 
-    file_size = os.path.getsize(path)
+    file_size = path.stat().st_size
     range_header = request.headers.get("Range")
 
     if range_header:
@@ -145,12 +153,12 @@ def stream_video(
         }
 
         return StreamingResponse(
-            send_bytes_range_requests(open(path, "rb"), byte1, byte2),
+            send_bytes_range_requests(path.open("rb"), byte1, byte2),
             status_code=206,
             headers=headers,
         )
     else:
-        return FileResponse(path, media_type="video/mp4", headers=_no_store_headers())
+        return FileResponse(str(path), media_type="video/mp4", headers=_no_store_headers())
 
 
 @router.get("/sessions/{session_id}/playback", response_model=BaseResponse[dict])
@@ -169,21 +177,51 @@ def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: 
     files_data = []
     for rel in rels:
         vf = db.query(VideoFile).filter(VideoFile.id == rel.video_file_id).first()
-        if vf:
+        if vf is None:
             files_data.append(
                 {
-                    "file_id": vf.id,
-                    "file_name": vf.file_name,
-                    "stream_url": _capability_url(
+                    "file_id": rel.video_file_id,
+                    "file_name": None,
+                    "stream_url": None,
+                    "sort_index": rel.sort_index,
+                    "available": False,
+                    "unavailable_reason": "video_file_record_missing",
+                }
+            )
+            continue
+        available = is_video_file_available(vf)
+        if not available:
+            mark_missing_video_file(vf)
+        files_data.append(
+            {
+                "file_id": vf.id,
+                "file_name": vf.file_name,
+                "stream_url": (
+                    _capability_url(
                         f"/media/files/{vf.id}/stream",
                         "file",
                         vf.id,
                         SEGMENT_TTL_SECONDS,
                         session.id,
-                    ),
-                    "sort_index": rel.sort_index,
-                }
-            )
+                    )
+                    if available
+                    else None
+                ),
+                "sort_index": rel.sort_index,
+                "available": available,
+                "unavailable_reason": None if available else "physical_file_unavailable",
+                "missing_at": vf.missing_at,
+            }
+        )
+
+    available_count = sum(1 for file_data in files_data if file_data["available"])
+    if available_count != len(files_data):
+        db.commit()
+    availability = "available"
+    if available_count == 0:
+        availability = "unavailable"
+    elif available_count != len(files_data):
+        availability = "partial"
 
     return BaseResponse(
         data={
@@ -203,6 +241,7 @@ def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: 
                 MANIFEST_TTL_SECONDS,
             ),
             "files": files_data,
+            "availability": availability,
         }
     )
 
@@ -218,8 +257,10 @@ def stream_session_hls_manifest(
 
     try:
         manifest_info = get_or_create_session_hls_manifest(db, session_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except SessionVideoUnavailableError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     if not manifest_info.manifest_path.exists():
         raise HTTPException(status_code=404, detail=t("media.hls_manifest_not_found", locale))
@@ -253,8 +294,10 @@ def stream_session_merged_video(
 
     try:
         path = ensure_merged_video(db, session_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except SessionVideoUnavailableError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=t("media.merged_video_not_found", locale))

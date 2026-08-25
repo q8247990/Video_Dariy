@@ -8,7 +8,9 @@ class EventTagRel(Base):
     __tablename__ = "event_tag_rel"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    event_id: Mapped[int] = mapped_column(Integer, ForeignKey("event_record.id"), nullable=False)
+    event_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("event_record.id", ondelete="CASCADE"), nullable=False
+    )
     tag_id: Mapped[int] = mapped_column(Integer, ForeignKey("tag_definition.id"), nullable=False)
 
     __table_args__ = (
