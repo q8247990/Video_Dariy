@@ -1,6 +1,8 @@
 import json
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.db.base  # noqa: F401
+import src.db.session as db_session_module
 import src.tasks.summarizer as summarizer
 from src.db.base_class import Base
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
@@ -16,7 +19,10 @@ from src.models.event_record import EventRecord
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.llm_provider import LLMProvider
 from src.models.system_config import SystemConfig
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 from src.models.webhook_config import WebhookConfig
+from src.services.home_timezone import local_day_bounds
 
 
 @pytest.fixture
@@ -28,7 +34,7 @@ def db_session_factory(monkeypatch):
     )
     Base.metadata.create_all(bind=engine)
     local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    monkeypatch.setattr(summarizer, "SessionLocal", local_session)
+    monkeypatch.setattr(db_session_module, "SessionLocal", local_session)
     return local_session
 
 
@@ -207,10 +213,11 @@ def test_generate_daily_summary_structured_persist_success(db_session_factory, m
 def test_dispatch_daily_summary_runs_once_per_target_date(db_session_factory, monkeypatch) -> None:
     db = db_session_factory()
     try:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         db.add(
             SystemConfig(config_key="daily_summary_schedule", config_value=now.strftime("%H:%M"))
         )
+        db.add(SystemConfig(config_key="home_timezone", config_value="UTC"))
         db.commit()
 
         dispatch_calls: list[dict] = []
@@ -220,9 +227,9 @@ def test_dispatch_daily_summary_runs_once_per_target_date(db_session_factory, mo
             return "dispatch-task-id"
 
         monkeypatch.setattr(
-            summarizer._pipeline_orchestrator,
-            "dispatch_generate_daily_summary",
-            _mock_dispatch_daily_summary,
+            summarizer,
+            "_get_pipeline_orchestrator",
+            lambda: SimpleNamespace(dispatch_generate_daily_summary=_mock_dispatch_daily_summary),
         )
 
         first = summarizer.dispatch_scheduled_daily_summary_task.run()
@@ -241,10 +248,11 @@ def test_dispatch_daily_summary_retries_after_dispatch_failure(
 ) -> None:
     db = db_session_factory()
     try:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         db.add(
             SystemConfig(config_key="daily_summary_schedule", config_value=now.strftime("%H:%M"))
         )
+        db.add(SystemConfig(config_key="home_timezone", config_value="UTC"))
         db.commit()
 
         dispatch_calls: list[str] = []
@@ -256,9 +264,9 @@ def test_dispatch_daily_summary_retries_after_dispatch_failure(
             return "dispatch-task-id"
 
         monkeypatch.setattr(
-            summarizer._pipeline_orchestrator,
-            "dispatch_generate_daily_summary",
-            _mock_dispatch_daily_summary,
+            summarizer,
+            "_get_pipeline_orchestrator",
+            lambda: SimpleNamespace(dispatch_generate_daily_summary=_mock_dispatch_daily_summary),
         )
 
         first = summarizer.dispatch_scheduled_daily_summary_task.run()
@@ -268,6 +276,189 @@ def test_dispatch_daily_summary_retries_after_dispatch_failure(
         assert first["reason"] == "dispatch_failed"
         assert second["scheduled"] is True
         assert len(dispatch_calls) == 2
+    finally:
+        db.close()
+
+
+def test_dispatch_daily_summary_uses_home_local_schedule_and_date(
+    db_session_factory, monkeypatch
+) -> None:
+    db = db_session_factory()
+    try:
+        db.add_all(
+            [
+                SystemConfig(config_key="daily_summary_schedule", config_value="00:30"),
+                SystemConfig(config_key="home_timezone", config_value="Asia/Shanghai"),
+            ]
+        )
+        db.commit()
+        monkeypatch.setattr(
+            summarizer,
+            "home_now",
+            lambda zone: datetime(2026, 3, 14, 0, 31, tzinfo=zone),
+        )
+        dispatched_dates: list[str] = []
+        monkeypatch.setattr(
+            summarizer,
+            "_get_pipeline_orchestrator",
+            lambda: SimpleNamespace(
+                dispatch_generate_daily_summary=lambda command: (
+                    dispatched_dates.append(command.target_date_str) or "summary-task"
+                )
+            ),
+        )
+
+        result = summarizer.dispatch_scheduled_daily_summary_task.run()
+
+        assert result["scheduled"] is True
+        assert dispatched_dates == ["2026-03-13"]
+    finally:
+        db.close()
+
+
+def test_generate_daily_summary_uses_home_timezone_half_open_event_range(
+    db_session_factory, monkeypatch
+) -> None:
+    db = db_session_factory()
+    try:
+        _seed_qa_provider(db)
+        db.add(SystemConfig(config_key="home_timezone", config_value="Asia/Shanghai"))
+        db.add_all(
+            [
+                EventRecord(
+                    source_id=1,
+                    session_id=1,
+                    event_start_time=datetime(2026, 3, 12, 16, tzinfo=timezone.utc),
+                    description="local day start",
+                ),
+                EventRecord(
+                    source_id=1,
+                    session_id=1,
+                    event_start_time=datetime(2026, 3, 13, 15, 59, 59, tzinfo=timezone.utc),
+                    description="local day end",
+                ),
+                EventRecord(
+                    source_id=1,
+                    session_id=1,
+                    event_start_time=datetime(2026, 3, 12, 15, 59, 59, tzinfo=timezone.utc),
+                    description="previous local day",
+                ),
+                EventRecord(
+                    source_id=1,
+                    session_id=1,
+                    event_start_time=datetime(2026, 3, 13, 16, tzinfo=timezone.utc),
+                    description="next local day",
+                ),
+            ]
+        )
+        db.commit()
+
+        class _FakeGateway:
+            def chat_completion(self, messages, temperature=0.2, max_tokens=None):
+                return '{"overall_summary":"stable","subject_sections":[],"attention_items":[]}'
+
+            def get_last_usage(self):
+                return None
+
+        monkeypatch.setattr(OpenAICompatGatewayFactory, "build", lambda *a, **k: _FakeGateway())
+
+        result = summarizer.generate_daily_summary_task.run("2026-03-13")
+
+        assert result["event_count"] == 2
+    finally:
+        db.close()
+
+
+@pytest.mark.postgres
+def test_concurrent_schedulers_publish_one_daily_summary_task(postgres_engine, monkeypatch) -> None:
+    Base.metadata.create_all(bind=postgres_engine)
+    local_session = sessionmaker(bind=postgres_engine, autocommit=False, autoflush=False)
+    db = local_session()
+    try:
+        db.add_all(
+            [
+                SystemConfig(config_key="daily_summary_schedule", config_value="00:30"),
+                SystemConfig(config_key="home_timezone", config_value="UTC"),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(db_session_module, "SessionLocal", local_session)
+    monkeypatch.setattr(
+        summarizer,
+        "home_now",
+        lambda zone: datetime(2026, 3, 14, 0, 31, tzinfo=zone),
+    )
+    dispatches: list[str] = []
+    monkeypatch.setattr(
+        summarizer,
+        "_get_pipeline_orchestrator",
+        lambda: SimpleNamespace(
+            dispatch_generate_daily_summary=lambda command: (
+                dispatches.append(command.target_date_str) or "summary-task"
+            )
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(lambda _: summarizer.dispatch_scheduled_daily_summary_task.run(), range(2))
+        )
+
+    assert [item["scheduled"] for item in results].count(True) == 1
+    assert dispatches == ["2026-03-13"]
+
+
+@pytest.mark.postgres
+def test_postgres_event_query_maps_new_york_local_day_to_utc_half_open_range(
+    postgres_engine,
+) -> None:
+    Base.metadata.create_all(bind=postgres_engine)
+    db = Session(bind=postgres_engine)
+    try:
+        source = VideoSource(
+            source_name="new-york-camera",
+            camera_name="living",
+            location_name="home",
+            source_type="ipcamera",
+        )
+        db.add(source)
+        db.flush()
+        session = VideoSession(
+            source_id=source.id,
+            session_start_time=datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
+            session_end_time=datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
+        )
+        db.add(session)
+        db.flush()
+        db.add_all(
+            [
+                EventRecord(
+                    source_id=source.id,
+                    session_id=session.id,
+                    event_start_time=datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
+                    description="local start",
+                ),
+                EventRecord(
+                    source_id=source.id,
+                    session_id=session.id,
+                    event_start_time=datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
+                    description="next local start",
+                ),
+            ]
+        )
+        db.commit()
+        start, end = local_day_bounds(ZoneInfo("America/New_York"), datetime(2026, 3, 8).date())
+
+        events = (
+            db.query(EventRecord)
+            .filter(EventRecord.event_start_time >= start, EventRecord.event_start_time < end)
+            .all()
+        )
+
+        assert [event.description for event in events] == ["local start"]
     finally:
         db.close()
 
@@ -385,7 +576,11 @@ def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
             return "mock-webhook-task"
 
         monkeypatch.setattr(OpenAICompatGatewayFactory, "build", lambda *a, **k: _FakeGateway())
-        monkeypatch.setattr(summarizer._pipeline_orchestrator, "dispatch_webhook", _capture_webhook)
+        monkeypatch.setattr(
+            summarizer,
+            "_get_pipeline_orchestrator",
+            lambda: SimpleNamespace(dispatch_webhook=_capture_webhook),
+        )
 
         result = summarizer.generate_daily_summary_task.run("2026-03-13")
 

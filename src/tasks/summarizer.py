@@ -1,10 +1,12 @@
 import json
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.application.pipeline.commands import GenerateDailySummaryCommand, SendWebhookCommand
@@ -29,7 +31,7 @@ from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
 from src.models.task_log import TaskLog
 from src.models.webhook_config import WebhookConfig
-from src.services.app_runtime_state import get_runtime_state, set_runtime_state
+from src.services.app_runtime_state import claim_runtime_state, clear_runtime_state
 from src.services.daily_summary.output_parser import (
     DailySummaryOutputError,
     parse_daily_summary_output,
@@ -41,6 +43,7 @@ from src.services.daily_summary.preprocess import (
 )
 from src.services.daily_summary.schemas import AttentionItem
 from src.services.home_profile import build_home_context
+from src.services.home_timezone import home_now, local_day_bounds
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.onboarding import DEFAULT_DAILY_SUMMARY_SCHEDULE
 from src.services.pipeline_constants import TaskStatus, TaskType
@@ -51,7 +54,7 @@ from src.services.prompt_builder.v2.daily_summary import (
 )
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_QA, find_required_enabled_provider
-from src.services.system_config_registry import DAILY_SUMMARY_SCHEDULE, get_config
+from src.services.system_config_registry import DAILY_SUMMARY_SCHEDULE, HOME_TIMEZONE, get_config
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
@@ -102,21 +105,22 @@ def _has_existing_summary_or_task(db: Session, target_date: date) -> bool:
     if exists_summary:
         return True
 
-    recent_logs = (
-        db.query(TaskLog)
-        .filter(TaskLog.task_type == "daily_summary_generation")
-        .order_by(TaskLog.created_at.desc())
-        .limit(20)
-        .all()
-    )
     date_str = str(target_date)
-    for item in recent_logs:
-        detail = item.detail_json if isinstance(item.detail_json, dict) else {}
-        if detail.get("target_date") != date_str:
-            continue
-        if item.status in {"running", "success"}:
-            return True
-    return False
+    task_log = (
+        db.query(TaskLog)
+        .filter(
+            TaskLog.task_type == "daily_summary_generation",
+            TaskLog.dedupe_key == f"daily_summary_generation|{date_str}",
+            TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.SUCCESS]),
+        )
+        .order_by(TaskLog.created_at.desc())
+        .first()
+    )
+    return task_log is not None
+
+
+def _home_timezone(db: Session) -> ZoneInfo:
+    return ZoneInfo(str(get_config(db, HOME_TIMEZONE)))
 
 
 def _has_subscribed_webhook(db: Session, event_type: str) -> bool:
@@ -799,25 +803,37 @@ def _dispatch_guard_key(target_date: date) -> str:
     return f"{DISPATCH_GUARD_STATE_KEY_PREFIX}:{target_date.isoformat()}"
 
 
-def _has_dispatch_guard(db: Session, target_date: date) -> bool:
-    state_value = get_runtime_state(db, _dispatch_guard_key(target_date))
-    return isinstance(state_value, dict) and bool(state_value.get("task_id"))
+def _claim_dispatch_guard(db: Session, now: datetime, target_date: date) -> bool:
+    """Atomically reserve a local summary date before publishing its task."""
+    return claim_runtime_state(
+        db,
+        _dispatch_guard_key(target_date),
+        {
+            "target_date": str(target_date),
+            "scheduled_for_date": now.date().isoformat(),
+            "dispatched_at": now.isoformat(),
+            "task_id": None,
+        },
+    )
 
 
-def _mark_dispatch_guard(db: Session, now: datetime, target_date: date, task_id: str) -> None:
-    payload = {
-        "target_date": str(target_date),
-        "scheduled_for_date": now.date().isoformat(),
-        "dispatched_at": now.isoformat(),
-        "task_id": task_id,
-    }
-    set_runtime_state(db, _dispatch_guard_key(target_date), payload)
+def _claim_daily_summary_generation(db: Session, target_date: date) -> bool:
+    """Reserve the unique local summary row before any expensive generation work."""
+    try:
+        with db.begin_nested():
+            db.add(DailySummary(summary_date=target_date))
+            db.flush()
+    except IntegrityError:
+        return False
+    return True
 
 
 @celery_app.task(bind=True)
 def dispatch_scheduled_daily_summary_task(self) -> dict:
     with task_db_session() as db:
-        now = datetime.now(timezone.utc)
+        zone = _home_timezone(db)
+        now = home_now(zone)
+        target_date = (now - timedelta(days=1)).date()
 
         try:
             schedule_text = _get_daily_schedule(db)
@@ -827,17 +843,9 @@ def dispatch_scheduled_daily_summary_task(self) -> dict:
             return {"scheduled": False, "reason": "invalid_schedule"}
 
         try:
-            scheduled_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            scheduled_at = datetime.combine(now.date(), time(hour, minute), tzinfo=zone)
             if now < scheduled_at:
                 return {"scheduled": False, "reason": "before_schedule"}
-
-            target_date = (now - timedelta(days=1)).date()
-            if _has_dispatch_guard(db, target_date):
-                return {
-                    "scheduled": False,
-                    "reason": "dispatch_guard_blocked",
-                    "target_date": str(target_date),
-                }
 
             if _has_existing_summary_or_task(db, target_date):
                 return {
@@ -846,20 +854,29 @@ def dispatch_scheduled_daily_summary_task(self) -> dict:
                     "target_date": str(target_date),
                 }
 
+            if not _claim_dispatch_guard(db, now, target_date):
+                db.rollback()
+                return {
+                    "scheduled": False,
+                    "reason": "dispatch_guard_blocked",
+                    "target_date": str(target_date),
+                }
+
             task_id = _get_pipeline_orchestrator().dispatch_generate_daily_summary(
                 GenerateDailySummaryCommand(target_date_str=str(target_date))
             )
-            _mark_dispatch_guard(db, now, target_date, str(task_id))
             db.commit()
             return {"scheduled": True, "target_date": str(target_date), "task_id": task_id}
         except Exception as exc:
             db.rollback()
+            clear_runtime_state(db, _dispatch_guard_key(target_date))
+            db.commit()
             logger.exception("Failed to dispatch scheduled daily summary for %s", now.date())
             return {
                 "scheduled": False,
                 "reason": "dispatch_failed",
                 "error": str(exc),
-                "target_date": str((now - timedelta(days=1)).date()),
+                "target_date": str(target_date),
             }
 
 
@@ -873,7 +890,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         if target_date_str:
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
         else:
-            target_date = datetime.now(timezone.utc).date() - timedelta(days=1)
+            target_date = home_now(_home_timezone(db)).date() - timedelta(days=1)
 
         queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
         task_log = bind_or_create_running_task_log(
@@ -886,6 +903,21 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         db.commit()
 
         try:
+            if not _claim_daily_summary_generation(db, target_date):
+                db.rollback()
+                finalize_task_log(
+                    task_log,
+                    TaskStatus.SUCCESS,
+                    f"Skipped duplicate summary generation for {target_date}.",
+                    {"target_date": str(target_date), "skipped_duplicate": True},
+                )
+                db.commit()
+                return {
+                    "skipped": True,
+                    "reason": "already_generated",
+                    "summary_date": str(target_date),
+                }
+            db.commit()
             ensure_task_not_cancelled(
                 db,
                 task_log.id,
@@ -899,13 +931,12 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
             locale = get_system_default_locale()
 
             # Get events for the target date
-            start_dt = datetime.combine(target_date, datetime.min.time())
-            end_dt = datetime.combine(target_date, datetime.max.time())
+            start_dt, end_dt = local_day_bounds(_home_timezone(db), target_date)
 
             events = (
                 db.query(EventRecord)
                 .filter(
-                    EventRecord.event_start_time >= start_dt, EventRecord.event_start_time <= end_dt
+                    EventRecord.event_start_time >= start_dt, EventRecord.event_start_time < end_dt
                 )
                 .order_by(EventRecord.event_start_time.asc())
                 .all()
@@ -1073,6 +1104,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         except TaskCancellationRequested as exc:
             logger.info("Daily summary task cancelled for %s", target_date)
             db.rollback()
+            db.query(DailySummary).filter(DailySummary.summary_date == target_date).delete()
             refreshed_task_log = get_task_log_for_update(db, task_log.id)
             if refreshed_task_log is None:
                 raise
@@ -1087,6 +1119,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         except Exception as e:
             logger.exception("Failed to generate summary for %s", target_date)
             db.rollback()
+            db.query(DailySummary).filter(DailySummary.summary_date == target_date).delete()
             finalize_task_log(task_log, TaskStatus.FAILED, str(e))
             db.commit()
             raise e
