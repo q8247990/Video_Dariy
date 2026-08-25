@@ -1,11 +1,16 @@
 import { apiClient, unwrapApi } from '../../lib/axios'
 import type { EventDetail, EventRecord, PaginatedData } from '../../types/api'
+import { parseRelatedEntities } from '../../types/api'
 
 export type EventQuery = {
   page: number
   pageSize: number
   sourceId: string
   analysisStatus: string
+}
+
+function normalizeEvent<T extends EventRecord>(event: T): T {
+  return { ...event, related_entities_json: parseRelatedEntities(event.related_entities_json) }
 }
 
 export async function getEvents(query: EventQuery): Promise<PaginatedData<EventRecord>> {
@@ -22,7 +27,8 @@ export async function getEvents(query: EventQuery): Promise<PaginatedData<EventR
   }
 
   const response = await apiClient.get(`/events?${params.toString()}`)
-  return unwrapApi<PaginatedData<EventRecord>>(response)
+  const data = unwrapApi<PaginatedData<EventRecord>>(response)
+  return { ...data, list: data.list.map(normalizeEvent) }
 }
 
 export async function triggerSessionAnalyze(sessionId: number): Promise<{ task_id: string }> {
@@ -32,7 +38,7 @@ export async function triggerSessionAnalyze(sessionId: number): Promise<{ task_i
 
 export async function getEventDetail(eventId: number): Promise<EventDetail> {
   const response = await apiClient.get(`/events/${eventId}`)
-  return unwrapApi<EventDetail>(response)
+  return normalizeEvent(unwrapApi<EventDetail>(response))
 }
 
 export async function getSessionEvents(
@@ -41,5 +47,5 @@ export async function getSessionEvents(
 ): Promise<EventRecord[]> {
   const params = new URLSearchParams({ order })
   const response = await apiClient.get(`/sessions/${sessionId}/events?${params.toString()}`)
-  return unwrapApi<EventRecord[]>(response)
+  return unwrapApi<EventRecord[]>(response).map(normalizeEvent)
 }

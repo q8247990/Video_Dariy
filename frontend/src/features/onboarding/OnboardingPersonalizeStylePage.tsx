@@ -47,7 +47,7 @@ export function OnboardingPersonalizeStylePage() {
               className={homeProfile.system_style === style ? 'ghost onboarding-style active' : 'ghost onboarding-style'}
               onClick={() => setHomeProfile({ system_style: style })}
             >
-              {systemStyleLabel(style)}
+              {systemStyleLabel(t, style)}
             </button>
           ))}
         </div>

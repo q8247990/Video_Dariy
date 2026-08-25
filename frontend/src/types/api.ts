@@ -78,6 +78,10 @@ export type Provider = {
   supports_tool_calling: boolean
   is_default_vision: boolean
   is_default_qa: boolean
+  // 与后端 LLMProviderResponse 对齐；raw_mp4-only 为产品决策，仅作响应类型，不参与提交载荷、不提供关键帧 UI。
+  video_preprocess_mode?: string | null
+  video_keyframe_target_n?: number | null
+  video_keyframe_jpeg_quality?: number | null
   availability_status: 'available' | 'degraded' | 'unavailable' | 'unknown' | string
   availability_message: string
   last_test_status: string | null
@@ -135,6 +139,55 @@ export type ProviderUpdate = {
   is_default_qa?: boolean
 }
 
+// 与后端 RelatedEntityDTO（src/services/video_analysis/schemas.py）对齐；字段按 JSON 反序列化防御性建模为可空。
+export type RelatedEntity = {
+  entity_type: string | null
+  display_name: string | null
+  matched_profile_name: string | null
+  recognition_status: string | null
+  confidence: number | null
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function toNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const EMPTY_RELATED_ENTITY: RelatedEntity = {
+  entity_type: null,
+  display_name: null,
+  matched_profile_name: null,
+  recognition_status: null,
+  confidence: null,
+}
+
+export function parseRelatedEntity(value: unknown): RelatedEntity {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { ...EMPTY_RELATED_ENTITY }
+  }
+  const record = value as Record<string, unknown>
+  return {
+    entity_type: toNullableString(record.entity_type),
+    display_name: toNullableString(record.display_name),
+    matched_profile_name: toNullableString(record.matched_profile_name),
+    recognition_status: toNullableString(record.recognition_status),
+    confidence: toNullableNumber(record.confidence),
+  }
+}
+
+export function parseRelatedEntities(value: unknown): RelatedEntity[] | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+  if (!Array.isArray(value)) {
+    return null
+  }
+  return value.map((item) => parseRelatedEntity(item))
+}
+
 export type EventRecord = {
   id: number
   source_id: number
@@ -153,7 +206,7 @@ export type EventRecord = {
   importance_level: 'low' | 'medium' | 'high' | null
   offset_start_sec: number | null
   offset_end_sec: number | null
-  related_entities_json: Record<string, unknown>[] | null
+  related_entities_json: RelatedEntity[] | null
   observed_actions_json: string[] | null
   interpreted_state_json: string[] | null
   description: string

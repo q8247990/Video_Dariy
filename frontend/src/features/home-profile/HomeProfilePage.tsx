@@ -59,14 +59,14 @@ export function HomeProfilePage() {
   const saveMutation = useMutation({
     mutationFn: saveHomeProfile,
     onSuccess: () => {
-      setMessage('家庭整体档案已保存')
+      setMessage(t('home_profile.profile_saved'))
       queryClient.invalidateQueries({ queryKey: ['home-profile'] })
     },
     onError: (error) => setMessage((error as Error).message),
   })
 
   if (profileQuery.isLoading || optionsQuery.isLoading) {
-    return <LoadingBlock text="加载家庭档案中" />
+    return <LoadingBlock text={t('home_profile.loading_profile')} />
   }
 
   if (profileQuery.error) {
@@ -84,13 +84,13 @@ export function HomeProfilePage() {
 
   return (
     <div>
-      <PageHeader title={t('home_profile.title')} subtitle="维护家庭语境、关注重点和系统风格" />
+      <PageHeader title={t('home_profile.title')} subtitle={t('home_profile.hub_profile_subtitle')} />
 
       {message ? <div className="api-ok">{message}</div> : null}
 
       <HomeProfileForm
         key={profileQuery.data?.updated_at ?? 'default'}
-        initialForm={profileQuery.data ? toFormState(profileQuery.data) : DEFAULT_FORM}
+        initialForm={profileQuery.data ? toFormState(profileQuery.data) : getDefaultForm(t)}
         options={options}
         pending={saveMutation.isPending}
         onSubmit={(form) => {
@@ -109,14 +109,16 @@ export function HomeProfilePage() {
   )
 }
 
-const DEFAULT_FORM: FormState = {
-  home_name: '我的家庭',
-  family_tags: [],
-  focus_points: [],
-  system_style: 'family_companion',
-  style_preference_text: '',
-  assistant_name: '家庭助手',
-  home_note: '',
+function getDefaultForm(t: (key: string) => string): FormState {
+  return {
+    home_name: t('home_profile.default_home_name'),
+    family_tags: [],
+    focus_points: [],
+    system_style: 'family_companion',
+    style_preference_text: '',
+    assistant_name: t('home_profile.default_assistant_name'),
+    home_note: '',
+  }
 }
 
 type HomeProfileFormProps = {
@@ -127,12 +129,13 @@ type HomeProfileFormProps = {
 }
 
 function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfileFormProps) {
+  const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(initialForm)
 
   return (
     <div className="card config-form">
         <label>
-          家庭名称
+          {t('home_profile.field_home_name')}
           <input
             value={form.home_name}
             onChange={(event) => setForm((old) => ({ ...old, home_name: event.target.value }))}
@@ -141,7 +144,7 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
         </label>
 
         <div>
-          <p className="text-muted">家庭构成标签</p>
+          <p className="text-muted">{t('home_profile.field_family_tags')}</p>
           <div className="inline-fields">
             {options.family_tags.map((item) => (
               <label className="checkbox-field" key={item}>
@@ -155,14 +158,14 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
                     }))
                   }
                 />
-                {familyTagLabel(item)}
+                {familyTagLabel(t, item)}
               </label>
             ))}
           </div>
         </div>
 
         <div>
-          <p className="text-muted">关注重点</p>
+          <p className="text-muted">{t('home_profile.field_focus_points')}</p>
           <div className="inline-fields">
             {options.focus_points.map((item) => (
               <label className="checkbox-field" key={item}>
@@ -176,28 +179,28 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
                     }))
                   }
                 />
-                {focusPointLabel(item)}
+                {focusPointLabel(t, item)}
               </label>
             ))}
           </div>
         </div>
 
         <label>
-          系统风格
+          {t('home_profile.field_system_style')}
           <select
             value={form.system_style}
             onChange={(event) => setForm((old) => ({ ...old, system_style: event.target.value }))}
           >
             {options.system_styles.map((item) => (
               <option key={item} value={item}>
-                {systemStyleLabel(item)}
+                {systemStyleLabel(t, item)}
               </option>
             ))}
           </select>
         </label>
 
         <label>
-          风格补充偏好
+          {t('home_profile.field_style_preference')}
           <textarea
             value={form.style_preference_text}
             onChange={(event) =>
@@ -208,7 +211,7 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
         </label>
 
         <label>
-          系统名称
+          {t('home_profile.field_assistant_name')}
           <input
             value={form.assistant_name}
             onChange={(event) => setForm((old) => ({ ...old, assistant_name: event.target.value }))}
@@ -217,7 +220,7 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
         </label>
 
         <label>
-          家庭补充说明
+          {t('home_profile.field_home_note')}
           <textarea
             value={form.home_note}
             onChange={(event) => setForm((old) => ({ ...old, home_note: event.target.value }))}
@@ -227,7 +230,7 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
 
         <div className="dialog-actions">
           <button onClick={() => onSubmit(form)} disabled={pending}>
-            {pending ? '保存中...' : '保存家庭档案'}
+            {pending ? t('common.saving') : t('home_profile.save_profile')}
           </button>
         </div>
       </div>

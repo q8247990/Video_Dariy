@@ -51,6 +51,7 @@ function getInitialState(roles: string[], initialValue?: HomeEntity): FormState 
 }
 
 function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmit }: MemberFormProps) {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [form, setForm] = useState<FormState>(() => getInitialState(roles, initialValue))
   const [currentEntity, setCurrentEntity] = useState<HomeEntity | undefined>(initialValue)
@@ -59,7 +60,10 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
   const [deleting, setDeleting] = useState(false)
   const [generating, setGenerating] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const submitLabel = useMemo(() => (initialValue ? '保存修改' : '新增成员'), [initialValue])
+  const submitLabel = useMemo(
+    () => (initialValue ? t('home_profile.save_changes') : t('home_profile.add_member')),
+    [initialValue, t],
+  )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -146,7 +150,7 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
                 fontSize: 12,
               }}
             >
-              暂无图片
+              {t('home_profile.no_image')}
             </div>
           )}
           <input
@@ -165,7 +169,7 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
                   disabled={uploading}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {uploading ? '上传中...' : '重新上传'}
+                  {uploading ? t('home_profile.uploading') : t('home_profile.re_upload')}
                 </button>
                 <button
                   type="button"
@@ -173,7 +177,7 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
                   disabled={deleting}
                   onClick={handleDeleteImage}
                 >
-                  {deleting ? '删除中...' : '删除'}
+                  {deleting ? t('home_profile.deleting') : t('home_profile.delete')}
                 </button>
               </>
             ) : (
@@ -183,7 +187,7 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
                 disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
               >
-                {uploading ? '上传中...' : '上传图片'}
+                {uploading ? t('home_profile.uploading') : t('home_profile.upload_image')}
               </button>
             )}
           </div>
@@ -191,32 +195,32 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
         </div>
       )}
       <label>
-        名称 / 称呼
+        {t('home_profile.field_name_member')}
         <input value={form.name} required onChange={(event) => setForm((old) => ({ ...old, name: event.target.value }))} />
       </label>
       <label>
-        角色关系
+        {t('home_profile.field_role_member')}
         <select value={form.role_type} onChange={(event) => setForm((old) => ({ ...old, role_type: event.target.value }))}>
           {roles.map((role) => (
             <option key={role} value={role}>
-              {memberRoleLabel(role)}
+              {memberRoleLabel(t, role)}
             </option>
           ))}
         </select>
       </label>
       <label>
-        年龄段
+        {t('home_profile.field_age_group')}
         <select value={form.age_group} onChange={(event) => setForm((old) => ({ ...old, age_group: event.target.value }))}>
-          <option value="">未设置</option>
+          <option value="">{t('home_profile.unset')}</option>
           {ageGroups.map((item) => (
             <option key={item} value={item}>
-              {ageGroupLabel(item)}
+              {ageGroupLabel(t, item)}
             </option>
           ))}
         </select>
       </label>
       <label>
-        外观特征
+        {t('home_profile.field_appearance')}
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <textarea
             style={{ flex: 1 }}
@@ -231,31 +235,31 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
               onClick={handleGenerate}
               style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
             >
-              {generating ? '生成中...' : '✨ AI 生成'}
+              {generating ? t('home_profile.generating') : t('home_profile.generate_ai')}
             </button>
           )}
         </div>
       </label>
       <label>
-        个体补充说明
+        {t('home_profile.field_note_member')}
         <textarea value={form.note} onChange={(event) => setForm((old) => ({ ...old, note: event.target.value }))} />
       </label>
       <div className="inline-fields">
         <label>
-          展示排序
+          {t('home_profile.field_sort')}
           <input type="number" min={0} value={form.sort_order} onChange={(event) => setForm((old) => ({ ...old, sort_order: event.target.value }))} />
         </label>
         <label className="checkbox-field">
           <input type="checkbox" checked={form.is_enabled} onChange={(event) => setForm((old) => ({ ...old, is_enabled: event.target.checked }))} />
-          启用成员
+          {t('home_profile.enable_member')}
         </label>
       </div>
       <div className="dialog-actions">
         <button type="button" className="ghost" onClick={onCancel}>
-          取消
+          {t('home_profile.cancel')}
         </button>
         <button type="submit" disabled={pending}>
-          {pending ? '处理中...' : submitLabel}
+          {pending ? t('home_profile.processing') : submitLabel}
         </button>
       </div>
     </form>
@@ -280,7 +284,7 @@ export function HomeMembersPage() {
     mutationFn: createMember,
     onSuccess: () => {
       setShowCreate(false)
-      setMessage('成员已创建')
+      setMessage(t('home_profile.member_created'))
       queryClient.invalidateQueries({ queryKey: ['home-members'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -290,7 +294,7 @@ export function HomeMembersPage() {
     mutationFn: ({ id, payload }: { id: number; payload: Partial<MemberPayload> }) => updateEntity(id, payload),
     onSuccess: () => {
       setEditing(null)
-      setMessage('成员已更新')
+      setMessage(t('home_profile.member_updated'))
       queryClient.invalidateQueries({ queryKey: ['home-members'] })
     },
     onError: (error) => setMessage((error as Error).message),
@@ -299,14 +303,14 @@ export function HomeMembersPage() {
   const disableMutation = useMutation({
     mutationFn: disableEntity,
     onSuccess: () => {
-      setMessage('成员已停用')
+      setMessage(t('home_profile.member_disabled'))
       queryClient.invalidateQueries({ queryKey: ['home-members'] })
     },
     onError: (error) => setMessage((error as Error).message),
   })
 
   if (optionsQuery.isLoading || listQuery.isLoading) {
-    return <LoadingBlock text="加载成员档案中" />
+    return <LoadingBlock text={t('home_profile.loading_members')} />
   }
 
   if (optionsQuery.error) {
@@ -326,9 +330,9 @@ export function HomeMembersPage() {
   return (
     <div>
       <PageHeader
-        title="家庭成员"
-        subtitle="维护成员称呼、关系与特征"
-        actions={<button onClick={() => setShowCreate(true)}>新增成员</button>}
+        title={t('home_profile.hub_members_title')}
+        subtitle={t('home_profile.hub_members_subtitle')}
+        actions={<button onClick={() => setShowCreate(true)}>{t('home_profile.add_member')}</button>}
       />
 
       {message ? <div className="api-ok">{message}</div> : null}
@@ -340,7 +344,7 @@ export function HomeMembersPage() {
             checked={includeDisabled}
             onChange={(event) => setIncludeDisabled(event.target.checked)}
           />
-          显示已停用成员
+          {t('home_profile.show_disabled_members')}
         </label>
       </div>
 
@@ -349,12 +353,12 @@ export function HomeMembersPage() {
           <thead>
             <tr>
               <th>ID</th>
-              <th>名称</th>
-              <th>角色</th>
-              <th>年龄段</th>
-              <th>状态</th>
-              <th>排序</th>
-              <th>操作</th>
+              <th>{t('home_profile.col_name')}</th>
+              <th>{t('home_profile.col_role')}</th>
+              <th>{t('home_profile.field_age_group')}</th>
+              <th>{t('home_profile.col_status')}</th>
+              <th>{t('home_profile.col_sort')}</th>
+              <th>{t('home_profile.col_actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -362,8 +366,8 @@ export function HomeMembersPage() {
               <tr key={item.id}>
                 <td>{item.id}</td>
                 <td>{item.name}</td>
-                <td>{memberRoleLabel(item.role_type)}</td>
-                <td>{item.age_group ? ageGroupLabel(item.age_group) : '-'}</td>
+                <td>{memberRoleLabel(t, item.role_type)}</td>
+                <td>{item.age_group ? ageGroupLabel(t, item.age_group) : '-'}</td>
                 <td>
                   <StatusTag status={item.is_enabled ? 'enabled' : 'disabled'} />
                 </td>
@@ -371,18 +375,18 @@ export function HomeMembersPage() {
                 <td>
                   <div className="row-actions">
                     <button className="ghost" onClick={() => setEditing(item)}>
-                      编辑
+                      {t('home_profile.edit')}
                     </button>
                     <button
                       className="ghost"
                       onClick={() => {
-                        const confirmed = window.confirm(`确认停用成员「${item.name}」吗？`)
+                        const confirmed = window.confirm(t('home_profile.confirm_disable_member', { name: item.name }))
                         if (confirmed) {
                           disableMutation.mutate(item.id)
                         }
                       }}
                     >
-                      停用
+                      {t('home_profile.disable')}
                     </button>
                   </div>
                 </td>
@@ -395,7 +399,7 @@ export function HomeMembersPage() {
       {(showCreate || editing) && (
         <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
-            <h3>{editing ? '编辑成员' : '新增成员'}</h3>
+            <h3>{editing ? t('home_profile.edit_member') : t('home_profile.add_member')}</h3>
             <MemberForm
               roles={options.member_roles}
               ageGroups={options.age_groups}

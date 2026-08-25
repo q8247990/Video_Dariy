@@ -105,7 +105,7 @@ export function OnboardingPersonalizeProfilePage() {
                     setHomeProfile({ family_tags: toggleValue(homeProfile.family_tags, item) })
                   }
                 />
-                {familyTagLabel(item)}
+                {familyTagLabel(t, item)}
               </label>
             ))}
           </div>
@@ -123,7 +123,7 @@ export function OnboardingPersonalizeProfilePage() {
                     setHomeProfile({ focus_points: toggleValue(homeProfile.focus_points, item) })
                   }
                 />
-                {focusPointLabel(item)}
+                {focusPointLabel(t, item)}
               </label>
             ))}
           </div>

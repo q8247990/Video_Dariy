@@ -149,8 +149,8 @@ export function EventDetailPage() {
           {relatedEntities.length > 0
             ? relatedEntities
                 .map((item) => {
-                  const name = String(item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity'))
-                  const status = String(item.recognition_status ?? 'unknown')
+                  const name = item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity')
+                  const status = item.recognition_status ?? 'unknown'
                   return `${name}(${status})`
                 })
                 .join('、')
