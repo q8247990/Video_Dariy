@@ -24,6 +24,7 @@ from src.services.pipeline_constants import (
     ScanMode,
     SessionAnalysisStatus,
 )
+from src.services.pipeline_state import transition_session
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,14 @@ class SessionBuilder:
         )
         sealed: list[SealedSessionInfo] = []
         for session in open_sessions:
-            session.analysis_status = SessionAnalysisStatus.SEALED
+            transition_session(
+                db,
+                session.id,
+                SessionAnalysisStatus.OPEN,
+                SessionAnalysisStatus.SEALED,
+                reason="full_scan_completed",
+                source="seal_all_open",
+            )
             session.analysis_priority = priority
             sealed.append(
                 SealedSessionInfo(
@@ -351,7 +359,14 @@ class SessionBuilder:
         to_seal = open_sessions[:-1]
         sealed: list[SealedSessionInfo] = []
         for session in to_seal:
-            session.analysis_status = SessionAnalysisStatus.SEALED
+            transition_session(
+                db,
+                session.id,
+                SessionAnalysisStatus.OPEN,
+                SessionAnalysisStatus.SEALED,
+                reason="newer_session_detected",
+                source="seal_non_latest_open",
+            )
             session.analysis_priority = priority
             sealed.append(
                 SealedSessionInfo(
@@ -387,7 +402,14 @@ class SessionBuilder:
         )
         sealed: list[SealedSessionInfo] = []
         for session in stale_sessions:
-            session.analysis_status = SessionAnalysisStatus.SEALED
+            transition_session(
+                db,
+                session.id,
+                SessionAnalysisStatus.OPEN,
+                SessionAnalysisStatus.SEALED,
+                reason="seal_buffer_elapsed",
+                source="seal_by_buffer",
+            )
             session.analysis_priority = priority
             sealed.append(
                 SealedSessionInfo(

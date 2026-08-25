@@ -41,6 +41,7 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
+from src.services.pipeline_state import transition_session, transition_task_log
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_required_enabled_provider
@@ -73,36 +74,21 @@ POSTGRES_RETRYABLE_SQLSTATES = {"40P01", "40001"}
 DEADLOCK_MAX_RETRIES = 3
 
 
-def _get_session_with_retry(db: Session, session_id: int) -> VideoSession | None:
-    session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-    if session is not None:
-        return session
-    for delay in NOT_FOUND_RETRY_DELAYS_SECONDS:
-        time.sleep(delay)
-        db.rollback()
-        session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-        if session is not None:
-            return session
-    return None
-
-
 def _claim_session_for_analysis(
     db: Session, session_id: int
 ) -> tuple[VideoSession | None, str | None]:
     attempts = (0.0,) + NOT_FOUND_RETRY_DELAYS_SECONDS
     for index, delay in enumerate(attempts):
-        updated = (
-            db.query(VideoSession)
-            .filter(
-                VideoSession.id == session_id,
-                VideoSession.analysis_status.in_(
-                    (SessionAnalysisStatus.SEALED, SessionAnalysisStatus.PARTIAL)
-                ),
-            )
-            .update(
-                {VideoSession.analysis_status: SessionAnalysisStatus.ANALYZING},
-                synchronize_session=False,
-            )
+        updated = any(
+            transition_session(
+                db,
+                session_id,
+                from_status,
+                SessionAnalysisStatus.ANALYZING,
+                reason="analysis_claim",
+                source="claim_session_for_analysis",
+            ).applied
+            for from_status in (SessionAnalysisStatus.SEALED, SessionAnalysisStatus.PARTIAL)
         )
         db.commit()
         if updated:
@@ -155,6 +141,14 @@ def _skip_analysis_task(
     if current_status is not None:
         detail["current_status"] = current_status
 
+    transition_task_log(
+        db,
+        task_log.id,
+        TaskStatus.RUNNING,
+        TaskStatus.SKIPPED,
+        reason="analysis_skipped",
+        source="skip_analysis_task",
+    )
     finalize_task_log(task_log, TaskStatus.SKIPPED, message, detail)
     db.commit()
     return {"events_created": 0, "skipped": True, "reason": reason}
@@ -180,7 +174,14 @@ def _mark_session_sealed_for_retry(db: Session, session_id: int) -> None:
     if session is None:
         return
     if session.analysis_status == SessionAnalysisStatus.ANALYZING:
-        session.analysis_status = SessionAnalysisStatus.SEALED
+        transition_session(
+            db,
+            session.id,
+            SessionAnalysisStatus.ANALYZING,
+            SessionAnalysisStatus.SEALED,
+            reason="deadlock_retry",
+            source="mark_session_sealed_for_retry",
+        )
 
 
 def _resolve_ingest_type(source: VideoSource) -> str:
@@ -660,9 +661,29 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             _aggregate_session_fields(session, structured_results, events_to_persist)
             replaced_deleted_count = _replace_session_events(db, session_id, events_to_persist)
 
-            session.analysis_status = SessionAnalysisStatus.SUCCESS
+            completed = transition_session(
+                db,
+                session.id,
+                SessionAnalysisStatus.ANALYZING,
+                SessionAnalysisStatus.SUCCESS,
+                reason="analysis_completed",
+                source="analyze_session_task",
+                task_log=task_log,
+            )
+            if not completed.applied:
+                return _skip_analysis_task(
+                    db, task_log, session_id, "completion_transition_conflict", priority
+                )
             session.last_analyzed_at = datetime.now(timezone.utc)
 
+            transition_task_log(
+                db,
+                task_log.id,
+                TaskStatus.RUNNING,
+                TaskStatus.SUCCESS,
+                reason="analysis_completed",
+                source="analyze_session_task",
+            )
             finalize_task_log(
                 task_log,
                 TaskStatus.SUCCESS,
@@ -702,8 +723,24 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 refreshed_session is not None
                 and refreshed_session.analysis_status == SessionAnalysisStatus.ANALYZING
             ):
-                refreshed_session.analysis_status = SessionAnalysisStatus.SEALED
+                transition_session(
+                    db,
+                    refreshed_session.id,
+                    SessionAnalysisStatus.ANALYZING,
+                    SessionAnalysisStatus.SEALED,
+                    reason="analysis_cancelled",
+                    source="analyze_session_task",
+                    task_log=refreshed_task_log,
+                )
 
+            transition_task_log(
+                db,
+                refreshed_task_log.id,
+                TaskStatus.RUNNING,
+                TaskStatus.CANCELLED,
+                reason="analysis_cancelled",
+                source="analyze_session_task",
+            )
             finalize_cancelled_task_log(
                 refreshed_task_log,
                 str(exc),
@@ -752,6 +789,14 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 db.commit()
                 raise self.retry(exc=e, countdown=countdown) from e
 
+            transition_task_log(
+                db,
+                task_log.id,
+                TaskStatus.RUNNING,
+                TaskStatus.FAILED,
+                reason="analysis_failed",
+                source="analyze_session_task",
+            )
             finalize_task_log(
                 task_log,
                 TaskStatus.FAILED,
@@ -770,10 +815,19 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 },
             )
             if session:
-                session.analysis_status = (
+                failed_status = (
                     SessionAnalysisStatus.PARTIAL
                     if current_checkpoint is not None
                     else SessionAnalysisStatus.FAILED
+                )
+                transition_session(
+                    db,
+                    session.id,
+                    SessionAnalysisStatus.ANALYZING,
+                    failed_status,
+                    reason="analysis_failed",
+                    source="analyze_session_task",
+                    task_log=task_log,
                 )
             db.commit()
             raise

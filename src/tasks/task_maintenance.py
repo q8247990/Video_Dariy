@@ -29,6 +29,7 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
+from src.services.pipeline_state import transition_session, transition_task_log
 
 logger = logging.getLogger(__name__)
 
@@ -129,48 +130,56 @@ def _resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool
     next_attempt = task_log.recovery_attempt + 1
     session = db.query(VideoSession).filter(VideoSession.id == task_log.task_target_id).first()
     if next_attempt > settings.ANALYSIS_RECOVERY_MAX_ATTEMPTS:
-        claimed = (
-            db.query(TaskLog)
-            .filter(TaskLog.id == task_log.id, TaskLog.status == TaskStatus.RUNNING)
-            .update(
-                {
-                    TaskLog.status: TaskStatus.TIMEOUT,
-                    TaskLog.finished_at: now,
-                    TaskLog.message: (
-                        f"Automatic recovery limit reached for session {task_log.task_target_id}"
-                    ),
-                    TaskLog.recovery_attempt: next_attempt,
-                },
-                synchronize_session=False,
-            )
+        claimed = transition_task_log(
+            db,
+            task_log.id,
+            TaskStatus.RUNNING,
+            TaskStatus.TIMEOUT,
+            reason="analysis_recovery_limit_reached",
+            source="resume_lost_analysis",
         )
-        if not claimed:
+        if not claimed.applied:
             db.rollback()
             return False
+        task_log.finished_at = now
+        task_log.message = f"Automatic recovery limit reached for session {task_log.task_target_id}"
+        task_log.recovery_attempt = next_attempt
         if session is not None and session.analysis_status == SessionAnalysisStatus.ANALYZING:
-            session.analysis_status = SessionAnalysisStatus.SEALED
+            transition_session(
+                db,
+                session.id,
+                SessionAnalysisStatus.ANALYZING,
+                SessionAnalysisStatus.SEALED,
+                reason="analysis_recovery_limit_reached",
+                source="resume_lost_analysis",
+                task_log=task_log,
+            )
         return False
 
-    claimed = (
-        db.query(TaskLog)
-        .filter(TaskLog.id == task_log.id, TaskLog.status == TaskStatus.RUNNING)
-        .update(
-            {
-                TaskLog.status: TaskStatus.TIMEOUT,
-                TaskLog.finished_at: now,
-                TaskLog.message: (
-                    f"Analysis worker lease expired; automatic recovery {next_attempt} scheduled"
-                ),
-                TaskLog.recovery_attempt: next_attempt,
-            },
-            synchronize_session=False,
-        )
+    claimed = transition_task_log(
+        db,
+        task_log.id,
+        TaskStatus.RUNNING,
+        TaskStatus.TIMEOUT,
+        reason="analysis_lease_expired",
+        source="resume_lost_analysis",
     )
-    if not claimed:
+    if not claimed.applied:
         db.rollback()
         return False
+    task_log.finished_at = now
+    task_log.message = f"Analysis worker lease expired; automatic recovery {next_attempt} scheduled"
+    task_log.recovery_attempt = next_attempt
     if session is not None and session.analysis_status == SessionAnalysisStatus.ANALYZING:
-        session.analysis_status = SessionAnalysisStatus.SEALED
+        transition_session(
+            db,
+            session.id,
+            SessionAnalysisStatus.ANALYZING,
+            SessionAnalysisStatus.SEALED,
+            reason="analysis_lease_expired",
+            source="resume_lost_analysis",
+            task_log=task_log,
+        )
     db.commit()
     priority = "hot"
     if isinstance(task_log.detail_json, dict):

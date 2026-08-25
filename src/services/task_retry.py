@@ -19,6 +19,7 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
+from src.services.pipeline_state import transition_session
 from src.services.task_dispatch_control import (
     build_dedupe_key,
     ensure_dict_detail,
@@ -134,7 +135,21 @@ def _retry_session_analysis(
         SessionAnalysisStatus.PARTIAL,
         SessionAnalysisStatus.SUCCESS,
     ):
-        session.analysis_status = SessionAnalysisStatus.SEALED
+        result = transition_session(
+            db,
+            session.id,
+            SessionAnalysisStatus(session.analysis_status),
+            SessionAnalysisStatus.SEALED,
+            reason="manual_analysis_retry",
+            source="retry_session_analysis",
+            task_log=task_log,
+        )
+        if not result.applied:
+            return RetryResult(
+                success=False,
+                error_code=4004,
+                error_message="Session state changed before retry",
+            )
         db.flush()
 
     priority = str(detail.get("priority") or session.analysis_priority or "hot")
