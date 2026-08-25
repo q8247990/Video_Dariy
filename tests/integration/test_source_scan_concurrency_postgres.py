@@ -182,4 +182,14 @@ def test_full_and_hot_build_collision_preserves_one_file_and_relation(
     with Session(postgres_migrated_engine) as db:
         assert db.query(VideoFile).filter(VideoFile.source_id == source_id).count() == 1
         assert db.query(VideoSession).filter(VideoSession.source_id == source_id).count() == 1
-        assert db.query(VideoSessionFileRel).count() == 1
+        session_id = (
+            db.query(VideoSession.id)
+            .filter(VideoSession.source_id == source_id)
+            .one()[0]
+        )
+        assert (
+            db.query(VideoSessionFileRel)
+            .filter(VideoSessionFileRel.session_id == session_id)
+            .count()
+            == 1
+        )

@@ -8,6 +8,8 @@
 默认运行中这些测试会被显式跳过（见 tests/conftest.py）。
 """
 
+from datetime import timezone
+
 import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -54,16 +56,20 @@ def test_pre_remediation_seed_restore_and_verify(
 ) -> None:
     with postgres_migrated_engine.connect() as conn:
         with Session(bind=conn) as session:
+            existing_session_count = session.execute(
+                text("SELECT count(*) FROM video_session")
+            ).scalar_one()
+            session.execute(text("TRUNCATE TABLE video_source, task_log, daily_summary CASCADE"))
             seed_pre_remediation(session)
             actual = verify_pre_remediation(session)
             assert actual == EXPECTED_ROW_COUNTS
 
-            # naive 时间戳原样落库（迁移前基线：timestamp without time zone）
+            # 0014 迁移后为 timestamptz；naive 锚点按 UTC 解释并回读为 aware-UTC。
             row = conn.execute(
                 text("SELECT session_start_time FROM video_session WHERE id = 1")
             ).scalar_one()
-            assert row == ANCHOR_SESSION_START
-            assert row.tzinfo is None
+            assert row == ANCHOR_SESSION_START.replace(tzinfo=timezone.utc)
+            assert row.tzinfo is not None
 
             session.rollback()
         # 显式回滚后库内无残留，保证测试之间无共享状态
@@ -71,7 +77,7 @@ def test_pre_remediation_seed_restore_and_verify(
             remaining = check_session.execute(
                 text("SELECT count(*) FROM video_session")
             ).scalar_one()
-            assert remaining == 0
+            assert remaining == existing_session_count
 
 
 def test_seed_version_pinned() -> None:
