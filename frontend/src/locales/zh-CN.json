@@ -317,14 +317,7 @@
     "form_api_key_keep_blank": "（留空表示不更新）",
     "form_timeout": "超时时间(秒)",
     "form_retry_count": "重试次数",
-    "form_enabled_label": "启用该服务",
-    "video_preprocess_group": "视频预处理",
-    "video_preprocess_mode_label": "预处理模式",
-    "video_preprocess_mode_keyframe": "关键帧 (推荐)",
-    "video_preprocess_mode_raw_mp4": "原始 MP4",
-    "video_keyframe_target_n_label": "关键帧数量",
-    "video_keyframe_jpeg_quality_label": "JPEG 质量",
-    "video_preprocess_vision_required": "仅视觉 Provider 可配置"
+    "form_enabled_label": "启用该服务"
   },
   "video_sources": {
     "title": "录像来源",

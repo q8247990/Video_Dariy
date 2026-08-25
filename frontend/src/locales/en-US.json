@@ -317,14 +317,7 @@
     "form_api_key_keep_blank": "(leave blank to keep unchanged)",
     "form_timeout": "Timeout (seconds)",
     "form_retry_count": "Retry Count",
-    "form_enabled_label": "Enable this service",
-    "video_preprocess_group": "Video Preprocessing",
-    "video_preprocess_mode_label": "Preprocess mode",
-    "video_preprocess_mode_keyframe": "Keyframe (recommended)",
-    "video_preprocess_mode_raw_mp4": "Raw MP4",
-    "video_keyframe_target_n_label": "Keyframe count",
-    "video_keyframe_jpeg_quality_label": "JPEG quality",
-    "video_preprocess_vision_required": "Only configurable for vision providers"
+    "form_enabled_label": "Enable this service"
   },
   "video_sources": {
     "title": "Video Sources",

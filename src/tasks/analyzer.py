@@ -348,11 +348,19 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
             )
             client, provider = _build_provider_client(db)
-            preprocess_mode = (
-                (getattr(provider, "video_preprocess_mode", "keyframe") or "keyframe")
-                .strip()
-                .lower()
+            configured_mode = (
+                (getattr(provider, "video_preprocess_mode", "raw_mp4") or "raw_mp4").strip().lower()
             )
+            if configured_mode != "raw_mp4":
+                logger.warning(
+                    "Provider %s has video_preprocess_mode=%r, but the keyframe "
+                    "mode is disabled; forcing raw_mp4",
+                    provider.id,
+                    configured_mode,
+                )
+            # The keyframe path below is kept intentionally, but it is not
+            # reachable: this pipeline always sends raw mp4 to the vision model.
+            preprocess_mode = "raw_mp4"
             keyframe_target_n = int(getattr(provider, "video_keyframe_target_n", 64) or 64)
             keyframe_jpeg_quality = int(getattr(provider, "video_keyframe_jpeg_quality", 88) or 88)
             fallback_to_mp4 = settings.ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4

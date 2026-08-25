@@ -3,7 +3,10 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-_VIDEO_PREPROCESS_MODES = {"keyframe", "raw_mp4"}
+# The keyframe preprocessing mode is disabled as a product decision: the code
+# path is kept in the repository, but it must not be activatable through any
+# configuration surface. The API therefore only accepts "raw_mp4".
+_VIDEO_PREPROCESS_MODES = {"raw_mp4"}
 _KEYFRAME_TARGET_N_MIN = 16
 _KEYFRAME_TARGET_N_MAX = 256
 _KEYFRAME_JPEG_QUALITY_MIN = 50
@@ -33,8 +36,8 @@ class LLMProviderBase(BaseModel):
         normalized = value.strip().lower()
         if normalized not in _VIDEO_PREPROCESS_MODES:
             raise ValueError(
-                f"video_preprocess_mode must be one of "
-                f"{sorted(_VIDEO_PREPROCESS_MODES)}, got {value!r}"
+                "video_preprocess_mode only accepts 'raw_mp4'; the 'keyframe' "
+                f"mode is disabled, got {value!r}"
             )
         return normalized
 
@@ -79,7 +82,6 @@ class LLMProviderResponse(LLMProviderBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-
 
 class LLMProviderUsageProviderItem(BaseModel):
     provider_id: int | None

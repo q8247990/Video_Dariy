@@ -23,9 +23,6 @@ type FormState = {
   supports_vision: boolean
   supports_qa: boolean
   supports_tool_calling: boolean
-  video_preprocess_mode: 'keyframe' | 'raw_mp4'
-  video_keyframe_target_n: number
-  video_keyframe_jpeg_quality: number
 }
 
 function getInitialState(initialValue?: Provider): FormState {
@@ -40,10 +37,6 @@ function getInitialState(initialValue?: Provider): FormState {
     supports_vision: initialValue?.supports_vision ?? false,
     supports_qa: initialValue?.supports_qa ?? true,
     supports_tool_calling: initialValue?.supports_tool_calling ?? false,
-    video_preprocess_mode:
-      initialValue?.video_preprocess_mode === 'keyframe' ? 'keyframe' : 'raw_mp4',
-    video_keyframe_target_n: initialValue?.video_keyframe_target_n ?? 120,
-    video_keyframe_jpeg_quality: initialValue?.video_keyframe_jpeg_quality ?? 88,
   }
 }
 
@@ -99,9 +92,6 @@ export function ProviderForm({
         supports_vision: form.supports_vision,
         supports_qa: form.supports_qa,
         supports_tool_calling: form.supports_tool_calling,
-        video_preprocess_mode: form.video_preprocess_mode,
-        video_keyframe_target_n: form.video_keyframe_target_n,
-        video_keyframe_jpeg_quality: form.video_keyframe_jpeg_quality,
       }
       if (form.api_key.trim()) {
         payload.api_key = form.api_key.trim()
@@ -124,9 +114,6 @@ export function ProviderForm({
       supports_tool_calling: form.supports_tool_calling,
       is_default_vision: false,
       is_default_qa: false,
-      video_preprocess_mode: form.video_preprocess_mode,
-      video_keyframe_target_n: form.video_keyframe_target_n,
-      video_keyframe_jpeg_quality: form.video_keyframe_jpeg_quality,
     }
     onSubmit(payload)
   }
@@ -175,76 +162,6 @@ export function ProviderForm({
         </div>
       </label>
       {capabilityError ? <div className="api-error">{t('providers.capability_required')}</div> : null}
-
-      <fieldset className="video-preprocess-group" disabled={!form.supports_vision}>
-        <legend>{t('providers.video_preprocess_group')}</legend>
-        {!form.supports_vision ? (
-          <div className="field-hint">{t('providers.video_preprocess_vision_required')}</div>
-        ) : null}
-        <label>
-          {t('providers.video_preprocess_mode_label')}
-          <div className="capability-buttons">
-            <button
-              type="button"
-              className={
-                form.video_preprocess_mode === 'keyframe'
-                  ? 'capability-btn capability-btn-active'
-                  : 'capability-btn'
-              }
-              onClick={() =>
-                setForm((old) => ({ ...old, video_preprocess_mode: 'keyframe' }))
-              }
-            >
-              {t('providers.video_preprocess_mode_keyframe')}
-            </button>
-            <button
-              type="button"
-              className={
-                form.video_preprocess_mode === 'raw_mp4'
-                  ? 'capability-btn capability-btn-active'
-                  : 'capability-btn'
-              }
-              onClick={() =>
-                setForm((old) => ({ ...old, video_preprocess_mode: 'raw_mp4' }))
-              }
-            >
-              {t('providers.video_preprocess_mode_raw_mp4')}
-            </button>
-          </div>
-        </label>
-        <div className="inline-fields">
-          <label>
-            {t('providers.video_keyframe_target_n_label')}
-            <input
-              type="number"
-              min={16}
-              max={256}
-              value={form.video_keyframe_target_n}
-              onChange={(event) =>
-                setForm((old) => ({
-                  ...old,
-                  video_keyframe_target_n: Number(event.target.value) || 16,
-                }))
-              }
-            />
-          </label>
-          <label>
-            {t('providers.video_keyframe_jpeg_quality_label')}
-            <input
-              type="number"
-              min={50}
-              max={100}
-              value={form.video_keyframe_jpeg_quality}
-              onChange={(event) =>
-                setForm((old) => ({
-                  ...old,
-                  video_keyframe_jpeg_quality: Number(event.target.value) || 50,
-                }))
-              }
-            />
-          </label>
-        </div>
-      </fieldset>
 
       <label>
         {t('providers.provider_name_label')}

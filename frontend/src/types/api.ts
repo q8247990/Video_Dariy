@@ -77,9 +77,6 @@ export type Provider = {
   supports_tool_calling: boolean
   is_default_vision: boolean
   is_default_qa: boolean
-  video_preprocess_mode: 'keyframe' | 'raw_mp4' | string
-  video_keyframe_target_n: number
-  video_keyframe_jpeg_quality: number
   availability_status: 'available' | 'degraded' | 'unavailable' | 'unknown' | string
   availability_message: string
   last_test_status: string | null
@@ -119,9 +116,6 @@ export type ProviderCreate = {
   supports_tool_calling: boolean
   is_default_vision: boolean
   is_default_qa: boolean
-  video_preprocess_mode: 'keyframe' | 'raw_mp4' | string
-  video_keyframe_target_n: number
-  video_keyframe_jpeg_quality: number
 }
 
 export type ProviderUpdate = {
@@ -138,9 +132,6 @@ export type ProviderUpdate = {
   supports_tool_calling?: boolean
   is_default_vision?: boolean
   is_default_qa?: boolean
-  video_preprocess_mode?: 'keyframe' | 'raw_mp4' | string
-  video_keyframe_target_n?: number
-  video_keyframe_jpeg_quality?: number
 }
 
 export type EventRecord = {

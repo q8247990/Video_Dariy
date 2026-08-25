@@ -1,7 +1,7 @@
 """Unit tests for src.schemas.llm_provider Pydantic schema.
 
-Wave 2 / T3.4 — covers the three new field validators:
-- video_preprocess_mode enum check (case-insensitive)
+Covers the field validators:
+- video_preprocess_mode only accepts "raw_mp4" (keyframe mode is disabled)
 - video_keyframe_target_n in [16, 256]
 - video_keyframe_jpeg_quality in [50, 100]
 """
@@ -32,9 +32,22 @@ def test_video_preprocess_mode_accepts_raw_mp4() -> None:
     assert obj.video_preprocess_mode == "raw_mp4"
 
 
-def test_video_preprocess_mode_is_case_insensitive() -> None:
-    obj = LLMProviderBase(**_base_kwargs(), video_preprocess_mode="Keyframe")
-    assert obj.video_preprocess_mode == "keyframe"
+def test_video_preprocess_mode_accepts_raw_mp4_case_insensitive() -> None:
+    obj = LLMProviderBase(**_base_kwargs(), video_preprocess_mode="RAW_MP4")
+    assert obj.video_preprocess_mode == "raw_mp4"
+
+
+def test_video_preprocess_mode_rejects_keyframe() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        LLMProviderBase(**_base_kwargs(), video_preprocess_mode="keyframe")
+    assert "keyframe" in str(exc_info.value)
+    assert "disabled" in str(exc_info.value)
+
+
+def test_video_preprocess_mode_rejects_keyframe_case_insensitive() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        LLMProviderBase(**_base_kwargs(), video_preprocess_mode="Keyframe")
+    assert "video_preprocess_mode" in str(exc_info.value)
 
 
 def test_video_preprocess_mode_rejects_unknown_value() -> None:

@@ -283,10 +283,8 @@ Workflow:
 1. Tasks can only claim a session from `SEALED` state, transitioning it to `ANALYZING`
 2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds (10-min session-level chunk)
 3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 60 seconds) into sub-chunks; one LLM call per sub-chunk
-4. Branch on `LLMProvider.video_preprocess_mode`:
-   - `raw_mp4` (default): sends the 60s mp4 directly to vLLM as base64 with `media_io_kwargs.video.num_frames=120`; vLLM uniformly samples 120 frames at 2fps under the 100M pixel budget (1216x672 per frame ≈ 88.7% of 720p). No client-side ffmpeg decode or cv2/numpy required.
-   - `keyframe`: client-side ffmpeg single-pass decode of source mp4 (2fps sample + online MAD/pHash decision + top-N JPEG keyframes, where N is `video_keyframe_target_n`, default 120). Assemble `data:video/jpeg;base64,<J1>,<J2>,...` plus `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}` (REPORT §4.2).
-   - When `keyframe` extraction fails AND `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4=true`, automatically fall back to `raw_mp4`.
+4. The LLM payload is fixed to `raw_mp4`: the 60s mp4 is sent directly to vLLM as base64 with `media_io_kwargs.video.num_frames=120`; vLLM uniformly samples 120 frames at 2fps under the 100M pixel budget (1216x672 per frame ≈ 88.7% of 720p). No client-side ffmpeg decode or cv2/numpy required.
+   - The keyframe path (client-side ffmpeg single-pass decode + MAD/pHash + top-N JPEG) is preserved in `keyframe_extractor.py` / `session_analysis_video.py` but disabled as a product decision: the API schema only accepts `raw_mp4`, the analyzer runtime force-overrides the mode to `raw_mp4` (migration `20260825_0011` normalized existing rows), and no configuration surface can re-enable it.
 5. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
 6. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)
 7. The returned JSON is parsed and converted into multiple `EventRecord` entries (offsets are absolute session-time, non-negative)

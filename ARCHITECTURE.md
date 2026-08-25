@@ -169,7 +169,7 @@
 - `VideoSessionFileRel`：Session 与文件片段顺序关系
 - `EventRecord`：AI 识别出的结构化事件
 - `DailySummary`：日报
-- `LLMProvider`：模型服务配置（含 `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` 三个视频预处理字段，控制 §5.2 关键帧路径）
+- `LLMProvider`：模型服务配置（含 `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` 三个视频预处理字段；见 §5.2，关键帧路径已停用）
 - `TaskLog`：异步任务日志与状态
 - `WebhookConfig`：Webhook 配置
 - `HomeProfile` / `HomeEntityProfile`：家庭画像
@@ -289,10 +289,8 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
 2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒（10 分钟 session-level chunk）
 3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 60 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
-4. 根据 `LLMProvider.video_preprocess_mode` 决定 LLM 载荷：
-   - `raw_mp4`（默认）：直接将 60 秒 mp4 base64 传给 vLLM，通过 `media_io_kwargs.video.num_frames=120` 让 vLLM 均匀采 120 帧（2fps），100M 预算下每帧 1216×672 ≈ 720p 88.7%。无需客户端 ffmpeg 解码或 cv2/numpy。
-   - `keyframe`：客户端 ffmpeg 单遍解码源 mp4，2fps 采样 + 在线 MAD/pHash 决策 + top-N JPEG 关键帧。组装 `data:video/jpeg;base64,<J1>,<J2>,...` 并附加 `media_io_kwargs.video = {fps, total_num_frames, frames_indices, num_frames: -1}`（REPORT §4.2）。
-   - `keyframe` 提取失败时，若 `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4=true`，自动 fallback 到 `raw_mp4`。
+4. LLM 载荷固定为 `raw_mp4`：直接将 60 秒 mp4 base64 传给 vLLM，通过 `media_io_kwargs.video.num_frames=120` 让 vLLM 均匀采 120 帧（2fps），100M 预算下每帧 1216×672 ≈ 720p 88.7%。无需客户端 ffmpeg 解码或 cv2/numpy。
+   - 关键帧路径（客户端 ffmpeg 单遍解码 + MAD/pHash + top-N JPEG）的代码仍保留在 `keyframe_extractor.py` / `session_analysis_video.py` 中，但已作为产品决策停用：API schema 只接受 `raw_mp4`，analyzer 运行时强制覆盖为 `raw_mp4`（migration `20260825_0011` 已将存量行规范化），任何配置都无法重新接入。
 5. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
 6. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
 7. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
