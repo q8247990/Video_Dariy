@@ -291,6 +291,9 @@ export type WebhookUpdate = {
   enabled?: boolean
 }
 
+export type AnalysisStatus = 'open' | 'sealed' | 'analyzing' | 'partial' | 'success' | 'failed'
+export type TaskStatus = 'pending' | 'running' | 'success' | 'skipped' | 'failed' | 'timeout' | 'cancelled'
+
 export type VideoSession = {
   id: number
   source_id: number
@@ -298,7 +301,8 @@ export type VideoSession = {
   session_end_time: string
   total_duration_seconds: number | null
   merge_rule: string | null
-  analysis_status: string
+  analysis_status: AnalysisStatus
+  analysis_retryable?: boolean
   summary_text: string | null
   activity_level: 'low' | 'medium' | 'high' | null
   main_subjects_json: string[] | null
@@ -373,7 +377,8 @@ export type TaskLogItem = {
   id: number
   task_type: string
   task_target_id: number | null
-  status: string
+  status: TaskStatus
+  retryable?: boolean
   queue_task_id: string | null
   cancel_requested: boolean
   started_at: string | null

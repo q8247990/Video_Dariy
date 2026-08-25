@@ -9,6 +9,7 @@ from .home_profile import HomeProfile
 from .llm_provider import LLMProvider
 from .llm_usage_log import LLMUsageLog
 from .mcp_call_log import McpCallLog
+from .session_analysis_checkpoint import SessionAnalysisCheckpoint
 from .system_config import SystemConfig
 from .tag_definition import TagDefinition
 from .task_log import TaskLog
@@ -31,6 +32,7 @@ __all__ = [
     "HomeProfile",
     "LLMProvider",
     "LLMUsageLog",
+    "SessionAnalysisCheckpoint",
     "McpCallLog",
     "SystemConfig",
     "TagDefinition",

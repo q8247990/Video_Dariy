@@ -5,12 +5,15 @@ dedicated celery_vision_worker with --concurrency=1, so globally at most one
 session analysis task runs at any moment.
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from src.application.prompt.compiler import compile_video_recognition_prompt
@@ -26,6 +29,7 @@ from src.db.session import task_db_session
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
+from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.home_profile import build_home_context
@@ -90,7 +94,9 @@ def _claim_session_for_analysis(
             db.query(VideoSession)
             .filter(
                 VideoSession.id == session_id,
-                VideoSession.analysis_status == SessionAnalysisStatus.SEALED,
+                VideoSession.analysis_status.in_(
+                    (SessionAnalysisStatus.SEALED, SessionAnalysisStatus.PARTIAL)
+                ),
             )
             .update(
                 {VideoSession.analysis_status: SessionAnalysisStatus.ANALYZING},
@@ -303,6 +309,122 @@ def _build_provider_client(db: Session) -> tuple[Any, LLMProvider]:
     return client, provider
 
 
+def _analysis_run_id(chunks: list[SessionVideoChunk]) -> str:
+    identities: list[dict[str, Any]] = []
+    for chunk in chunks:
+        for path in chunk.file_paths:
+            path_info: dict[str, Any] = {"path": path}
+            if Path(path).exists():
+                stat = Path(path).stat()
+                path_info.update({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+            identities.append(path_info)
+    encoded = json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()
+    return sha256(encoded).hexdigest()
+
+
+def _sub_chunk_fingerprint(
+    system_prompt: str,
+    user_prompt: str,
+    video_data_url: str,
+    sub_chunk: SubChunk,
+) -> str:
+    payload = {
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "video_sha256": sha256(video_data_url.encode()).hexdigest(),
+        "start_offset_seconds": sub_chunk.start_offset_seconds,
+        "duration_seconds": sub_chunk.duration_seconds,
+        "file_paths": sub_chunk.file_paths,
+    }
+    return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _checkpoint_for_work(
+    db: Session,
+    *,
+    session_id: int,
+    analysis_run_id: str,
+    chunk_index: int,
+    sub_chunk: SubChunk,
+    input_fingerprint: str,
+) -> SessionAnalysisCheckpoint:
+    checkpoint = (
+        db.query(SessionAnalysisCheckpoint)
+        .filter(
+            SessionAnalysisCheckpoint.session_id == session_id,
+            SessionAnalysisCheckpoint.analysis_run_id == analysis_run_id,
+            SessionAnalysisCheckpoint.chunk_index == chunk_index,
+            SessionAnalysisCheckpoint.sub_chunk_index == sub_chunk.sub_chunk_index,
+        )
+        .first()
+    )
+    if checkpoint is not None:
+        if checkpoint.input_fingerprint != input_fingerprint:
+            checkpoint.state = "pending"
+            checkpoint.input_fingerprint = input_fingerprint
+            checkpoint.event_payload = None
+            checkpoint.prompt_tokens = 0
+            checkpoint.completion_tokens = 0
+            checkpoint.total_tokens = 0
+            checkpoint.completed_at = None
+        return checkpoint
+
+    checkpoint = SessionAnalysisCheckpoint(
+        session_id=session_id,
+        analysis_run_id=analysis_run_id,
+        chunk_index=chunk_index,
+        sub_chunk_index=sub_chunk.sub_chunk_index,
+        start_offset_seconds=sub_chunk.start_offset_seconds,
+        input_fingerprint=input_fingerprint,
+        state="pending",
+    )
+    try:
+        with db.begin_nested():
+            db.add(checkpoint)
+            db.flush()
+    except IntegrityError:
+        checkpoint = (
+            db.query(SessionAnalysisCheckpoint)
+            .filter(
+                SessionAnalysisCheckpoint.session_id == session_id,
+                SessionAnalysisCheckpoint.analysis_run_id == analysis_run_id,
+                SessionAnalysisCheckpoint.chunk_index == chunk_index,
+                SessionAnalysisCheckpoint.sub_chunk_index == sub_chunk.sub_chunk_index,
+            )
+            .one()
+        )
+    return checkpoint
+
+
+def _completed_results(
+    db: Session, session: VideoSession, analysis_run_id: str
+) -> tuple[list[tuple[int, int, RecognitionResultDTO]], list[EventRecord]]:
+    checkpoints = (
+        db.query(SessionAnalysisCheckpoint)
+        .filter(
+            SessionAnalysisCheckpoint.session_id == session.id,
+            SessionAnalysisCheckpoint.analysis_run_id == analysis_run_id,
+            SessionAnalysisCheckpoint.state == "success",
+        )
+        .order_by(SessionAnalysisCheckpoint.chunk_index, SessionAnalysisCheckpoint.sub_chunk_index)
+        .all()
+    )
+    results: list[tuple[int, int, RecognitionResultDTO]] = []
+    events: list[EventRecord] = []
+    for checkpoint in checkpoints:
+        if checkpoint.event_payload is None:
+            continue
+        result = RecognitionResultDTO.model_validate(checkpoint.event_payload)
+        results.append((checkpoint.chunk_index, checkpoint.sub_chunk_index, result))
+        for item in result.events:
+            events.append(
+                build_event_record_from_recognized_event(
+                    session, item, base_offset_seconds=checkpoint.start_offset_seconds
+                )
+            )
+    return results, events
+
+
 @celery_app.task(bind=True, max_retries=DEADLOCK_MAX_RETRIES)
 def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict:  # noqa: C901
     """Analyze a sealed session using LLM vision.
@@ -318,6 +440,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
         last_prompt_text: str | None = None
         last_response_text: str | None = None
         last_raw_response_text: str | None = None
+        current_checkpoint: SessionAnalysisCheckpoint | None = None
         queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
         task_log = bind_or_create_running_task_log(
             db,
@@ -348,6 +471,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 session.id,
                 chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
             )
+            analysis_run_id = _analysis_run_id(chunks)
             client, provider = _build_provider_client(db)
             configured_mode = (
                 (getattr(provider, "video_preprocess_mode", "raw_mp4") or "raw_mp4").strip().lower()
@@ -458,6 +582,22 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                         source, home_context, session, sub_chunk
                     )
                     last_prompt_text = user_prompt
+                    input_fingerprint = _sub_chunk_fingerprint(
+                        system_prompt, user_prompt, video_data_url, sub_chunk
+                    )
+                    current_checkpoint = _checkpoint_for_work(
+                        db,
+                        session_id=session.id,
+                        analysis_run_id=analysis_run_id,
+                        chunk_index=chunk.chunk_index,
+                        sub_chunk=sub_chunk,
+                        input_fingerprint=input_fingerprint,
+                    )
+                    if current_checkpoint.state == "success":
+                        continue
+                    current_checkpoint.state = "processing"
+                    current_checkpoint.attempt_count += 1
+                    db.commit()
                     enforce_token_quota(db, provider)
 
                     response_text = client.chat_completion(
@@ -478,14 +618,6 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                     )
                     last_response_text = response_text
                     last_raw_response_text = client.get_last_raw_response_text()
-                    record_token_usage(
-                        db,
-                        provider_id=provider.id,
-                        provider_name_snapshot=provider.provider_name,
-                        scene="video_analysis",
-                        usage=client.get_last_usage(),
-                    )
-
                     if not response_text:
                         raise ValueError(
                             f"Empty response from vision provider for chunk "
@@ -493,23 +625,35 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                         )
 
                     recognition_result = parse_video_recognition_output(response_text)
-                    parse_modes.append("new")
-                    structured_results.append(
-                        (chunk.chunk_index, sub_chunk.sub_chunk_index, recognition_result)
+                    usage = client.get_last_usage() or {}
+                    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                    completion_tokens = int(usage.get("completion_tokens") or 0)
+                    total_tokens = int(usage.get("total_tokens") or 0)
+                    if total_tokens <= 0:
+                        total_tokens = prompt_tokens + completion_tokens
+                    current_checkpoint.event_payload = recognition_result.model_dump(mode="json")
+                    current_checkpoint.prompt_tokens = prompt_tokens
+                    current_checkpoint.completion_tokens = completion_tokens
+                    current_checkpoint.total_tokens = total_tokens
+                    current_checkpoint.state = "success"
+                    current_checkpoint.completed_at = datetime.now(timezone.utc)
+                    record_token_usage(
+                        db,
+                        provider_id=provider.id,
+                        provider_name_snapshot=provider.provider_name,
+                        scene="video_analysis",
+                        usage=usage,
+                        session_id=session.id,
+                        analysis_checkpoint_id=current_checkpoint.id,
                     )
-                    for item in recognition_result.events:
-                        events_to_persist.append(
-                            build_event_record_from_recognized_event(
-                                session,
-                                item,
-                                base_offset_seconds=sub_chunk.start_offset_seconds,
-                            )
-                        )
+                    db.commit()
+                    parse_modes.append("new")
                     sub_chunk_count += 1
 
             ensure_task_not_cancelled(
                 db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
             )
+            structured_results, events_to_persist = _completed_results(db, session, analysis_run_id)
             _aggregate_session_fields(session, structured_results, events_to_persist)
             replaced_deleted_count = _replace_session_events(db, session_id, events_to_persist)
 
@@ -587,6 +731,13 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             )
             db.rollback()
 
+            if current_checkpoint is not None:
+                current_checkpoint = db.merge(current_checkpoint)
+                current_checkpoint.state = "error"
+                current_checkpoint.last_error = truncate_text(str(e), 500) or str(e)
+                current_checkpoint.error_type = type(e).__name__
+                db.commit()
+
             if _is_deadlock_operational_error(e) and self.request.retries < DEADLOCK_MAX_RETRIES:
                 countdown = 2**self.request.retries
                 _mark_session_sealed_for_retry(db, session_id)
@@ -616,6 +767,10 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 },
             )
             if session:
-                session.analysis_status = SessionAnalysisStatus.FAILED
+                session.analysis_status = (
+                    SessionAnalysisStatus.PARTIAL
+                    if current_checkpoint is not None
+                    else SessionAnalysisStatus.FAILED
+                )
             db.commit()
             raise

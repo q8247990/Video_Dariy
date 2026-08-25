@@ -70,9 +70,14 @@ class HomeQueryService:
         if filters is None:
             filters = EventFilters()
 
-        query = self.db.query(EventRecord).filter(
-            EventRecord.event_start_time >= time_range.start,
-            EventRecord.event_start_time <= time_range.end,
+        query = (
+            self.db.query(EventRecord)
+            .join(VideoSession)
+            .filter(
+                VideoSession.analysis_status == "success",
+                EventRecord.event_start_time >= time_range.start,
+                EventRecord.event_start_time <= time_range.end,
+            )
         )
 
         # 事件类型过滤

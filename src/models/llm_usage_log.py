@@ -13,6 +13,14 @@ class LLMUsageLog(Base):
     provider_id: Mapped[int | None] = mapped_column(
         ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
     )
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("video_session.id", ondelete="SET NULL"), nullable=True
+    )
+    analysis_checkpoint_id: Mapped[int | None] = mapped_column(
+        ForeignKey("session_analysis_checkpoint.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
     provider_name_snapshot: Mapped[str | None] = mapped_column(String(128), nullable=True)
     usage_date: Mapped[date] = mapped_column(Date, nullable=False)
     scene: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -23,4 +31,5 @@ class LLMUsageLog(Base):
     __table_args__ = (
         Index("idx_llm_usage_log_date", "usage_date"),
         Index("idx_llm_usage_log_provider_date", "provider_id", "usage_date"),
+        Index("idx_llm_usage_log_session", "session_id"),
     )

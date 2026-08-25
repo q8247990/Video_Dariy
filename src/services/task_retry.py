@@ -129,7 +129,11 @@ def _retry_session_analysis(
             error_message="Session is open and cannot be analyzed yet",
         )
 
-    if session.analysis_status in (SessionAnalysisStatus.FAILED, SessionAnalysisStatus.SUCCESS):
+    if session.analysis_status in (
+        SessionAnalysisStatus.FAILED,
+        SessionAnalysisStatus.PARTIAL,
+        SessionAnalysisStatus.SUCCESS,
+    ):
         session.analysis_status = SessionAnalysisStatus.SEALED
         db.flush()
 

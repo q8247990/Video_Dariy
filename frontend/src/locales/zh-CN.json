@@ -58,6 +58,8 @@
     "status_timeout": "超时",
     "status_cancelled": "已取消",
     "status_analyzing": "分析中",
+    "status_partial": "部分完成",
+    "status_retryable": "可重试",
     "status_enabled": "已启用",
     "status_paused": "已暂停",
     "status_disabled": "已禁用",

@@ -40,6 +40,7 @@ class SessionAnalysisStatus(str, Enum):
     OPEN = "open"
     SEALED = "sealed"
     ANALYZING = "analyzing"
+    PARTIAL = "partial"
     SUCCESS = "success"
     FAILED = "failed"
 

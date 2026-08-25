@@ -276,7 +276,7 @@ export function TasksPage() {
                     <button className="ghost" disabled={hasPendingAction} onClick={() => stopMutation.mutate(row.id)}>
                       {t('tasks.action_stop')}
                     </button>
-                  ) : row.status === 'failed' || row.status === 'timeout' ? (
+                  ) : row.status === 'failed' || row.status === 'timeout' || row.status === 'cancelled' ? (
                     <>
                       <button className="ghost" disabled={hasPendingAction} onClick={() => retryMutation.mutate(row.id)}>
                         {t('tasks.action_retry')}
@@ -285,7 +285,7 @@ export function TasksPage() {
                         {t('tasks.action_delete')}
                       </button>
                     </>
-                  ) : row.status === 'cancelled' || row.status === 'success' || row.status === 'skipped' ? (
+                  ) : row.status === 'success' || row.status === 'skipped' ? (
                     <button className="ghost" disabled={hasPendingAction} onClick={() => deleteMutation.mutate(row.id)}>
                       {t('tasks.action_delete')}
                     </button>

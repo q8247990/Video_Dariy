@@ -72,6 +72,7 @@ export function SessionsPage() {
             <option value="open">{t('common.status_open')}</option>
             <option value="sealed">{t('common.status_sealed')}</option>
             <option value="analyzing">{t('common.status_analyzing')}</option>
+            <option value="partial">{t('common.status_partial')}</option>
             <option value="success">{t('common.status_success')}</option>
             <option value="failed">{t('common.status_failed')}</option>
           </select>
@@ -118,6 +119,9 @@ export function SessionsPage() {
                   <button className="ghost" onClick={() => setSelectedSessionId(item.id)}>
                     {t('sessions.action_view_playback')}
                   </button>
+                  {item.analysis_status === 'partial' ? (
+                    <span className="status-tag status-partial">{t('common.status_retryable')}</span>
+                  ) : null}
                 </td>
               </tr>
             ))}

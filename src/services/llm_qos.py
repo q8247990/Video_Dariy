@@ -53,6 +53,8 @@ def record_token_usage(
     provider_name_snapshot: str | None = None,
     scene: str,
     usage: dict[str, Any] | None,
+    session_id: int | None = None,
+    analysis_checkpoint_id: int | None = None,
     now: datetime | None = None,
 ) -> None:
     if not usage:
@@ -70,6 +72,8 @@ def record_token_usage(
     db.add(
         LLMUsageLog(
             provider_id=provider_id,
+            session_id=session_id,
+            analysis_checkpoint_id=analysis_checkpoint_id,
             provider_name_snapshot=provider_name_snapshot,
             usage_date=usage_date,
             scene=scene,

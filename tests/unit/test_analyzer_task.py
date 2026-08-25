@@ -7,17 +7,18 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.models.event_record import EventRecord
+from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import TaskStatus
-from src.services.session_analysis_video import SessionVideoChunk
+from src.services.session_analysis_video import SessionVideoChunk, SubChunk
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks.analyzer import analyze_session_task
+from src.tasks.analyzer import _checkpoint_for_work, analyze_session_task
 
 
 def _new_session_factory():
@@ -25,6 +26,7 @@ def _new_session_factory():
     VideoSource.__table__.create(bind=engine)
     VideoSession.__table__.create(bind=engine)
     EventRecord.__table__.create(bind=engine)
+    SessionAnalysisCheckpoint.__table__.create(bind=engine)
     TaskLog.__table__.create(bind=engine)
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
@@ -128,8 +130,245 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
     monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
     monkeypatch.setattr(
         "src.tasks.analyzer.record_token_usage",
-        lambda db, provider_id, provider_name_snapshot, scene, usage: None,
+        lambda db, provider_id, provider_name_snapshot, scene, usage, **kwargs: None,
     )
+
+
+def _recognition_result(index: int) -> RecognitionResultDTO:
+    return RecognitionResultDTO(
+        session_summary=SessionSummaryDTO(
+            summary_text=f"summary-{index}",
+            activity_level="medium",
+            main_subjects=["爸爸"],
+            has_important_event=True,
+        ),
+        events=[
+            RecognizedEventDTO(
+                offset_start_sec=1,
+                offset_end_sec=5,
+                event_type="member_appear",
+                title=f"event-{index}",
+                summary=f"event-{index}",
+                detail=f"event-{index}",
+                related_entities=[],
+                observed_actions=[],
+                interpreted_state=[],
+                confidence=0.9,
+                importance_level="medium",
+            )
+        ],
+        analysis_notes=[],
+    )
+
+
+def _mock_three_sub_chunks(monkeypatch, session_factory, responses: list[str]) -> list[int]:
+    calls: list[int] = []
+
+    class _FakeClient:
+        def chat_completion(self, **kwargs):
+            del kwargs
+            calls.append(len(calls))
+            response = responses.pop(0)
+            if response == "raise":
+                raise RuntimeError("provider failed")
+            return response
+
+        def get_last_usage(self):
+            return {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+
+        def get_last_raw_response_text(self):
+            return "raw"
+
+    _mock_common(monkeypatch, session_factory)
+    monkeypatch.setattr(
+        "src.tasks.analyzer.build_chunk_sub_chunks",
+        lambda chunk, db, sub_chunk_seconds: [
+            SubChunk(
+                chunk_index=0,
+                sub_chunk_index=index,
+                start_offset_seconds=index * 60,
+                duration_seconds=60,
+                file_paths=[f"/tmp/mock-{index}.mp4"],
+            )
+            for index in range(3)
+        ],
+    )
+    monkeypatch.setattr(
+        "src.tasks.analyzer.session_chunk_from_sub_chunk",
+        lambda sub_chunk, parent_chunk_index: sub_chunk,
+    )
+    monkeypatch.setattr(
+        "src.tasks.analyzer._build_provider_client",
+        lambda db: (_FakeClient(), SimpleNamespace(id=1, provider_name="mock-provider")),
+    )
+    monkeypatch.setattr(
+        "src.tasks.analyzer.parse_video_recognition_output",
+        lambda response: _recognition_result(int(response)),
+    )
+    return calls
+
+
+def test_analyze_session_partial_failure_preserves_completed_sub_chunks(monkeypatch) -> None:
+    session_factory = _new_session_factory()
+    db = session_factory()
+    try:
+        _, session_id = _seed_source_and_session(db)
+        db.commit()
+    finally:
+        db.close()
+
+    _mock_three_sub_chunks(monkeypatch, session_factory, ["0", "1", "raise"])
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        analyze_session_task.run(session_id=session_id)
+
+    verify_db = session_factory()
+    try:
+        checkpoints = (
+            verify_db.query(SessionAnalysisCheckpoint)
+            .order_by(SessionAnalysisCheckpoint.sub_chunk_index)
+            .all()
+        )
+        session = verify_db.query(VideoSession).filter(VideoSession.id == session_id).one()
+        assert [checkpoint.state for checkpoint in checkpoints] == ["success", "success", "error"]
+        assert checkpoints[0].event_payload is not None
+        assert checkpoints[1].total_tokens == 15
+        assert checkpoints[2].last_error == "provider failed"
+        assert checkpoints[2].error_type == "RuntimeError"
+        assert session.analysis_status == "partial"
+        assert (
+            verify_db.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 0
+        )
+    finally:
+        verify_db.close()
+
+
+def test_analyze_session_retry_resumes_from_first_non_success_without_recharging(
+    monkeypatch,
+) -> None:
+    session_factory = _new_session_factory()
+    db = session_factory()
+    try:
+        _, session_id = _seed_source_and_session(db)
+        db.commit()
+    finally:
+        db.close()
+
+    first_calls = _mock_three_sub_chunks(monkeypatch, session_factory, ["0", "1", "raise"])
+    with pytest.raises(RuntimeError):
+        analyze_session_task.run(session_id=session_id)
+    retry_calls = _mock_three_sub_chunks(monkeypatch, session_factory, ["2"])
+
+    result = analyze_session_task.run(session_id=session_id)
+
+    verify_db = session_factory()
+    try:
+        session = verify_db.query(VideoSession).filter(VideoSession.id == session_id).one()
+        checkpoints = verify_db.query(SessionAnalysisCheckpoint).all()
+        events = verify_db.query(EventRecord).filter(EventRecord.session_id == session_id).all()
+        assert first_calls == [0, 1, 2]
+        assert retry_calls == [0]
+        assert result["events_created"] == 3
+        assert session.analysis_status == "success"
+        assert len(checkpoints) == 3
+        assert sum(checkpoint.total_tokens for checkpoint in checkpoints) == 45
+        assert len(events) == 3
+        assert {event.summary for event in events} == {"event-0", "event-1", "event-2"}
+    finally:
+        verify_db.close()
+
+
+def test_analyze_session_duplicate_retry_does_not_duplicate_events_or_usage(monkeypatch) -> None:
+    session_factory = _new_session_factory()
+    db = session_factory()
+    try:
+        _, session_id = _seed_source_and_session(db)
+        db.commit()
+    finally:
+        db.close()
+
+    calls = _mock_three_sub_chunks(monkeypatch, session_factory, ["0", "1", "2"])
+    analyze_session_task.run(session_id=session_id)
+    retry_result = analyze_session_task.run(session_id=session_id)
+
+    verify_db = session_factory()
+    try:
+        assert calls == [0, 1, 2]
+        assert retry_result["skipped"] is True
+        assert (
+            verify_db.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 3
+        )
+        assert verify_db.query(SessionAnalysisCheckpoint).count() == 3
+    finally:
+        verify_db.close()
+
+
+def test_analyze_session_changed_input_invalidates_stale_checkpoints() -> None:
+    session_factory = _new_session_factory()
+    db = session_factory()
+    try:
+        _, session_id = _seed_source_and_session(db)
+        checkpoint = SessionAnalysisCheckpoint(
+            session_id=session_id,
+            analysis_run_id="run",
+            chunk_index=0,
+            sub_chunk_index=0,
+            start_offset_seconds=0,
+            input_fingerprint="old",
+            state="success",
+            event_payload={"events": []},
+            total_tokens=15,
+        )
+        db.add(checkpoint)
+        db.commit()
+        sub_chunk = SubChunk(0, 0, 0, 60, ["/tmp/mock.mp4"])
+        updated = _checkpoint_for_work(
+            db,
+            session_id=session_id,
+            analysis_run_id="run",
+            chunk_index=0,
+            sub_chunk=sub_chunk,
+            input_fingerprint="new",
+        )
+        assert updated.state == "pending"
+        assert updated.event_payload is None
+        assert updated.total_tokens == 0
+    finally:
+        db.close()
+
+
+def test_analyze_session_cancelled_mid_run_partial_not_served(monkeypatch) -> None:
+    session_factory = _new_session_factory()
+    db = session_factory()
+    try:
+        _, session_id = _seed_source_and_session(db)
+        db.commit()
+    finally:
+        db.close()
+
+    _mock_three_sub_chunks(monkeypatch, session_factory, ["0", "1", "2"])
+    calls = {"count": 0}
+
+    def _cancel_after_first(*args, **kwargs):
+        del args, kwargs
+        calls["count"] += 1
+        if calls["count"] > 4:
+            from src.services.task_dispatch_control import TaskCancellationRequested
+
+            raise TaskCancellationRequested("cancelled")
+
+    monkeypatch.setattr("src.tasks.analyzer.ensure_task_not_cancelled", _cancel_after_first)
+    result = analyze_session_task.run(session_id=session_id)
+
+    verify_db = session_factory()
+    try:
+        assert result["cancelled"] is True
+        assert (
+            verify_db.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 0
+        )
+        assert verify_db.query(SessionAnalysisCheckpoint).count() == 2
+    finally:
+        verify_db.close()
 
 
 def test_analyze_session_replaces_old_events(monkeypatch) -> None:
@@ -249,7 +488,7 @@ def test_analyze_session_failure_keeps_old_events(monkeypatch) -> None:
         assert events[0].summary == "keep me"
         session = verify_db.query(VideoSession).filter(VideoSession.id == session_id).first()
         assert session is not None
-        assert session.analysis_status == "failed"
+        assert session.analysis_status == "partial"
     finally:
         verify_db.close()
 

@@ -18,6 +18,7 @@ export function StatusTag({ status }: StatusTagProps) {
     timeout: t('common.status_timeout'),
     cancelled: t('common.status_cancelled'),
     analyzing: t('common.status_analyzing'),
+    partial: t('common.status_partial'),
     enabled: t('common.status_enabled'),
     paused: t('common.status_paused'),
     disabled: t('common.status_disabled'),

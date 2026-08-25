@@ -58,6 +58,8 @@
     "status_timeout": "Timed Out",
     "status_cancelled": "Cancelled",
     "status_analyzing": "Analyzing",
+    "status_partial": "Partial",
+    "status_retryable": "Retryable",
     "status_enabled": "Enabled",
     "status_paused": "Paused",
     "status_disabled": "Disabled",

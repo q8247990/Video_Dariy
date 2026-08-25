@@ -118,9 +118,14 @@ def retrieve_events(
         return []
 
     tr = plan.event_time_range
-    query = db.query(EventRecord).filter(
-        EventRecord.event_start_time >= tr.start,
-        EventRecord.event_start_time <= tr.end,
+    query = (
+        db.query(EventRecord)
+        .join(VideoSession)
+        .filter(
+            VideoSession.analysis_status == "success",
+            EventRecord.event_start_time >= tr.start,
+            EventRecord.event_start_time <= tr.end,
+        )
     )
 
     filters = plan.event_filters
