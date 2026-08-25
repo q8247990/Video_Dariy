@@ -9,6 +9,36 @@ type ApiResponse<T> = {
   data: T
 }
 
+type ApiErrorBody = {
+  message?: unknown
+  detail?: unknown
+}
+
+export class ApiError extends Error {
+  readonly status: number | undefined
+
+  constructor(message: string, status?: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+function getApiErrorMessage(data: unknown, fallback: string): string {
+  if (typeof data !== 'object' || data === null) {
+    return fallback
+  }
+
+  const body = data as ApiErrorBody
+  if (typeof body.message === 'string' && body.message) {
+    return body.message
+  }
+  if (typeof body.detail === 'string' && body.detail) {
+    return body.detail
+  }
+  return fallback
+}
+
 export const apiClient = axios.create({
   baseURL: '/api/v1',
   timeout: 12_000,
@@ -33,7 +63,7 @@ apiClient.interceptors.response.use(
       if (payload.code === 4011) {
         recoverFromUnauthorized()
       }
-      return Promise.reject(new Error(payload.message || '请求失败'))
+        return Promise.reject(new ApiError(payload.message || '请求失败', response.status))
     }
     return response
   },
@@ -42,8 +72,8 @@ apiClient.interceptors.response.use(
       if (error.response?.status === 401) {
         recoverFromUnauthorized()
       }
-      const message = error.response?.data?.message || error.message || '网络错误'
-      return Promise.reject(new Error(message))
+      const message = getApiErrorMessage(error.response?.data, error.message || '网络错误')
+      return Promise.reject(new ApiError(message, error.response?.status))
     }
     return Promise.reject(new Error('未知错误'))
   },

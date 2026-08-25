@@ -53,6 +53,9 @@ const HomeProfilePage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('../features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 )
+const NotFoundPage = lazy(() =>
+  import('../features/common/NotFoundPage').then((m) => ({ default: m.NotFoundPage }))
+)
 const OnboardingWelcomePage = lazy(() =>
   import('../features/onboarding/OnboardingWelcomePage').then((m) => ({ default: m.OnboardingWelcomePage }))
 )
@@ -347,7 +350,14 @@ export function AppRouter() {
         </Route>
 
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="*"
+          element={
+            <LazyPage>
+              <NotFoundPage />
+            </LazyPage>
+          }
+        />
       </Routes>
     </BrowserRouter>
   )

@@ -16,6 +16,9 @@
   },
   "common": {
     "loading": "Loading...",
+    "not_found_title": "Page not found",
+    "not_found_message": "This address does not exist or has moved.",
+    "not_found_back": "Back to dashboard",
     "load_failed_retry": "Loading failed. Please retry.",
     "save": "Save",
     "saving": "Saving...",

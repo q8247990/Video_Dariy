@@ -13,7 +13,7 @@ export default defineConfig({
             return undefined
           }
 
-          if (id.includes('react-player') || id.includes('hls.js')) {
+          if (id.includes('hls.js')) {
             return 'vendor-media'
           }
         },

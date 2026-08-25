@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { HlsVideoPlayer } from '../../components/common/HlsVideoPlayer'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
@@ -10,10 +11,23 @@ import { getSessionPlayback, getSessions } from './api'
 
 export function SessionsPage() {
   const { t } = useTranslation()
-  const [page, setPage] = useState(1)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedPage = Number(searchParams.get('page'))
+  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
   const [sourceId, setSourceId] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null)
+
+  const setPage = (nextPage: number | ((currentPage: number) => number)) => {
+    const resolvedPage = typeof nextPage === 'function' ? nextPage(page) : nextPage
+    const next = new URLSearchParams(searchParams)
+    if (resolvedPage <= 1) {
+      next.delete('page')
+    } else {
+      next.set('page', String(resolvedPage))
+    }
+    setSearchParams(next)
+  }
 
   const queryKey = useMemo(
     () => ['sessions', { page, sourceId, analysisStatus }],

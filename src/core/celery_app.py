@@ -24,6 +24,14 @@ celery_app.conf.update(
     timezone="Asia/Shanghai",
     enable_utc=True,
     task_track_started=True,
+    # Ack only after execution: a lost worker returns the message to its
+    # original queue (celery, analysis_hot, or analysis_full) for retry.
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    # Tasks may handle SoftTimeLimitExceeded and persist retryable state before
+    # the hard kill. Redis has no native dead-letter queue; exhausted retries
+    # remain in TaskLog for the existing maintenance/retry workflow.
+    task_soft_time_limit=3300,
     task_time_limit=3600,
     beat_schedule={
         "heartbeat": {

@@ -35,11 +35,16 @@ export function OnboardingBasicVideoPage() {
     mutationFn: createOnboardingVideoSource,
     onSuccess: async (data) => {
       setVideo({ source_id: data.id })
-      const testResult = await testVideoSource(data.id)
-      setVideo({ validated: testResult.success })
-      setMessage(testResult.message)
-      if (testResult.success) {
-        navigate('/onboarding/basic/provider')
+      try {
+        const testResult = await testVideoSource(data.id)
+        setVideo({ validated: testResult.success })
+        setMessage(testResult.message)
+        if (testResult.success) {
+          navigate('/onboarding/basic/provider')
+        }
+      } catch (error: unknown) {
+        setVideo({ validated: false })
+        setMessage(error instanceof Error ? error.message : t('common.load_failed_retry'))
       }
     },
     onError: (error) => {

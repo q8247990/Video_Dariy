@@ -36,10 +36,16 @@ export function EventDetailPage() {
     enabled: Number.isFinite(eventId) && eventId > 0,
   })
 
+  const sessionId = detailQuery.data?.session_id
   const sessionEventsQuery = useQuery({
-    queryKey: ['session-events', detailQuery.data?.session_id],
-    queryFn: () => getSessionEvents(detailQuery.data!.session_id, 'asc'),
-    enabled: Boolean(detailQuery.data?.session_id),
+    queryKey: ['session-events', sessionId],
+    queryFn: () => {
+      if (sessionId === undefined) {
+        throw new Error('Session ID is unavailable')
+      }
+      return getSessionEvents(sessionId, 'asc')
+    },
+    enabled: sessionId !== undefined,
   })
 
   const reanalyzeMutation = useMutation({

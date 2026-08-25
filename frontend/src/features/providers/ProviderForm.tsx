@@ -56,6 +56,7 @@ export function ProviderForm({
     [initialValue, t],
   )
   const capabilityError = !form.supports_vision && !form.supports_qa
+  const apiKeyRequiredError = !initialValue && !form.api_key.trim()
 
   const handleTest = async () => {
     if (!initialValue) return
@@ -278,7 +279,7 @@ export function ProviderForm({
         <button type="button" className="ghost" onClick={onCancel}>
           {t('common.cancel')}
         </button>
-        <button type="submit" disabled={pending || capabilityError}>
+        <button type="submit" disabled={pending || capabilityError || apiKeyRequiredError}>
           {pending ? t('providers.submit_pending') : submitLabel}
         </button>
       </div>

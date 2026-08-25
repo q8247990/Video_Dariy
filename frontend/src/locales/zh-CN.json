@@ -16,6 +16,9 @@
   },
   "common": {
     "loading": "正在加载...",
+    "not_found_title": "页面未找到",
+    "not_found_message": "该地址不存在或已被移动。",
+    "not_found_back": "返回仪表盘",
     "load_failed_retry": "加载失败，请重试",
     "save": "保存",
     "saving": "保存中...",
