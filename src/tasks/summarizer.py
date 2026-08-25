@@ -50,6 +50,7 @@ from src.services.prompt_builder.v2.daily_summary import (
     build_subject_summary_prompt,
     compress_daily_input,
 )
+from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_QA, find_required_enabled_provider
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
@@ -945,7 +946,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
 
             client = OpenAICompatGatewayFactory().build(
                 api_base_url=provider.api_base_url,
-                api_key=provider.api_key,
+                api_key=decrypt_provider_api_key(provider.api_key),
                 model_name=provider.model_name,
                 timeout_seconds=provider.timeout_seconds,
             )

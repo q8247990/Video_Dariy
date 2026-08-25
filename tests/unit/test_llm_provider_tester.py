@@ -1,12 +1,13 @@
 from unittest.mock import MagicMock, patch
 
 from src.services.llm_provider_tester import ProviderTestResult, check_provider_connectivity
+from src.services.provider_key_crypto import encrypt_provider_api_key
 
 
 def _make_provider() -> MagicMock:
     provider = MagicMock()
     provider.api_base_url = "http://localhost:8000/v1"
-    provider.api_key = "test-key"
+    provider.api_key = encrypt_provider_api_key("test-key")
     provider.model_name = "test-model"
     provider.timeout_seconds = 30
     return provider

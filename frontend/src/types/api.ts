@@ -67,6 +67,7 @@ export type Provider = {
   id: number
   provider_name: string
   api_base_url: string
+  api_key: string
   model_name: string
   timeout_seconds: number
   retry_count: number

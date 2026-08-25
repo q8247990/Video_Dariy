@@ -36,6 +36,7 @@ from src.services.home_profile import (
     save_home_profile,
     update_entity,
 )
+from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_enabled_provider
 
 logger = logging.getLogger(__name__)
@@ -294,7 +295,7 @@ def generate_entity_appearance(
     try:
         gateway = OpenAICompatGatewayFactory().build(
             api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
+            api_key=decrypt_provider_api_key(provider.api_key),
             model_name=provider.model_name,
             timeout_seconds=provider.timeout_seconds,
         )

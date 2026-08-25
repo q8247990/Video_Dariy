@@ -3,6 +3,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from src.services.provider_key_crypto import mask_provider_api_key
+
 # The keyframe preprocessing mode is disabled as a product decision: the code
 # path is kept in the repository, but it must not be activatable through any
 # configuration surface. The API therefore only accepts "raw_mp4".
@@ -73,6 +75,7 @@ class LLMProviderUpdate(LLMProviderBase):
 
 class LLMProviderResponse(LLMProviderBase):
     id: int
+    api_key: str
     availability_status: str = "unknown"
     availability_message: str = "never tested"
     last_test_status: Optional[str] = None
@@ -82,6 +85,12 @@ class LLMProviderResponse(LLMProviderBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("api_key")
+    @classmethod
+    def _mask_api_key(cls, value: str) -> str:
+        return mask_provider_api_key(value)
+
 
 class LLMProviderUsageProviderItem(BaseModel):
     provider_id: int | None

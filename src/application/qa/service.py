@@ -27,6 +27,7 @@ from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
 from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
+from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_QA, find_enabled_provider
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class QAService:
 
         gateway = self._gateway_factory.build(
             api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
+            api_key=decrypt_provider_api_key(provider.api_key),
             model_name=provider.model_name,
             timeout_seconds=provider.timeout_seconds,
             supports_tool_calling=provider.supports_tool_calling,

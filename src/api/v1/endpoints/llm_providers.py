@@ -17,6 +17,7 @@ from src.schemas.llm_provider import (
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.services.llm_provider_tester import check_provider_connectivity
 from src.services.llm_qos import get_daily_usage_stats, provider_availability
+from src.services.provider_key_crypto import encrypt_provider_api_key
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
     PROVIDER_TYPE_VISION,
@@ -120,6 +121,7 @@ def create_provider(
         dump["enabled"] = True
 
     _apply_legacy_fields(dump)
+    dump["api_key"] = encrypt_provider_api_key(dump["api_key"])
 
     provider = LLMProvider(**dump)
     db.add(provider)
@@ -139,6 +141,8 @@ def update_provider(  # noqa: C901
         return BaseResponse(code=4002, message=t("provider.not_found", locale))
 
     dump = data.model_dump(exclude_unset=True)
+    if "api_key" in dump and dump["api_key"] is not None:
+        dump["api_key"] = encrypt_provider_api_key(dump["api_key"])
 
     next_supports_vision = bool(dump.get("supports_vision", provider.supports_vision))
     next_supports_qa = bool(dump.get("supports_qa", provider.supports_qa))

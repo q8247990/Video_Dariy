@@ -2,13 +2,36 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class SecretConfigurationError(ValueError):
+    """Raised when a production deployment has an unsafe secret configuration."""
+
+
+_DEVELOPMENT_SECRET_KEY = "supersecretkey_please_change_in_production"
+_DEVELOPMENT_MEDIA_SIGNING_KEY = "development-media-signing-key-change-before-production"
+_DEVELOPMENT_PROVIDER_KEY_ENCRYPTION_KEY = "v1:QOWWQiHxXhQxyTXkaTPzU5Xx-wYc5yqD1kuWNpCEJDg="
+_KNOWN_INSECURE_SECRETS = frozenset(
+    {
+        "",
+        _DEVELOPMENT_SECRET_KEY,
+        _DEVELOPMENT_MEDIA_SIGNING_KEY,
+        _DEVELOPMENT_PROVIDER_KEY_ENCRYPTION_KEY,
+        "change_me_mcp_token",
+        "123456",
+        "super-secret-key",
+    }
+)
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Home Monitor Video Analysis"
     API_V1_STR: str = "/api/v1"
     DEFAULT_LOCALE: str = "zh-CN"
 
     # Security
-    SECRET_KEY: str = "supersecretkey_please_change_in_production"
+    APP_ENV: str = "development"
+    SECRET_KEY: str = _DEVELOPMENT_SECRET_KEY
+    MEDIA_SIGNING_KEY: str = _DEVELOPMENT_MEDIA_SIGNING_KEY
+    PROVIDER_KEY_ENCRYPTION_KEY: str = _DEVELOPMENT_PROVIDER_KEY_ENCRYPTION_KEY
     MCP_TOKEN: str = "change_me_mcp_token"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
@@ -56,7 +79,30 @@ class Settings(BaseSettings):
                 f"must be <= ANALYZER_SEGMENT_SECONDS "
                 f"({self.ANALYZER_SEGMENT_SECONDS})"
             )
+        if self.APP_ENV.strip().lower() == "production":
+            self._validate_production_secrets()
         return self
+
+    def _validate_production_secrets(self) -> None:
+        """Reject missing, known-default, or shared production signing material."""
+        invalid_names = [
+            name
+            for name, value in (
+                ("SECRET_KEY", self.SECRET_KEY),
+                ("MEDIA_SIGNING_KEY", self.MEDIA_SIGNING_KEY),
+                ("PROVIDER_KEY_ENCRYPTION_KEY", self.PROVIDER_KEY_ENCRYPTION_KEY),
+            )
+            if value.strip() in _KNOWN_INSECURE_SECRETS
+        ]
+        if invalid_names:
+            raise SecretConfigurationError(
+                "Production secret configuration is missing or uses an unsafe default: "
+                + ", ".join(invalid_names)
+            )
+        if self.SECRET_KEY == self.MEDIA_SIGNING_KEY:
+            raise SecretConfigurationError(
+                "Production SECRET_KEY and MEDIA_SIGNING_KEY must be distinct"
+            )
 
 
 settings = Settings()

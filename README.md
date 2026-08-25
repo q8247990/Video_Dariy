@@ -118,10 +118,30 @@ bash scripts/package_release.sh --tag v1.0.0
 
 ### 配置参考
 
+### 生产密钥生命周期
+
+生产部署使用 `APP_ENV=production`。启动时必须从环境注入彼此不同的
+`SECRET_KEY`、`MEDIA_SIGNING_KEY` 和版本化的 `PROVIDER_KEY_ENCRYPTION_KEY`；缺失或已知
+默认值会阻止启动，且不会输出密钥内容。为每个值独立生成随机材料：
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generate_key().decode())"
+```
+
+将生成值保存在部署平台的 secrets 管理器或未纳入版本控制的 `.env` 中。轮换应用签名密钥
+需要按对应业务的发布计划执行；轮换 Provider 加密材料时，先执行已验证的数据库备份，再以新
+`PROVIDER_KEY_ENCRYPTION_KEY` 运行
+`OLD_PROVIDER_KEY_ENCRYPTION_KEY='<old v1 key>' python3 scripts/rotate_provider_key_encryption.py`。
+该操作仅接受已加密记录并在事务中重加密；迁移或轮换失败的唯一恢复路径是还原该备份。Provider API key
+仅保存密文，响应只返回掩码；无 API key 的本地 vLLM Provider 保持支持。
+
 | 变量 | 说明 | 是否必改 |
 |------|------|----------|
 | `VIDEO_ROOT_PATH` | 视频录像目录（容器内路径） | 通过 docker-compose 挂载 |
 | `SECRET_KEY` | JWT 签名密钥 | 生产环境必改 |
+| `MEDIA_SIGNING_KEY` | 媒体 URL 签名密钥，必须不同于 `SECRET_KEY` | 生产环境必填 |
+| `PROVIDER_KEY_ENCRYPTION_KEY` | `v1:<Fernet key>` 格式的 Provider API-key 静态加密密钥 | 生产环境必填 |
 | `DEFAULT_ADMIN_USERNAME` | 默认管理员用户名 | 建议修改 |
 | `DEFAULT_ADMIN_PASSWORD` | 默认管理员密码 | 建议修改 |
 | `DATABASE_URL` | PostgreSQL 连接串 | Docker 部署保持默认即可 |

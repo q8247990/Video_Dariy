@@ -13,7 +13,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-home_monitor}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -53,13 +53,16 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-home_monitor}
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
+      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
       DB_INIT_MAX_RETRIES: ${DB_INIT_MAX_RETRIES:-180}
       DB_INIT_RETRY_INTERVAL_SECONDS: ${DB_INIT_RETRY_INTERVAL_SECONDS:-2}
     depends_on:
@@ -94,13 +97,16 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-home_monitor}
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
+      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -123,13 +129,16 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-home_monitor}
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
+      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -152,13 +161,16 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-home_monitor}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-home_monitor}
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-supersecretkey_please_change_in_production}
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
+      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
       VIDEO_ROOT_PATH: /data/videos
       PLAYBACK_CACHE_ROOT: /data/hls
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
     depends_on:
       postgres:
         condition: service_healthy

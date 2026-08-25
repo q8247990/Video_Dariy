@@ -2,9 +2,10 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from src.db.base_class import Base
+from src.services.provider_key_crypto import encrypt_provider_api_key, is_encrypted_provider_api_key
 
 
 class LLMProvider(Base):
@@ -37,6 +38,12 @@ class LLMProvider(Base):
     last_test_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     last_test_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     last_test_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    @validates("api_key")
+    def _encrypt_api_key(self, key: str, value: str | None) -> str:
+        if not value or is_encrypted_provider_api_key(value):
+            return value or ""
+        return encrypt_provider_api_key(value)
 
     __table_args__ = (
         Index("idx_llm_provider_type_enabled", "provider_type", "enabled"),

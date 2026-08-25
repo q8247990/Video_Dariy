@@ -6,6 +6,7 @@ from src.core.i18n import DEFAULT_LOCALE, t
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.llm_provider import LLMProvider
 from src.providers.openai_client import OpenAIClient
+from src.services.provider_key_crypto import decrypt_provider_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +30,10 @@ def check_provider_connectivity(
     vision_result = False
     tool_calling_result = False
 
+    api_key = decrypt_provider_api_key(provider.api_key)
     client = OpenAIClient(
         api_base_url=provider.api_base_url,
-        api_key=provider.api_key,
+        api_key=api_key,
         model_name=provider.model_name,
         timeout=provider.timeout_seconds,
     )
@@ -39,7 +41,7 @@ def check_provider_connectivity(
     try:
         gateway = OpenAICompatGatewayFactory().build(
             api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
+            api_key=api_key,
             model_name=provider.model_name,
             timeout_seconds=provider.timeout_seconds,
         )

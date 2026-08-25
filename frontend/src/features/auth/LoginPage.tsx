@@ -11,8 +11,8 @@ export function LoginPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const setAuth = useAuthStore((state) => state.setAuth)
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('123456')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
 
   const mutation = useMutation({
     mutationFn: () => login(username.trim(), password),

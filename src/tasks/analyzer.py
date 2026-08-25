@@ -38,6 +38,7 @@ from src.services.pipeline_constants import (
     TaskType,
 )
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
+from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_required_enabled_provider
 from src.services.session_analysis_video import (
     SessionVideoChunk,
@@ -295,7 +296,7 @@ def _build_provider_client(db: Session) -> tuple[Any, LLMProvider]:
     provider = find_required_enabled_provider(db, PROVIDER_TYPE_VISION)
     client = OpenAICompatGatewayFactory().build(
         api_base_url=provider.api_base_url,
-        api_key=provider.api_key,
+        api_key=decrypt_provider_api_key(provider.api_key),
         model_name=provider.model_name,
         timeout_seconds=provider.timeout_seconds,
     )
