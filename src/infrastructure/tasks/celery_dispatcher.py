@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.application.pipeline.commands import (
@@ -65,7 +65,7 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
             if isinstance(pending_log, TaskLog):
                 db.rollback()
                 pending_log.status = TaskStatus.FAILED
-                pending_log.finished_at = datetime.now()
+                pending_log.finished_at = datetime.now(timezone.utc)
                 pending_log.message = f"Failed to enqueue: {exc}"
                 db.add(pending_log)
                 db.commit()

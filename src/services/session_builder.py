@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -368,7 +368,7 @@ class SessionBuilder:
     ) -> list[SealedSessionInfo]:
         """Fallback seal: if the latest open session's end_time is older than
         SEAL_BUFFER_SECONDS from now, seal it (no new files coming)."""
-        cutoff = datetime.now() - timedelta(seconds=SEAL_BUFFER_SECONDS)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=SEAL_BUFFER_SECONDS)
         stale_sessions = (
             db.query(VideoSession)
             .filter(

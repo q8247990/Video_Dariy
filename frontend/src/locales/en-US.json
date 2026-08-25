@@ -596,6 +596,8 @@
     "back_to_dashboard": "Back to Dashboard"
   },
   "system_config": {
+    "home_timezone": "Home timezone",
+    "home_timezone_hint": "Use an IANA timezone identifier, for example Asia/Shanghai",
     "title": "System Configuration",
     "subtitle": "Configure scanning, merging, and feature toggles",
     "save_success": "System configuration saved",

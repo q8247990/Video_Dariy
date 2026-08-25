@@ -21,7 +21,7 @@ class VideoSourceRuntimeState(Base):
     latency_alert_counter: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latency_alert_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     latency_alert_last_notified_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True
+        DateTime(timezone=True), nullable=True
     )
 
     source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="runtime_state")

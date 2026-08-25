@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import case, func
@@ -176,7 +176,7 @@ def _build_alert(db: Session, onboarding_status: dict, locale: str) -> Dashboard
         .filter(
             TaskLog.task_type == TaskType.SESSION_ANALYSIS,
             TaskLog.status == TaskStatus.FAILED,
-            TaskLog.created_at >= datetime.utcnow() - timedelta(hours=24),
+            TaskLog.created_at >= datetime.now(timezone.utc) - timedelta(hours=24),
         )
         .scalar()
         or 0
@@ -210,7 +210,7 @@ def _build_task_summary(db: Session) -> DashboardTaskSummary:
         db.query(func.count(TaskLog.id))
         .filter(
             TaskLog.status == TaskStatus.FAILED,
-            TaskLog.created_at >= datetime.utcnow() - timedelta(hours=24),
+            TaskLog.created_at >= datetime.now(timezone.utc) - timedelta(hours=24),
         )
         .scalar()
         or 0
@@ -225,7 +225,7 @@ def _build_task_summary(db: Session) -> DashboardTaskSummary:
 
 
 def _build_event_summary(db: Session) -> DashboardEventSummary:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     today_start = datetime.combine(now.date(), datetime.min.time())
     yesterday_start = today_start - timedelta(days=1)
 

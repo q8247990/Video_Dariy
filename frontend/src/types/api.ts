@@ -355,6 +355,7 @@ export type DailySummaryAttentionItem = {
 export type DailySummaryDetail = DailySummary
 
 export type SystemConfig = {
+  home_timezone?: string
   daily_summary_schedule?: string
   scan_interval_seconds?: number
   scan_hot_window_hours?: number

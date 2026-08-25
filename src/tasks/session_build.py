@@ -6,7 +6,7 @@ full: user-triggered, scans entire history, long timeout.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -130,14 +130,12 @@ def _dispatch_analysis_for_sealed(
                 }
             )
         except Exception as exc:
-            logger.exception(
-                "Failed to dispatch analysis for session %s", info.session_id
-            )
+            logger.exception("Failed to dispatch analysis for session %s", info.session_id)
             if isinstance(pending_log, TaskLog):
                 try:
                     db.rollback()
                     pending_log.status = TaskStatus.FAILED
-                    pending_log.finished_at = datetime.now()
+                    pending_log.finished_at = datetime.now(timezone.utc)
                     pending_log.message = f"Failed to enqueue: {exc}"
                     db.add(pending_log)
                     db.commit()
@@ -185,7 +183,7 @@ def hot_build_task(self, source_id: int) -> dict:
             if not root_path:
                 raise ValueError(f"root_path not configured for source {source_id}")
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             scan_start = _compute_hot_scan_start(db, source_id, now)
 
             build_result = _session_builder.build(
@@ -295,7 +293,7 @@ def full_build_task(self, source_id: int) -> dict:
                 db.commit()
                 return {"skipped": True, "reason": "no_directories"}
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             hot_boundary = _compute_full_scan_end(now)
 
             # Full scans from earliest to hot boundary

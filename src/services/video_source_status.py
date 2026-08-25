@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func
@@ -21,7 +21,7 @@ def build_video_sources_status_map(db: Session, source_ids: list[int]) -> dict[i
     if not unique_ids:
         return {}
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     video_ranges = _query_video_time_range_map(db, unique_ids)
     analyzed_ranges = _query_analyzed_time_range_map(db, unique_ids)
     total_file_seconds_map = _query_total_file_seconds_map(db, unique_ids)
@@ -212,6 +212,8 @@ def _minutes_since_last_new_video(
 ) -> Optional[int]:
     if video_latest_time is None:
         return None
+    if video_latest_time.tzinfo is None:
+        video_latest_time = video_latest_time.replace(tzinfo=timezone.utc)
     delta_seconds = max(0.0, (now - video_latest_time).total_seconds())
     return int(delta_seconds // 60)
 

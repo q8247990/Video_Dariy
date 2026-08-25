@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -32,7 +32,7 @@ def login(db: DB, locale: Locale, data: UserLogin) -> Any:
     if not user or not verify_password(data.password, user.password_hash):
         return BaseResponse(code=4011, message=t("auth.invalid_credentials", locale))
 
-    user.last_login_at = datetime.now()
+    user.last_login_at = datetime.now(timezone.utc)
     db.commit()
 
     token = create_access_token(subject=str(user.id))

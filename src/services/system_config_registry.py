@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,7 @@ LLM_DAILY_TOKEN_QUOTA_GLOBAL: Final = "llm_daily_token_quota_global"
 LLM_DAILY_TOKEN_QUOTA_PER_PROVIDER: Final = "llm_daily_token_quota_per_provider"
 MEDIA_MANIFEST_TTL_SECONDS: Final = "media_manifest_ttl_seconds"
 MEDIA_SEGMENT_TTL_SECONDS: Final = "media_segment_ttl_seconds"
+HOME_TIMEZONE: Final = "home_timezone"
 
 
 class SystemConfigValidationError(ValueError):
@@ -54,6 +56,15 @@ def _optional_string(value: Any) -> str:
     if not isinstance(value, str):
         raise SystemConfigValidationError("configuration value must be a string")
     return value.strip()
+
+
+def _iana_timezone(value: Any) -> str:
+    timezone_name = _string(value)
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as error:
+        raise SystemConfigValidationError("configuration value must be an IANA timezone") from error
+    return timezone_name
 
 
 def _bool(value: Any) -> bool:
@@ -92,6 +103,7 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     LLM_DAILY_TOKEN_QUOTA_PER_PROVIDER: ConfigDefinition(0, _non_negative_int),
     MEDIA_MANIFEST_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
     MEDIA_SEGMENT_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
+    HOME_TIMEZONE: ConfigDefinition("Asia/Shanghai", _iana_timezone),
 }
 
 

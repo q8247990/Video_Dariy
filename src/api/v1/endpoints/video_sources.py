@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -124,7 +124,7 @@ def pause_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: in
         return BaseResponse(code=4002, message=t("source.not_found", locale))
 
     source.source_paused = True
-    source.paused_at = datetime.utcnow()
+    source.paused_at = datetime.now(timezone.utc)
     db.commit()
     return BaseResponse(data={"source_id": id, "source_paused": True})
 
@@ -227,7 +227,7 @@ def test_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int
         source.last_validate_message = f"unsupported source type: {source.source_type}"
     else:
         source.last_validate_message = result.message
-    source.last_validate_at = datetime.utcnow()
+    source.last_validate_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(source)
 

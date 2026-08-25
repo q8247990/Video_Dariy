@@ -7,7 +7,7 @@ session analysis task runs at any moment.
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.exc import OperationalError
@@ -514,7 +514,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             replaced_deleted_count = _replace_session_events(db, session_id, events_to_persist)
 
             session.analysis_status = SessionAnalysisStatus.SUCCESS
-            session.last_analyzed_at = datetime.now()
+            session.last_analyzed_at = datetime.now(timezone.utc)
 
             finalize_task_log(
                 task_log,

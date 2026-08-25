@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -91,7 +91,7 @@ def stop_task_log(db: DB, current_user: CurrentUser, locale: Locale, id: int) ->
     if row.status == TaskStatus.PENDING:
         row.status = TaskStatus.CANCELLED
         row.message = t("task.cancelled_before_exec", locale)
-        row.finished_at = datetime.now()
+        row.finished_at = datetime.now(timezone.utc)
     else:
         row.message = t("task.cancel_requested", locale)
 

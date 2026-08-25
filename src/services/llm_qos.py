@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import func
@@ -30,7 +30,7 @@ def provider_availability(provider: LLMProvider) -> tuple[str, str]:
 
 
 def enforce_token_quota(db: Session, provider: LLMProvider, now: datetime | None = None) -> None:
-    current_time = now or datetime.utcnow()
+    current_time = now or datetime.now(timezone.utc)
     usage_date = current_time.date()
 
     global_quota = _get_int_config(db, GLOBAL_DAILY_TOKEN_QUOTA_KEY)
@@ -66,7 +66,7 @@ def record_token_usage(
     if total_tokens <= 0:
         return
 
-    usage_date = (now or datetime.utcnow()).date()
+    usage_date = (now or datetime.now(timezone.utc)).date()
     db.add(
         LLMUsageLog(
             provider_id=provider_id,
@@ -81,7 +81,7 @@ def record_token_usage(
 
 
 def get_daily_usage_stats(db: Session, days: int = 7) -> list[dict[str, Any]]:
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     start_date = today.fromordinal(today.toordinal() - max(days - 1, 0))
     rows = (
         db.query(

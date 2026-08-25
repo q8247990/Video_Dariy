@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -40,7 +40,7 @@ def _deliver_hook(
             response.raise_for_status()
         delivery.status = "success"
         delivery.status_code = response.status_code
-        delivery.delivered_at = datetime.utcnow()
+        delivery.delivered_at = datetime.now(timezone.utc)
     except (WebhookUrlPolicyError, httpx.HTTPError) as error:
         delivery.status = "failed"
         delivery.error_message = str(error)[:1024]

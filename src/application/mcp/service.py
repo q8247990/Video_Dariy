@@ -5,7 +5,7 @@
 """
 
 import dataclasses
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
@@ -168,7 +168,7 @@ class MCPToolService:
         result = service.answer(
             QARequest(
                 question=clean_question,
-                now=datetime.now(),
+                now=datetime.now(timezone.utc),
                 timezone="Asia/Shanghai",
                 write_query_log=False,
                 request_source="mcp",

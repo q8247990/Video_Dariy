@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -25,7 +25,7 @@ def ask_question(db: DB, current_user: CurrentUser, locale: Locale, request: Cha
         result = service.answer(
             QARequest(
                 question=request.question,
-                now=datetime.now(),
+                now=datetime.now(timezone.utc),
                 timezone="Asia/Shanghai",
                 write_query_log=True,
                 request_source="web",

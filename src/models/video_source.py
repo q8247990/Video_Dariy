@@ -25,12 +25,14 @@ class VideoSource(Base):
     config_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     source_paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     analyze_from_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    last_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_validate_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     last_validate_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    last_validate_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_validate_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     video_files: Mapped[list["VideoFile"]] = relationship(
         "VideoFile", back_populates="source", lazy="select"

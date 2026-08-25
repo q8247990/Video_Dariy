@@ -596,6 +596,8 @@
     "back_to_dashboard": "返回仪表盘"
   },
   "system_config": {
+    "home_timezone": "家庭时区",
+    "home_timezone_hint": "使用 IANA 时区标识，例如 Asia/Shanghai",
     "title": "系统配置",
     "subtitle": "设置扫描、合并和功能开关",
     "save_success": "系统配置已保存",

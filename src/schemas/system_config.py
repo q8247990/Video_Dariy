@@ -14,6 +14,7 @@ class SystemConfigCreate(SystemConfigBase):
 
 
 class SystemConfigUpdate(BaseModel):
+    home_timezone: Optional[str] = None
     daily_summary_schedule: Optional[str] = None
     daily_summary_time: Optional[str] = None
     scan_interval_seconds: Optional[int] = None

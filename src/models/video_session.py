@@ -16,8 +16,8 @@ class VideoSession(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_source.id"), nullable=False)
-    session_start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    session_end_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    session_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    session_end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     total_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     merge_rule: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     analysis_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
@@ -26,7 +26,9 @@ class VideoSession(Base):
     main_subjects_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     has_important_event: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     analysis_notes_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    last_analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_analyzed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     analysis_priority: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
     source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="sessions")

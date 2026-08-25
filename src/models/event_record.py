@@ -17,8 +17,10 @@ class EventRecord(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_source.id"), nullable=False)
     session_id: Mapped[int] = mapped_column(Integer, ForeignKey("video_session.id"), nullable=False)
-    event_start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    event_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    event_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_end_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     object_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     action_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)

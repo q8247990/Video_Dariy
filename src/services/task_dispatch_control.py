@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -193,7 +193,7 @@ def bind_or_create_running_task_log(  # noqa: C901
 ) -> TaskLog:
     detail_payload = ensure_dict_detail(detail_json)
     detail_payload, dedupe_key = _ensure_dedupe_key(task_type, task_target_id, detail_payload)
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     def _apply_running_state(target: TaskLog) -> TaskLog:
         merged = ensure_dict_detail(target.detail_json)
@@ -281,7 +281,7 @@ def finalize_task_log(
 ) -> None:
     task_log.status = status
     task_log.message = message
-    task_log.finished_at = datetime.now()
+    task_log.finished_at = datetime.now(timezone.utc)
     if detail_json is not None:
         merged = ensure_dict_detail(task_log.detail_json)
         merged.update(detail_json)

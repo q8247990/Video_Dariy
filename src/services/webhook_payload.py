@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 
@@ -25,7 +25,7 @@ def build_webhook_event_payload(
     version: str = "1.0",
     generated_at: Optional[datetime] = None,
 ) -> dict[str, Any]:
-    ts = generated_at or datetime.utcnow()
+    ts = generated_at or datetime.now(timezone.utc)
     return {
         "event": event_type,
         "version": version,

@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -148,7 +148,7 @@ def _upsert_daily_summary(
         "event_count": event_count,
         "provider_id": provider_id,
         "provider_name_snapshot": provider_name_snapshot,
-        "generated_at": datetime.now(),
+        "generated_at": datetime.now(timezone.utc),
     }
 
     if db.bind is not None and db.bind.dialect.name == "postgresql":
@@ -817,7 +817,7 @@ def _mark_dispatch_guard(db: Session, now: datetime, target_date: date, task_id:
 @celery_app.task(bind=True)
 def dispatch_scheduled_daily_summary_task(self) -> dict:
     with task_db_session() as db:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         try:
             schedule_text = _get_daily_schedule(db)
@@ -873,7 +873,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
         if target_date_str:
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
         else:
-            target_date = datetime.now().date() - timedelta(days=1)
+            target_date = datetime.now(timezone.utc).date() - timedelta(days=1)
 
         queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
         task_log = bind_or_create_running_task_log(
@@ -1034,7 +1034,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
                         "attention_items": structured_attention_items,
                         "event_count": event_count,
                     },
-                    generated_at=datetime.now(),
+                    generated_at=datetime.now(timezone.utc),
                 )
                 try:
                     _get_pipeline_orchestrator().dispatch_webhook(

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -299,7 +299,7 @@ def test_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) ->
     provider.supports_tool_calling = result.supports_tool_calling
     provider.last_test_status = "success" if result.success else "failed"
     provider.last_test_message = result.message
-    provider.last_test_at = datetime.utcnow()
+    provider.last_test_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(provider)
 

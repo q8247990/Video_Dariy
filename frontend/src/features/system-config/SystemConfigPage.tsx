@@ -8,6 +8,7 @@ import type { SystemConfig } from '../../types/api'
 import { getSystemConfig, updateSystemConfig } from './api'
 
 type FormState = {
+  home_timezone: string
   daily_summary_schedule: string
   scan_interval_seconds: string
   scan_hot_window_hours: string
@@ -23,6 +24,7 @@ type FormState = {
 
 function toFormState(data: SystemConfig): FormState {
   return {
+    home_timezone: data.home_timezone ?? 'Asia/Shanghai',
     daily_summary_schedule: data.daily_summary_schedule ?? '10:00',
     scan_interval_seconds:
       typeof data.scan_interval_seconds === 'number' ? String(data.scan_interval_seconds) : '300',
@@ -91,6 +93,7 @@ export function SystemConfigPage() {
         pending={mutation.isPending}
         onSubmit={(form) => {
           mutation.mutate({
+            home_timezone: form.home_timezone,
             daily_summary_schedule: form.daily_summary_schedule,
             scan_interval_seconds: Number(form.scan_interval_seconds),
             scan_hot_window_hours: Number(form.scan_hot_window_hours),
@@ -110,6 +113,7 @@ export function SystemConfigPage() {
 }
 
 const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
+  home_timezone: 'Asia/Shanghai',
   daily_summary_schedule: '10:00',
   scan_interval_seconds: 300,
   scan_hot_window_hours: 24,
@@ -134,7 +138,16 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
   const [form, setForm] = useState<FormState>(initialForm)
 
   return (
-    <div className="card config-form">
+      <div className="card config-form">
+        <label>
+          {t('system_config.home_timezone')}
+          <input
+            value={form.home_timezone}
+            onChange={(event) => setForm((old) => ({ ...old, home_timezone: event.target.value }))}
+            placeholder="Asia/Shanghai"
+          />
+          <small>{t('system_config.home_timezone_hint')}</small>
+        </label>
         <label>
           {t('system_config.daily_summary_time')}
           <input

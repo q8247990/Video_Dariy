@@ -19,4 +19,4 @@ class WebhookDeliveryLog(Base):
     status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,9 +1,8 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.sql import func
 
 from src.db.base_class import Base
 
@@ -22,4 +21,6 @@ class DailySummary(Base):
         Integer, ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
     )
     provider_name_snapshot: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    generated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )

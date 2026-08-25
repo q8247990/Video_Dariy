@@ -10,7 +10,7 @@ The heartbeat task runs every 60 seconds and is responsible for:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from math import ceil
 
 from sqlalchemy.orm import Session
@@ -160,7 +160,7 @@ def _recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
 
 def _cleanup_old_task_logs(db: Session) -> int:
     """Delete task logs older than CLEANUP_DAYS."""
-    threshold = datetime.now() - timedelta(days=CLEANUP_DAYS)
+    threshold = datetime.now(timezone.utc) - timedelta(days=CLEANUP_DAYS)
     deleted = (
         db.query(TaskLog)
         .filter(
@@ -176,7 +176,7 @@ def _cleanup_old_task_logs(db: Session) -> int:
 def heartbeat(self) -> dict:
     """Main heartbeat: runs every 60s via Celery Beat."""
     with task_db_session() as db:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         try:
             # 1. Dispatch hot builds for all enabled sources
             dispatched_hot = _dispatch_hot_builds(db)
