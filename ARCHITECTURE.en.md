@@ -167,7 +167,7 @@ Core entities:
 - `VideoSessionFileRel`: Ordered relationship between sessions and file segments
 - `EventRecord`: Structured event identified by AI
 - `DailySummary`: Daily report
-- `LLMProvider`: Model service configuration (includes `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` fields controlling §5.2 keyframe path)
+- `LLMProvider`: Model service configuration (includes `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` three video preprocessing fields; see §5.2, the keyframe path is disabled)
 - `TaskLog`: Async task log and status
 - `WebhookConfig`: Webhook configuration
 - `HomeProfile` / `HomeEntityProfile`: Family profile
@@ -291,6 +291,20 @@ Workflow:
 8. Previous events for the session are replaced (overwrite strategy)
 9. Segment summaries are aggregated and written back to `VideoSession`
 10. Analysis status is updated to `SUCCESS`
+
+Analysis and checkpoint/resume semantics:
+
+- Tasks claim a session via `_claim_session_for_analysis`: an atomic conditional status
+  update (`transition_session`'s `UPDATE ... WHERE id AND status IN ('sealed','partial')`)
+  followed by a commit; the subsequent SELECT only fetches the row back. This is an atomic
+  compare-and-set, not a select-then-update, so there is no concurrent-claim race.
+- Progress for each sub-chunk is persisted to a durable `SessionAnalysisCheckpoint` (unique
+  work key per session + analysis_run + sub_chunk, storing input fingerprint, state, event
+  payload, token usage, and error). On mid-run failure the session enters `PARTIAL`; a rerun
+  resumes from the first non-success checkpoint and never re-charges successful chunks. Token
+  usage is attributed per session + checkpoint in `LLMUsageLog`.
+- The finalize step merges completed checkpoints into the session-visible event set; daily
+  summaries, Q&A, and MCP consume only sessions with `analysis_status == 'success'`.
 
 Additional mechanisms:
 
@@ -455,9 +469,13 @@ Where:
 
 Key environment variables:
 
+- `APP_ENV` (`production` enforces that `SECRET_KEY` / `MEDIA_SIGNING_KEY` differ and
+  validates the `PROVIDER_KEY_ENCRYPTION_KEY` format)
 - `DATABASE_URL`
 - `REDIS_URL`
 - `SECRET_KEY`
+- `MEDIA_SIGNING_KEY` (media signing key, must differ from `SECRET_KEY`)
+- `PROVIDER_KEY_ENCRYPTION_KEY` (`v1:<Fernet key>` format, at-rest encryption for provider API keys)
 - `MCP_TOKEN`
 - `VIDEO_ROOT_PATH`
 - `PLAYBACK_CACHE_ROOT`
@@ -465,6 +483,20 @@ Key environment variables:
 - `DEFAULT_ADMIN_PASSWORD`
 - `DB_INIT_MAX_RETRIES`
 - `DB_INIT_RETRY_INTERVAL_SECONDS`
+- `DEFAULT_LOCALE`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `ENTITY_IMAGE_ROOT`
+- `SESSION_PLAYBACK_MODE`
+- `MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS` (media signed-URL TTL, default 1800 seconds)
+- `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST` (Webhook SSRF-protection intranet allowlist)
+- `ANALYZER_SEGMENT_SECONDS`
+- `ANALYZER_LLM_CHUNK_SECONDS` (default 60; sub-chunk duration per LLM call)
+- (The following are inert compatibility-only: video preprocessing is raw_mp4-only, so the
+  keyframe path cannot be re-enabled)
+  `ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS` (default 8),
+  `ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD` (default 1.0),
+  `ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD` (default 6),
+  `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4` (default true)
 
 Note: The root `.env.example` has been updated to reflect the actual PostgreSQL, Redis, MCP, and playback cache directory configuration. Refer to `src/core/config.py` and `docker-compose.yml` as the authoritative runtime references.
 
@@ -498,17 +530,67 @@ Development and deployment toolchain conventions:
 
 ### 9.2 State Machine
 
-Session analysis states include:
+Session analysis states (`analysis_status`) include:
 
 - `open`
 - `sealed`
 - `analyzing`
+- `partial` (partial analysis: some checkpoints succeeded but not all; resumable)
 - `success`
 - `failed`
 
-Scan builds and task logs also have their own independent state sets.
+A separate `pipeline_state` additionally tracks the progression of build/analyze/report
+pipeline stages and advances as checkpoints progress. Scan builds and task logs also have
+their own independent state sets.
 
-### 9.3 Failure Recovery
+### 9.3 Media Lifecycle and Source Deletion (FK Policy)
+
+The media models follow these FK deletion rules (migration `20260826_0017`):
+
+- `video_file.source_id` -> `video_source`: `CASCADE`
+- `video_source_runtime_state.source_id` -> `video_source`: `CASCADE`
+- `video_session.source_id` -> `video_source`: `RESTRICT`
+- `event_record.source_id` -> `video_source`: `RESTRICT` (event history is retained; deleting
+  a video source while retained history exists is rejected with business code 4004)
+- `event_record.session_id` -> `video_session`: `CASCADE`
+- `video_session_file_rel` (session_id / video_file_id) -> `video_session` / `video_file`: `CASCADE`
+- `event_tag_rel.event_id` -> `event_record`: `CASCADE`
+- `session_analysis_checkpoint.session_id` -> `video_session`: `CASCADE`
+
+Before rewriting the FKs, migration `20260826_0017` runs `_assert_no_existing_orphans()` and
+aborts on dangling references. Source deletion is performed by `delete_video_source` per this
+policy and is blocked on retained event history.
+
+### 9.4 Dispatch and Source-Scan Serialization + Lease Recovery
+
+- Only one active scan task of a given type is allowed per video source
+  (`TaskLog + dedupe_key + singleton guard`), preventing concurrent scans of the same
+  directory at the dispatch level.
+- Analysis tasks enter the `analysis_hot` / `analysis_full` queues by priority;
+  `celery_vision_worker` consumes them serially with concurrency=1, preventing parallel
+  analysis within the same queue at the execution level.
+- The heartbeat task reclaims orphaned pending tasks and performs timeout recovery (lease
+  recovery): runtime states left behind by a crashed process can be re-claimed by the
+  heartbeat, which, combined with the atomic claim and analysis checkpoints, enables
+  checkpoint resume.
+
+### 9.5 Home Timezone
+
+The `home_timezone` system-config key uses an IANA timezone (default `Asia/Shanghai`,
+validated via ZoneInfo; invalid timezone writes are rejected). All timestamps are stored as
+timezone-aware UTC; "daily"-boundary logic (e.g. reports) computes the local day range via
+`home_timezone`. Migration `20260825_0014` reinterprets legacy naive `Asia/Shanghai`
+wall-clock timestamps as UTC instants via `AT TIME ZONE 'Asia/Shanghai'`.
+
+### 9.6 Error Status Middleware
+
+`ResponseStatusMiddleware` maps JSON responses carrying a business code to HTTP statuses
+(per `_STATUS_BY_CODE` in `src/api/error_status.py`): 4000→400, 4001→409, 4002→404,
+4004→409, 4011→401, 4290→429, 4291→429, 5000→500, 5001→502, 5002→503. The frontend reacts to
+HTTP 401 or business code 4011 through the idempotent lock in `authRecovery.ts`, clearing
+auth state and redirecting to the login page.
+
+### 9.7 Failure Recovery
 
 - DB initialization supports retry
 - Celery tasks support timeout recovery
@@ -522,11 +604,15 @@ Backend tests are located in `tests/unit/` and `tests/integration/`.
 Common commands:
 
 ```bash
-pytest
-pytest -v
+python3 -m pytest tests/unit -q         # unit tests (289)
+python3 -m pytest -m postgres           # integration tests; requires real PostgreSQL (DATABASE_URL)
+python3 -m alembic upgrade head
+python3 -m alembic heads                # expect 20260826_0017
 ruff check .
-ruff format .
-mypy .
+ruff format --check src tests
+# Known exceptions: ruff format --check has 4 pre-existing out-of-scope failures in
+# src/application/prompt/compiler.py, src/application/qa/agent.py,
+# tests/unit/test_i18n.py, tests/unit/test_keyframe_extractor.py
 ```
 
 Existing test coverage includes:

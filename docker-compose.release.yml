@@ -4,6 +4,9 @@
 #   1. 创建 .env 文件配置环境变量（参考 .env.example）
 #   2. docker compose -f docker-compose.release.yml pull
 #   3. docker compose -f docker-compose.release.yml up -d
+# 必填密钥：POSTGRES_PASSWORD、SECRET_KEY、MEDIA_SIGNING_KEY、
+# PROVIDER_KEY_ENCRYPTION_KEY（v1:<Fernet key> 格式）、DEFAULT_ADMIN_PASSWORD。
+# 离线交付包的精简版 compose 同样要求这些密钥。
 
 services:
   postgres:

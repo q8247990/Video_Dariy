@@ -298,6 +298,19 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 9. 汇总片段摘要并回写到 `VideoSession`
 10. 更新分析状态为 `SUCCESS`
 
+分析与断点续跑：
+
+- 任务通过 `_claim_session_for_analysis` 抢占：一个原子的条件状态更新
+  （`transition_session` 的 `UPDATE ... WHERE id AND status IN ('sealed','partial')`）加上
+  commit，随后的 SELECT 仅用于取回该行。这是原子的 compare-and-set，不是
+  selection-then-update，因此不存在并发抢占竞态。
+- 每个 sub-chunk 的处理进度写入持久化 `SessionAnalysisCheckpoint`（按
+  session + analysis_run + sub_chunk 的唯一工作键，记录输入指纹、状态、事件载荷、Token
+  用量与错误）。中途失败时 Session 进入 `PARTIAL` 状态；重跑会从第一个非 success 断点
+  继续，绝不重复计费成功分片。Token 用量按 session + checkpoint 归属到 `LLMUsageLog`。
+- 最终化阶段将已完成断点合并为 Session 可见事件集；日报、问答与 MCP 只消费
+  `analysis_status == 'success'` 的 Session。
+
 附加机制：
 
 - 任务日志绑定与状态落库；detail_json 新增字段 `sub_chunk_count` / `llm_chunk_seconds` / `preprocess_mode` / `keyframe_total` / `keyframe_fallback`
@@ -461,9 +474,13 @@ DailySummary 1 --- 1 summary_date
 
 关键环境变量如下：
 
+- `APP_ENV`（`production` 强制 `SECRET_KEY` / `MEDIA_SIGNING_KEY` 互不相同并校验
+  `PROVIDER_KEY_ENCRYPTION_KEY` 格式）
 - `DATABASE_URL`
 - `REDIS_URL`
 - `SECRET_KEY`
+- `MEDIA_SIGNING_KEY`（媒体签名密钥，必须不同于 `SECRET_KEY`）
+- `PROVIDER_KEY_ENCRYPTION_KEY`（`v1:<Fernet key>` 格式的 Provider API-key 静态加密密钥）
 - `MCP_TOKEN`
 - `VIDEO_ROOT_PATH`
 - `PLAYBACK_CACHE_ROOT`
@@ -475,12 +492,15 @@ DailySummary 1 --- 1 summary_date
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `ENTITY_IMAGE_ROOT`
 - `SESSION_PLAYBACK_MODE`
+- `MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS`（媒体签名 URL 有效期，默认 1800 秒）
+- `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST`（Webhook SSRF 防护的内网放行列表）
 - `ANALYZER_SEGMENT_SECONDS`
-- `ANALYZER_LLM_CHUNK_SECONDS`（默认 300；每个 LLM 调用的 sub-chunk 时长）
-- `ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS`（默认 8）
-- `ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD`（默认 1.0）
-- `ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD`（默认 6）
-- `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4`（默认 true）
+- `ANALYZER_LLM_CHUNK_SECONDS`（默认 60；每个 LLM 调用的 sub-chunk 时长）
+- （以下仅保留兼容，属 inert——视频预处理为 raw_mp4-only，无法重新启用关键帧路径）
+  `ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS`（默认 8）、
+  `ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD`（默认 1.0）、
+  `ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD`（默认 6）、
+  `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4`（默认 true）
 
 说明：当前根目录 `.env.example` 已按 PostgreSQL、Redis、MCP 与播放缓存目录的实际配置同步更新，推荐以 `src/core/config.py` 和 `docker-compose.yml` 为最终运行准则。
 
@@ -514,17 +534,59 @@ DailySummary 1 --- 1 summary_date
 
 ### 9.2 状态机
 
-Session 分析状态主要包括：
+Session 分析状态（`analysis_status`）主要包括：
 
 - `open`
 - `sealed`
 - `analyzing`
+- `partial`（部分分析：存在已成功断点但未全部完成，可续跑）
 - `success`
 - `failed`
 
-扫描构建、任务日志也有独立的运行状态集合。
+`pipeline_state` 额外刻画构建/分析/日报等流水线阶段的推进状态，并随检查点推进而更新。
+扫描构建与任务日志也有独立的运行状态集合。
 
-### 9.3 故障恢复
+### 9.3 媒体生命周期与源删除（外键策略）
+
+媒体模型遵循以下外键删除策略（迁移 `20260826_0017`）：
+
+- `video_file.source_id` -> `video_source`：`CASCADE`
+- `video_source_runtime_state.source_id` -> `video_source`：`CASCADE`
+- `video_session.source_id` -> `video_source`：`RESTRICT`
+- `event_record.source_id` -> `video_source`：`RESTRICT`（保留事件历史；删除视频源在存在
+  残留历史时以业务码 4004 拒绝）
+- `event_record.session_id` -> `video_session`：`CASCADE`
+- `video_session_file_rel`（session_id / video_file_id）-> `video_session` / `video_file`：`CASCADE`
+- `event_tag_rel.event_id` -> `event_record`：`CASCADE`
+- `session_analysis_checkpoint.session_id` -> `video_session`：`CASCADE`
+
+迁移 `20260826_0017` 在改写外键前通过 `_assert_no_existing_orphans()` 预检，存在悬空引用
+时中止迁移。源删除由 `delete_video_source` 按此策略实施，并阻塞在保留的历史事件上。
+
+### 9.4 派发与源扫描串行化 + 租约恢复
+
+- 同一视频源同时只允许一类活跃扫描任务（`TaskLog + dedupe_key + singleton guard`），
+  从派发层面避免并发扫描同一目录。
+- 分析任务按优先级进入 `analysis_hot` / `analysis_full` 队列；`celery_vision_worker`
+  以 concurrency=1 串行消费，从执行层面避免同一队列内的并行分析。
+- 心跳任务会回收孤儿 pending 任务并做超时恢复（租约恢复）：进程崩溃后遗留的运行态可被
+  心跳重新认领，配合原子抢占与分析断点实现断点续跑。
+
+### 9.5 家庭时区
+
+`home_timezone` 系统配置项使用 IANA 时区（默认 `Asia/Shanghai`，经 ZoneInfo 校验；写入
+非法时区会被拒绝）。所有时间戳均以带时区的 UTC 存储；日报等"按天"边界通过
+`home_timezone` 计算本地一天的范围。迁移 `20260825_0014` 将历史 naive 的
+`Asia/Shanghai` 墙钟时间按 `AT TIME ZONE 'Asia/Shanghai'` 重新解释为 UTC 时刻。
+
+### 9.6 错误状态中间件
+
+`ResponseStatusMiddleware` 将携带业务码的 JSON 响应映射为 HTTP 状态（见
+`src/api/error_status.py` 的 `_STATUS_BY_CODE`）：4000→400、4001→409、4002→404、
+4004→409、4011→401、4290→429、4291→429、5000→500、5001→502、5002→503。前端通过
+`authRecovery.ts` 幂等锁处理 HTTP 401 与业务码 4011，清理登录态并跳转登录页。
+
+### 9.7 故障恢复
 
 - DB 初始化支持重试
 - Celery 任务支持超时恢复
@@ -538,11 +600,15 @@ Session 分析状态主要包括：
 常用命令：
 
 ```bash
-pytest
-pytest -v
+python3 -m pytest tests/unit -q         # 单元测试（289 项）
+python3 -m pytest -m postgres           # 集成测试，需真实 PostgreSQL（DATABASE_URL）
+python3 -m alembic upgrade head
+python3 -m alembic heads                # 期望 20260826_0017
 ruff check .
-ruff format .
-mypy .
+ruff format --check src tests
+# 已知例外：ruff format --check 在
+# src/application/prompt/compiler.py、src/application/qa/agent.py、
+# tests/unit/test_i18n.py、tests/unit/test_keyframe_extractor.py 存在既有范围外失败
 ```
 
 现有测试覆盖了：

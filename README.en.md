@@ -118,16 +118,107 @@ Output is located at `output/<tag>/`, containing image archives and a streamline
 
 ### Configuration Reference
 
+### Production Key Lifecycle
+
+Production deployments use `APP_ENV=production`. On startup you must inject three mutually
+distinct values from the environment: `SECRET_KEY`, `MEDIA_SIGNING_KEY`, and a versioned
+`PROVIDER_KEY_ENCRYPTION_KEY`. Missing or known-default values block startup, and no key
+content is ever logged. `APP_ENV=production` also enforces that `SECRET_KEY` and
+`MEDIA_SIGNING_KEY` differ, and that `PROVIDER_KEY_ENCRYPTION_KEY` is in `v1:<Fernet key>`
+format. Generate each value independently:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generate_key().decode())"
+```
+
+Store the generated values in a secrets manager or a `.env` file excluded from version
+control. Rotating app signing keys follows the corresponding business release plan. To
+rotate Provider crypto material, take a verified DB backup first, then run with the new
+`PROVIDER_KEY_ENCRYPTION_KEY`:
+
+```bash
+OLD_PROVIDER_KEY_ENCRYPTION_KEY='<old v1 key>' python3 scripts/rotate_provider_key_encryption.py
+```
+
+That script only accepts encrypted records and re-encrypts them in a transaction; the only
+recovery path for a failed migration or rotation is restoring that backup. Provider API keys
+are stored as ciphertext only; responses return a mask. Keyless local vLLM providers (empty
+`api_key`) remain fully supported.
+
 | Variable | Description | Must Change? |
 |----------|-------------|--------------|
 | `VIDEO_ROOT_PATH` | Video recording directory (container path) | Mounted via docker-compose |
 | `SECRET_KEY` | JWT signing key | Required for production |
+| `MEDIA_SIGNING_KEY` | Media URL signing key, must differ from `SECRET_KEY` | Required for production |
+| `PROVIDER_KEY_ENCRYPTION_KEY` | Provider API-key at-rest encryption key, `v1:<Fernet key>` format | Required for production |
 | `DEFAULT_ADMIN_USERNAME` | Default admin username | Recommended |
 | `DEFAULT_ADMIN_PASSWORD` | Default admin password | Recommended |
 | `DATABASE_URL` | PostgreSQL connection string | Keep default for Docker |
 | `REDIS_URL` | Redis connection string | Keep default for Docker |
 | `PLAYBACK_CACHE_ROOT` | HLS playback cache directory | Keep default for Docker |
 | `MCP_TOKEN` | MCP API authentication token | Configure when using MCP |
+
+### Media Signed URLs and Expiry
+
+Media playback addresses (raw file streams, session merged streams, HLS manifests and
+segments, entity images) are signed URLs carrying a scoped capability (resource kind,
+resource id, request method, expiry, parent session) verified via HMAC-SHA256. Responses set
+`Cache-Control: no-store`. Manifest and segment URLs are valid for 1800 seconds
+(`MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS`), after which they expire and must be
+re-acquired. Cross-session access is rejected by the scope guard.
+
+### Webhook Outbound Security (SSRF Protection)
+
+Outbound webhook URLs reject localhost / private ranges / `169.254.169.254` / URLs carrying
+credentials, and are re-resolved at delivery time to guard against DNS rebinding; redirects
+are not followed. Use `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST` to explicitly allowlist specific
+intranet addresses. Every delivery outcome is recorded in `WebhookDeliveryLog`.
+
+### Home Timezone and Migration Backup
+
+The `home_timezone` system-config key uses an IANA timezone (default `Asia/Shanghai`,
+validated via ZoneInfo). All timestamps are stored as timezone-aware UTC. Migration
+`20260825_0014` reinterprets legacy naive `Asia/Shanghai` wall-clock timestamps as UTC
+instants via `AT TIME ZONE 'Asia/Shanghai'`.
+
+**Take a verified DB backup before migrating**: `20260825_0012` (provider-key encryption),
+`20260825_0014` (timestamps to UTC), and `20260826_0017` (FK deletion policy) are all
+irreversible (downgrade raises); `20260826_0017` also aborts if orphaned references are
+found. After any failed migration or rotation, restoring that backup is the only recovery
+path.
+
+### Partial Analysis and Checkpoint Resume
+
+During analysis, progress for each sub-chunk is persisted to a durable
+`SessionAnalysisCheckpoint` (unique work key per session + analysis_run + sub_chunk, storing
+input fingerprint, state, event payload, token usage, and error). On mid-run failure the
+session enters `PARTIAL`; a rerun resumes from the first non-success checkpoint and never
+re-charges successful chunks. Token usage is attributed per session + checkpoint in
+`LLMUsageLog`. Daily summaries, Q&A, and MCP consume only sessions with
+`analysis_status == 'success'`.
+
+### Source File Lifecycle and Deletion Policy
+
+Missing source files are marked `file_missing` / `missing_at` (paths confined to
+`VIDEO_ROOT_PATH`, rejecting `..` and non-absolute paths); the row and its relationships are
+retained for provenance. Playback reports per-file `available` / `unavailable_reason` /
+`missing_at` plus session-level `availability` (available / partial / unavailable); HLS
+manifests include only available segments and merged video skips missing segments.
+
+Deleting a video source applies this history-retention policy (FK rules from migration
+`20260826_0017`): `video_file` CASCADE, `video_source_runtime_state` CASCADE,
+`video_session` RESTRICT, and `event_record.source_id` RESTRICT (retained event history
+blocks deletion with business code 4004); `event_record.session_id`,
+`video_session_file_rel`, `event_tag_rel.event_id`, and `session_analysis_checkpoint.session_id`
+CASCADE.
+
+### HTTP Business Error Code Mapping
+
+A unified response middleware maps business codes to HTTP statuses: 4000→400, 4001→409,
+4002→404, 4004→409, 4011→401, 4290→429, 4291→429, 5000→500, 5001→502, 5002→503. The frontend
+reacts to HTTP 401 or business code 4011 by clearing auth state through an idempotent lock and
+redirecting to the login page.
 
 ### Default Access URLs
 
@@ -184,6 +275,11 @@ Video Directory → VideoSource → VideoFile → VideoSession → EventRecord �
 
 For a more complete architecture overview, see [ARCHITECTURE.en.md](ARCHITECTURE.en.md).
 
+**Audit governance**: the full audit finding register is maintained in the working file
+`docs/finding-register.md` (per repo convention `docs/` is gitignored and tracked only
+internally, not committed). Operators and secondary developers can consult it to trace the
+status and owner of past findings.
+
 ### Local Development
 
 ```bash
@@ -220,13 +316,22 @@ Python version: 3.10
 # Reset scan/session/event/task data
 docker compose exec backend python -m src.reset_pipeline_data
 
-# Tests
-pytest -v
+# Backend unit tests (289)
+python3 -m pytest tests/unit -q
+
+# Backend integration tests (requires real PostgreSQL, DATABASE_URL)
+python3 -m pytest -m postgres
+
+# Migration checks
+python3 -m alembic upgrade head
+python3 -m alembic heads   # expect 20260826_0017
 
 # Code checks
 ruff check .
-ruff format .
-mypy .
+ruff format --check src tests
+# Known exceptions: ruff format --check has 4 pre-existing out-of-scope failures:
+#   src/application/prompt/compiler.py, src/application/qa/agent.py,
+#   tests/unit/test_i18n.py, tests/unit/test_keyframe_extractor.py
 ```
 
 </details>

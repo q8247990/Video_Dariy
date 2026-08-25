@@ -1,3 +1,7 @@
+# Required secrets (must be provided, e.g. in .env): POSTGRES_PASSWORD,
+# SECRET_KEY, MEDIA_SIGNING_KEY, PROVIDER_KEY_ENCRYPTION_KEY (v1:<Fernet key> format),
+# DEFAULT_ADMIN_PASSWORD. This applies to the release/offline package too: its
+# streamlined docker-compose still requires the same secrets.
 services:
   postgres:
     image: postgres:17-alpine
