@@ -6,10 +6,14 @@ from sqlalchemy.orm import Session
 
 from src.models.llm_provider import LLMProvider
 from src.models.llm_usage_log import LLMUsageLog
-from src.models.system_config import SystemConfig
+from src.services.system_config_registry import (
+    LLM_DAILY_TOKEN_QUOTA_GLOBAL,
+    LLM_DAILY_TOKEN_QUOTA_PER_PROVIDER,
+    get_config,
+)
 
-GLOBAL_DAILY_TOKEN_QUOTA_KEY = "llm_daily_token_quota_global"
-PROVIDER_DAILY_TOKEN_QUOTA_KEY = "llm_daily_token_quota_per_provider"
+GLOBAL_DAILY_TOKEN_QUOTA_KEY = LLM_DAILY_TOKEN_QUOTA_GLOBAL
+PROVIDER_DAILY_TOKEN_QUOTA_KEY = LLM_DAILY_TOKEN_QUOTA_PER_PROVIDER
 
 
 def provider_availability(provider: LLMProvider) -> tuple[str, str]:
@@ -146,10 +150,7 @@ def _to_int(value: Any) -> int:
 
 
 def _get_int_config(db: Session, key: str) -> int:
-    row = db.query(SystemConfig).filter(SystemConfig.config_key == key).first()
-    if row is None:
-        return 0
-    return _to_int(row.config_value)
+    return _to_int(get_config(db, key))
 
 
 def _sum_tokens(db: Session, *, usage_date: date, provider_id: int | None = None) -> int:

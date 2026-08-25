@@ -27,7 +27,6 @@ from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
-from src.models.system_config import SystemConfig
 from src.models.task_log import TaskLog
 from src.models.webhook_config import WebhookConfig
 from src.services.app_runtime_state import get_runtime_state, set_runtime_state
@@ -52,6 +51,7 @@ from src.services.prompt_builder.v2.daily_summary import (
 )
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_QA, find_required_enabled_provider
+from src.services.system_config_registry import DAILY_SUMMARY_SCHEDULE, get_config
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
@@ -79,11 +79,7 @@ def _summary_title(target_date: date, locale: str | None = None) -> str:
 
 
 def _get_daily_schedule(db: Session) -> str:
-    row = db.query(SystemConfig).filter(SystemConfig.config_key == "daily_summary_schedule").first()
-    value = row.config_value if row else None
-    if not value:
-        return DEFAULT_DAILY_SUMMARY_SCHEDULE
-    return str(value).strip() or DEFAULT_DAILY_SUMMARY_SCHEDULE
+    return str(get_config(db, DAILY_SUMMARY_SCHEDULE)) or DEFAULT_DAILY_SUMMARY_SCHEDULE
 
 
 def _parse_schedule_time(value: str) -> tuple[int, int]:

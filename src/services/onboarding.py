@@ -4,8 +4,12 @@ from sqlalchemy.orm import Session
 
 from src.models.home_profile import HomeProfile
 from src.models.llm_provider import LLMProvider
-from src.models.system_config import SystemConfig
 from src.models.video_source import VideoSource
+from src.services.system_config_registry import (
+    DAILY_SUMMARY_SCHEDULE,
+    HOME_PROFILE_INITIALIZED,
+    get_config,
+)
 
 DEFAULT_DAILY_SUMMARY_SCHEDULE = "10:00"
 DEFAULT_HOME_NAME = "我的家庭"
@@ -17,19 +21,16 @@ def get_onboarding_status(db: Session) -> dict[str, Any]:
     video_sources = db.query(VideoSource).filter(VideoSource.enabled.is_(True)).all()
     providers = db.query(LLMProvider).filter(LLMProvider.enabled.is_(True)).all()
     profile = db.query(HomeProfile).order_by(HomeProfile.id.asc()).first()
-    config_rows = db.query(SystemConfig).all()
-    config_map = {row.config_key: row.config_value for row in config_rows}
-
     video_configured = len(video_sources) > 0
     video_validated = any((item.last_validate_status or "") == "success" for item in video_sources)
 
     provider_configured = len(providers) > 0
     provider_tested = any((item.last_test_status or "") == "success" for item in providers)
 
-    daily_summary_value = config_map.get("daily_summary_schedule", DEFAULT_DAILY_SUMMARY_SCHEDULE)
+    daily_summary_value = get_config(db, DAILY_SUMMARY_SCHEDULE)
     daily_summary_configured = bool(str(daily_summary_value).strip())
 
-    home_profile_initialized = _to_bool(config_map.get("home_profile_initialized", False))
+    home_profile_initialized = bool(get_config(db, HOME_PROFILE_INITIALIZED))
     profile_is_non_default = _profile_non_default(profile)
     home_profile_configured = home_profile_initialized or profile_is_non_default
 

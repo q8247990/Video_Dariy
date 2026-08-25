@@ -13,7 +13,6 @@ from src.core.config import settings
 from src.core.i18n import t
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.home_entity_profile import HomeEntityProfile
-from src.models.system_config import SystemConfig
 from src.schemas.home_profile import (
     HomeContextResponse,
     HomeEntityResponse,
@@ -40,6 +39,7 @@ from src.services.home_profile import (
 from src.services.media_signing import MediaCapability, MediaCapabilityError, MediaSigningService
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_enabled_provider
+from src.services.system_config_registry import HOME_PROFILE_INITIALIZED, set_config
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +97,7 @@ def get_home_profile(db: DB, current_user: CurrentUser) -> Any:
 @router.put("", response_model=BaseResponse[HomeProfileResponse])
 def put_home_profile(db: DB, current_user: CurrentUser, payload: HomeProfileUpsert) -> Any:
     profile = save_home_profile(db, payload)
-    initialized_key = "home_profile_initialized"
-    initialized_config = (
-        db.query(SystemConfig).filter(SystemConfig.config_key == initialized_key).first()
-    )
-    if initialized_config is None:
-        db.add(SystemConfig(config_key=initialized_key, config_value=True))
-    else:
-        initialized_config.config_value = True
+    set_config(db, HOME_PROFILE_INITIALIZED, True)
     db.commit()
     db.refresh(profile)
     data = HomeProfileResponse.model_validate(

@@ -28,6 +28,12 @@ class SystemConfigUpdate(BaseModel):
     mcp_token: Optional[str] = None
     home_profile_initialized: Optional[bool] = None
     default_locale: Optional[str] = None
+    llm_daily_token_quota_global: Optional[int] = None
+    llm_daily_token_quota_per_provider: Optional[int] = None
+    media_manifest_ttl_seconds: Optional[int] = None
+    media_segment_ttl_seconds: Optional[int] = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SystemConfigResponse(SystemConfigBase):

@@ -4,34 +4,15 @@ from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.models.mcp_call_log import McpCallLog
-from src.models.system_config import SystemConfig
-
-MCP_CONFIG_KEY_ENABLED = "mcp_enabled"
-MCP_CONFIG_KEY_TOKEN = "mcp_token"
-
-
-def to_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return False
+from src.services.system_config_registry import MCP_ENABLED, MCP_TOKEN, get_config
 
 
 def is_mcp_enabled(db: Session) -> bool:
-    row = db.query(SystemConfig).filter(SystemConfig.config_key == MCP_CONFIG_KEY_ENABLED).first()
-    if row is None or row.config_value is None:
-        return True
-    return to_bool(row.config_value)
+    return bool(get_config(db, MCP_ENABLED))
 
 
 def get_mcp_token(db: Session) -> str:
-    row = db.query(SystemConfig).filter(SystemConfig.config_key == MCP_CONFIG_KEY_TOKEN).first()
-    if row is None or row.config_value is None:
-        return settings.MCP_TOKEN
-    token = str(row.config_value).strip()
+    token = str(get_config(db, MCP_TOKEN)).strip()
     if not token:
         return settings.MCP_TOKEN
     return token

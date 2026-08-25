@@ -18,6 +18,7 @@ from .video_session_file_rel import VideoSessionFileRel
 from .video_source import VideoSource
 from .video_source_runtime_state import VideoSourceRuntimeState
 from .webhook_config import WebhookConfig
+from .webhook_delivery_log import WebhookDeliveryLog
 
 __all__ = [
     "AdminUser",
@@ -40,4 +41,5 @@ __all__ = [
     "VideoSource",
     "VideoSourceRuntimeState",
     "WebhookConfig",
+    "WebhookDeliveryLog",
 ]

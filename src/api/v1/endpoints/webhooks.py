@@ -11,6 +11,7 @@ from src.models.webhook_config import WebhookConfig
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.schemas.webhook import WebhookCreate, WebhookResponse, WebhookUpdate
 from src.services.webhook_payload import build_webhook_event_payload
+from src.services.webhook_url_policy import WebhookUrlPolicyError, validate_webhook_url
 
 
 def _normalize_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +63,10 @@ def get_webhooks(db: DB, current_user: CurrentUser, page: int = 1, page_size: in
 @router.post("", response_model=BaseResponse[WebhookResponse])
 def create_webhook(db: DB, current_user: CurrentUser, data: WebhookCreate) -> Any:
     payload = _normalize_webhook_payload(data.model_dump())
+    try:
+        payload["url"] = validate_webhook_url(str(payload["url"]))
+    except WebhookUrlPolicyError as error:
+        return BaseResponse(code=4000, message=str(error))
     hook = WebhookConfig(**payload)
     db.add(hook)
     db.commit()
@@ -78,6 +83,11 @@ def update_webhook(
         return BaseResponse(code=4002, message=t("webhook.not_found", locale))
 
     updates = _normalize_webhook_payload(data.model_dump(exclude_unset=True))
+    if "url" in updates:
+        try:
+            updates["url"] = validate_webhook_url(str(updates["url"]))
+        except WebhookUrlPolicyError as error:
+            return BaseResponse(code=4000, message=str(error))
     for key, value in updates.items():
         setattr(hook, key, value)
 
