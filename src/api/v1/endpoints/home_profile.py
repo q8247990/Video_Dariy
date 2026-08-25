@@ -310,6 +310,7 @@ def generate_entity_appearance(
         }
     ]
 
+    gateway = None
     try:
         gateway = OpenAICompatGatewayFactory().build(
             api_base_url=provider.api_base_url,
@@ -321,6 +322,9 @@ def generate_entity_appearance(
     except Exception as exc:
         logger.error("Vision LLM call failed for entity %s: %s", entity_id, exc)
         return BaseResponse(code=5002, message=t("entity.ai_generate_failed", locale, error=exc))
+    finally:
+        if gateway is not None:
+            gateway.close()
 
     if not result:
         return BaseResponse(code=5002, message=t("entity.ai_no_result", locale))

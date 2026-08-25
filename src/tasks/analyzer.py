@@ -443,6 +443,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
         last_response_text: str | None = None
         last_raw_response_text: str | None = None
         current_checkpoint: SessionAnalysisCheckpoint | None = None
+        client: Any | None = None
         queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
         task_log = bind_or_create_running_task_log(
             db,
@@ -831,3 +832,7 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
                 )
             db.commit()
             raise
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                close()

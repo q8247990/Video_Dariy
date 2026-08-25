@@ -63,9 +63,13 @@ def get_session_video_files(db: Session, session_id: int) -> list[VideoFile]:
     if not rel_rows:
         raise SessionVideoUnavailableError(f"Session {session_id} has no related video files")
 
+    video_file_ids = [rel.video_file_id for rel in rel_rows]
+    video_files = db.query(VideoFile).filter(VideoFile.id.in_(video_file_ids)).all()
+    video_files_by_id = {video_file.id: video_file for video_file in video_files}
+
     files: list[VideoFile] = []
     for rel in rel_rows:
-        video = db.query(VideoFile).filter(VideoFile.id == rel.video_file_id).first()
+        video = video_files_by_id.get(rel.video_file_id)
         if video is not None:
             if not is_video_file_available(video):
                 mark_missing_video_file(video)

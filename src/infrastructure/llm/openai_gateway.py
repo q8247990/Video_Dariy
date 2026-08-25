@@ -45,6 +45,15 @@ class OpenAICompatGateway(LLMGatewayPort):
     def get_last_raw_response_text(self) -> Optional[str]:
         return self.client.last_raw_response_text
 
+    def close(self) -> None:
+        self.client.close()
+
+    def probe_vision(self) -> bool:
+        return self.client.probe_vision()
+
+    def probe_tool_calling(self) -> bool:
+        return self.client.probe_tool_calling()
+
 
 class OpenAICompatGatewayFactory(LLMGatewayFactoryPort):
     def build(

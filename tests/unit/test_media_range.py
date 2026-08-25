@@ -2,6 +2,7 @@ from io import BytesIO
 
 from src.api.v1.endpoints.media import (
     _clamp_range_end,
+    _parse_byte_range,
     send_bytes_range_requests,
 )
 
@@ -20,6 +21,12 @@ def test_clamp_range_end_caps_at_last_valid_offset() -> None:
     # clients sometimes request up to file_size (one past the last offset)
     assert _clamp_range_end(10, 10) == 9
     assert _clamp_range_end(100, 10) == 9
+
+
+def test_parse_byte_range_handles_explicit_and_open_ended_ranges() -> None:
+    assert _parse_byte_range("bytes=3-6", 10) == (3, 6)
+    assert _parse_byte_range("bytes=3-", 10) == (3, 9)
+    assert _parse_byte_range(None, 10) is None
 
 
 def test_send_bytes_range_requests_returns_full_range_when_end_within_file() -> None:

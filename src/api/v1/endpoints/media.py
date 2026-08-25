@@ -35,6 +35,15 @@ def _clamp_range_end(byte2: int, file_size: int) -> int:
     return min(byte2, file_size - 1)
 
 
+def _parse_byte_range(range_header: str | None, file_size: int) -> tuple[int, int] | None:
+    if not range_header:
+        return None
+    byte1, byte2_text = range_header.removeprefix("bytes=").split("-", maxsplit=1)
+    start = int(byte1)
+    end = _clamp_range_end(int(byte2_text) if byte2_text else file_size - 1, file_size)
+    return start, end
+
+
 def send_bytes_range_requests(file_obj, start: int, end: int, chunk_size: int = 1024 * 1024):
     """Stream a byte range from ``file_obj``. Stops cleanly at EOF or end offset."""
     with file_obj as f:
@@ -130,17 +139,10 @@ def stream_video(
         raise HTTPException(status_code=404, detail=t("media.physical_file_not_found", locale))
 
     file_size = path.stat().st_size
-    range_header = request.headers.get("Range")
+    byte_range = _parse_byte_range(request.headers.get("Range"), file_size)
 
-    if range_header:
-        byte1, byte2 = 0, None
-        match = range_header.replace("bytes=", "").split("-")
-        byte1 = int(match[0])
-        if match[1]:
-            byte2 = int(match[1])
-        else:
-            byte2 = file_size - 1
-        byte2 = _clamp_range_end(byte2, file_size)
+    if byte_range:
+        byte1, byte2 = byte_range
 
         length = byte2 - byte1 + 1
 
@@ -174,9 +176,15 @@ def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: 
         .all()
     )
 
+    video_file_ids = [rel.video_file_id for rel in rels]
+    video_files = (
+        db.query(VideoFile).filter(VideoFile.id.in_(video_file_ids)).all() if video_file_ids else []
+    )
+    video_files_by_id = {video_file.id: video_file for video_file in video_files}
+
     files_data = []
     for rel in rels:
-        vf = db.query(VideoFile).filter(VideoFile.id == rel.video_file_id).first()
+        vf = video_files_by_id.get(rel.video_file_id)
         if vf is None:
             files_data.append(
                 {
@@ -303,17 +311,10 @@ def stream_session_merged_video(
         raise HTTPException(status_code=404, detail=t("media.merged_video_not_found", locale))
 
     file_size = os.path.getsize(path)
-    range_header = request.headers.get("Range")
+    byte_range = _parse_byte_range(request.headers.get("Range"), file_size)
 
-    if range_header:
-        byte1, byte2 = 0, None
-        match = range_header.replace("bytes=", "").split("-")
-        byte1 = int(match[0])
-        if match[1]:
-            byte2 = int(match[1])
-        else:
-            byte2 = file_size - 1
-        byte2 = _clamp_range_end(byte2, file_size)
+    if byte_range:
+        byte1, byte2 = byte_range
 
         length = byte2 - byte1 + 1
         headers = {

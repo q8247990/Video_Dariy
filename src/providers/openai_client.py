@@ -30,6 +30,15 @@ class OpenAIClient:
         self.last_raw_response_text: str | None = None
         self._http_client = httpx.Client(timeout=self.timeout)
 
+    def close(self) -> None:
+        self._http_client.close()
+
+    def __enter__(self) -> "OpenAIClient":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     def _build_default_request_extras(self) -> dict[str, Any]:
         model_name = self.model_name.strip().lower()
         if "qwen" in model_name:
@@ -104,8 +113,10 @@ class OpenAIClient:
             if not choices:
                 raise ValueError(f"OpenAI API returned no choices: {data}")
             return choices[0]["message"]["content"]
-        except Exception as e:
-            logger.error("Error calling OpenAI API: %s", e)
+        except Exception:
+            logger.exception(
+                "OpenAI chat completion failed (model=%s, url=%s)", self.model_name, url
+            )
             raise
 
     def chat_completion_with_tools(
@@ -141,8 +152,10 @@ class OpenAIClient:
             content = message.get("content")
             tool_calls = message.get("tool_calls")
             return content, tool_calls
-        except Exception as e:
-            logger.error("Error calling OpenAI API with tools: %s", e)
+        except Exception:
+            logger.exception(
+                "OpenAI tool chat completion failed (model=%s, url=%s)", self.model_name, url
+            )
             raise
 
     def probe_tool_calling(self) -> bool:

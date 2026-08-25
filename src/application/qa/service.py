@@ -64,11 +64,12 @@ class QAService:
             timeout_seconds=provider.timeout_seconds,
             supports_tool_calling=provider.supports_tool_calling,
         )
-
-        if gateway.supports_tool_calling:
-            return self._answer_via_agent(gateway, provider, question, request)
-
-        return self._answer_via_legacy(gateway, provider, question, request)
+        try:
+            if gateway.supports_tool_calling:
+                return self._answer_via_agent(gateway, provider, question, request)
+            return self._answer_via_legacy(gateway, provider, question, request)
+        finally:
+            gateway.close()
 
     # ------------------------------------------------------------------
     # Agent 链路（supports_tool_calling = True）
@@ -292,7 +293,8 @@ class QAService:
                     tr["start"] = tr["start"].isoformat()
                 if isinstance(tr.get("end"), datetime):
                     tr["end"] = tr["end"].isoformat()
-        except Exception:
+        except (TypeError, ValueError):
+            logger.debug("Failed to serialize QA retrieval plan", exc_info=True)
             plan_dict = None
 
         log = ChatQueryLog(

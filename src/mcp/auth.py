@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -5,6 +6,8 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.models.mcp_call_log import McpCallLog
 from src.services.system_config_registry import MCP_ENABLED, MCP_TOKEN, get_config
+
+logger = logging.getLogger(__name__)
 
 
 def is_mcp_enabled(db: Session) -> bool:
@@ -51,3 +54,6 @@ def log_mcp_call(
         db.commit()
     except Exception:
         db.rollback()
+        logger.debug(
+            "Failed to persist MCP audit log (tool=%s, status=%s)", tool_name, status, exc_info=True
+        )

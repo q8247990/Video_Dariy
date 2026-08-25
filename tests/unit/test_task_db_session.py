@@ -1,6 +1,6 @@
 """Tests for task_db_session context manager."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from src.db.session import task_db_session
 
@@ -53,7 +53,7 @@ def test_task_db_session_does_not_auto_commit(mock_session_local: MagicMock) -> 
 
 
 @patch("src.db.session.SessionLocal")
-def test_task_db_session_does_not_auto_rollback(mock_session_local: MagicMock) -> None:
+def test_task_db_session_rolls_back_on_exception(mock_session_local: MagicMock) -> None:
     mock_db = MagicMock()
     mock_session_local.return_value = mock_db
 
@@ -63,7 +63,8 @@ def test_task_db_session_does_not_auto_rollback(mock_session_local: MagicMock) -
     except RuntimeError:
         pass
 
-    mock_db.rollback.assert_not_called()
+    mock_db.rollback.assert_called_once()
+    assert mock_db.method_calls.index(call.rollback()) < mock_db.method_calls.index(call.close())
 
 
 @patch("src.db.session.SessionLocal")

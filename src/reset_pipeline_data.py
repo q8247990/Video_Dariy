@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.models.video_source_runtime_state import VideoSourceRuntimeState
+
+logger = logging.getLogger(__name__)
 
 LEGACY_RUNTIME_KEYS = ("daily_summary_dispatch_guard",)
 
@@ -80,13 +83,15 @@ def _clear_celery_tasks() -> dict[str, Any]:  # noqa: C901
 
         stats["revoked"] = len(task_ids)
     except Exception:
-        pass
+        logger.debug(
+            "Failed to inspect or revoke Celery tasks during pipeline reset", exc_info=True
+        )
 
     try:
         purged = celery_app.control.purge()
         stats["purged"] = int(purged or 0)
     except Exception:
-        pass
+        logger.debug("Failed to purge Celery tasks during pipeline reset", exc_info=True)
 
     return stats
 

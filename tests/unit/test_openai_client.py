@@ -35,6 +35,9 @@ class _DummyClient:
         self._recorder.append({"url": url, "headers": headers, "json": json})
         return _DummyResponse(self._payload)
 
+    def close(self) -> None:
+        pass
+
 
 def test_qwen_model_adds_disable_thinking_payload(monkeypatch) -> None:
     recorded_requests: list[dict[str, Any]] = []
@@ -175,6 +178,21 @@ def test_client_reuses_http_client(monkeypatch) -> None:
     client.chat_completion(messages=[{"role": "user", "content": "1"}])
     client.chat_completion(messages=[{"role": "user", "content": "2"}])
     assert client._http_client is http_client_before
+
+
+def test_close_releases_http_client(monkeypatch) -> None:
+    http_client = MagicMock(spec=httpx.Client)
+    monkeypatch.setattr("src.providers.openai_client.httpx.Client", lambda *a, **kw: http_client)
+
+    client = OpenAIClient(
+        api_base_url="http://example.com/v1",
+        api_key="dummy",
+        model_name="test-model",
+    )
+
+    client.close()
+
+    http_client.close.assert_called_once()
 
 
 def test_chat_completion_no_retry_on_400(monkeypatch) -> None:

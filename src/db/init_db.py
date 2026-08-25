@@ -4,7 +4,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from alembic import command
@@ -24,7 +24,8 @@ def get_current_alembic_revision() -> str | None:
             if row is None:
                 return None
             return str(row[0]) if row[0] is not None else None
-    except Exception:
+    except SQLAlchemyError:
+        logger.debug("Could not read current Alembic revision", exc_info=True)
         return None
 
 
@@ -77,6 +78,9 @@ def _ensure_default_admin() -> None:
         db.add(default_admin)
         db.commit()
         logger.info("Default admin created: username=%s", settings.DEFAULT_ADMIN_USERNAME)
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -104,11 +108,11 @@ def init_db(max_retries: int | None = None, retry_interval: int | None = None) -
         except OperationalError as exc:
             if not _is_retryable_operational_error(exc):
                 logger.exception("Database initialization failed due to non-retryable SQL error")
-                raise exc
+                raise
 
             if attempt == effective_max_retries:
                 logger.exception("Database initialization failed after retries")
-                raise exc
+                raise
 
             logger.warning(
                 "Database is not ready, retrying (%s/%s)",

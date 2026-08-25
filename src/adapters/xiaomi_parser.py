@@ -1,7 +1,10 @@
+import logging
 import os
 import re
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class XiaomiDirectoryParser:
@@ -47,7 +50,13 @@ class XiaomiDirectoryParser:
             end_time = start_time + timedelta(seconds=duration)
 
             return {"start_time": start_time, "end_time": end_time, "duration_seconds": duration}
-        except Exception:
+        except (IndexError, ValueError) as exc:
+            logger.debug(
+                "Failed to parse Xiaomi video filename (folder=%s, file=%s): %s",
+                folder_name,
+                file_name,
+                exc,
+            )
             return None
 
     def get_directory_time_bounds(self) -> tuple[Optional[datetime], Optional[datetime]]:

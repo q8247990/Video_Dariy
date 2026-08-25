@@ -5,7 +5,6 @@ from typing import Optional
 from src.core.i18n import DEFAULT_LOCALE, t
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.llm_provider import LLMProvider
-from src.providers.openai_client import OpenAIClient
 from src.services.provider_key_crypto import decrypt_provider_api_key
 
 logger = logging.getLogger(__name__)
@@ -31,20 +30,13 @@ def check_provider_connectivity(
     tool_calling_result = False
 
     api_key = decrypt_provider_api_key(provider.api_key)
-    client = OpenAIClient(
+    gateway = OpenAICompatGatewayFactory().build(
         api_base_url=provider.api_base_url,
         api_key=api_key,
         model_name=provider.model_name,
-        timeout=provider.timeout_seconds,
+        timeout_seconds=provider.timeout_seconds,
     )
-
     try:
-        gateway = OpenAICompatGatewayFactory().build(
-            api_base_url=provider.api_base_url,
-            api_key=api_key,
-            model_name=provider.model_name,
-            timeout_seconds=provider.timeout_seconds,
-        )
         _ = gateway.chat_completion(
             messages=[
                 {"role": "system", "content": "You are a connectivity test assistant."},
@@ -56,10 +48,9 @@ def check_provider_connectivity(
         test_message = "provider reachable"
     except Exception as e:
         test_message = str(e)[:512]
-
-    if test_status == "success":
-        vision_result = client.probe_vision()
-        tool_calling_result = client.probe_tool_calling()
+    else:
+        vision_result = gateway.probe_vision()
+        tool_calling_result = gateway.probe_tool_calling()
 
         capabilities = []
         if vision_result:
@@ -68,6 +59,8 @@ def check_provider_connectivity(
             capabilities.append(t("provider.test.cap_tool_calling", loc))
         cap_text = "\u3001".join(capabilities) if capabilities else t("provider.test.cap_none", loc)
         test_message = t("provider.test.reachable", loc, capabilities=cap_text)
+    finally:
+        gateway.close()
 
     return ProviderTestResult(
         success=(test_status == "success"),

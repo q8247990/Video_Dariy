@@ -887,6 +887,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
     Defaults to yesterday.
     """
     with task_db_session() as db:
+        client = None
         if target_date_str:
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
         else:
@@ -1122,4 +1123,7 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
             db.query(DailySummary).filter(DailySummary.summary_date == target_date).delete()
             finalize_task_log(task_log, TaskStatus.FAILED, str(e))
             db.commit()
-            raise e
+            raise
+        finally:
+            if client is not None:
+                client.close()
