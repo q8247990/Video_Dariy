@@ -70,19 +70,29 @@ def test_session_playback_returns_stream_and_manifest() -> None:
             )
             db.commit()
 
-            playback_resp = get_session_playback(session_id=session.id, db=db, locale="zh-CN")
+            playback_resp = get_session_playback(
+                session_id=session.id, db=db, locale="zh-CN", current_user=None
+            )
             assert playback_resp.code == 0
             assert playback_resp.data is not None
-            assert playback_resp.data["playback_url"] == f"/media/sessions/{session.id}/stream"
-            assert playback_resp.data["hls_url"] == f"/media/sessions/{session.id}/hls/index.m3u8"
+            assert playback_resp.data["playback_url"].startswith(
+                f"/media/sessions/{session.id}/stream?token="
+            )
+            assert playback_resp.data["hls_url"].startswith(
+                f"/media/sessions/{session.id}/hls/index.m3u8?token="
+            )
 
             manifest_resp = stream_session_hls_manifest(
-                session_id=session.id, db=db, locale="zh-CN"
+                session_id=session.id,
+                db=db,
+                locale="zh-CN",
+                token=playback_resp.data["hls_url"].split("token=", maxsplit=1)[1],
             )
             manifest_text = manifest_resp.body.decode("utf-8")
             assert "#EXTM3U" in manifest_text
-            assert f"{settings.API_V1_STR}/media/files/{file_a.id}/stream" in manifest_text
-            assert f"{settings.API_V1_STR}/media/files/{file_b.id}/stream" in manifest_text
+            assert f"{settings.API_V1_STR}/media/files/{file_a.id}/stream?token=" in manifest_text
+            assert f"{settings.API_V1_STR}/media/files/{file_b.id}/stream?token=" in manifest_text
+            assert manifest_resp.headers["cache-control"] == "no-store"
         finally:
             settings.PLAYBACK_CACHE_ROOT = old_cache_root
             db.close()

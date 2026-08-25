@@ -1,11 +1,13 @@
 import json
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
+from src.services.media_signing import SEGMENT_TTL_SECONDS, MediaCapability, MediaSigningService
 from src.services.session_video import get_session_video_files
 
 _SESSION_LOCKS: dict[int, threading.Lock] = {}
@@ -65,9 +67,22 @@ def _write_index_manifest(session_id: int, manifest_path: Path, file_ids: list[i
         "#EXT-X-MEDIA-SEQUENCE:0",
     ]
 
+    signing_service = MediaSigningService.from_settings()
+    expires_at = int(time.time()) + SEGMENT_TTL_SECONDS
     for file_id in file_ids:
         lines.append("#EXTINF:60.0,")
-        lines.append(f"{settings.API_V1_STR}/media/files/{file_id}/stream")
+        capability = MediaCapability(
+            resource_kind="file",
+            resource_id=file_id,
+            method="GET",
+            expires_at=expires_at,
+            session_parent_id=session_id,
+        )
+        lines.append(
+            signing_service.signed_url(
+                f"{settings.API_V1_STR}/media/files/{file_id}/stream", capability
+            )
+        )
 
     lines.append("#EXT-X-ENDLIST")
     payload = "\n".join(lines) + "\n"

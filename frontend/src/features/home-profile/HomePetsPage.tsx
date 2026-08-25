@@ -131,7 +131,7 @@ function PetForm({ roles, initialValue, pending, onCancel, onSubmit }: PetFormPr
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           {currentEntity.image_url ? (
             <img
-              src={`${currentEntity.image_url}?t=${currentEntity.updated_at}`}
+              src={currentEntity.image_url}
               alt={currentEntity.name}
               style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8 }}
             />

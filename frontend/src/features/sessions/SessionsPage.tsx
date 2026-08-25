@@ -166,11 +166,7 @@ export function SessionsPage() {
                 <article className="playback-item">
                   <h4>{t('sessions.merged_playback')}</h4>
                   <HlsVideoPlayer
-                    src={
-                      playbackQuery.data.playback_url.startsWith('/api/v1')
-                        ? playbackQuery.data.playback_url
-                        : `/api/v1${playbackQuery.data.playback_url}`
-                    }
+                    src={playbackQuery.data.playback_url}
                   />
                 </article>
               ) : (

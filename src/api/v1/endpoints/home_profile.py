@@ -2,9 +2,10 @@ import base64
 import io
 import logging
 import os
+import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
 from src.api.deps import DB, CurrentUser, Locale
@@ -36,6 +37,7 @@ from src.services.home_profile import (
     save_home_profile,
     update_entity,
 )
+from src.services.media_signing import MediaCapability, MediaCapabilityError, MediaSigningService
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_enabled_provider
 
@@ -53,7 +55,15 @@ def _entity_image_path(entity_id: int) -> str:
 
 
 def _entity_image_url(entity_id: int) -> str:
-    return f"{settings.API_V1_STR}/home-profile/entities/{entity_id}/image"
+    capability = MediaCapability(
+        resource_kind="image",
+        resource_id=entity_id,
+        method="GET",
+        expires_at=int(time.time()) + 1_800,
+    )
+    return MediaSigningService.from_settings().signed_url(
+        f"{settings.API_V1_STR}/home-profile/entities/{entity_id}/image", capability
+    )
 
 
 def _build_entity_response(entity: HomeEntityProfile) -> HomeEntityResponse:
@@ -178,14 +188,29 @@ def delete_home_entity(db: DB, current_user: CurrentUser, locale: Locale, entity
 
 
 @router.get("/entities/{entity_id}/image")
-def get_entity_image(entity_id: int, db: DB, locale: Locale) -> Any:
+def get_entity_image(
+    entity_id: int, db: DB, locale: Locale, token: str | None = Query(default=None)
+) -> Any:
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing media capability"
+        )
+    expected = MediaCapability(
+        resource_kind="image", resource_id=entity_id, method="GET", expires_at=0
+    )
+    try:
+        MediaSigningService.from_settings().verify(token, expected)
+    except MediaCapabilityError as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid media capability"
+        ) from error
     entity = get_entity_by_id(db, entity_id)
     if entity is None:
         return BaseResponse(code=4002, message=t("entity.not_found", locale))
     image_path = _entity_image_path(entity_id)
     if not entity.image_path or not os.path.exists(image_path):
         return BaseResponse(code=4004, message=t("entity.no_image", locale))
-    return FileResponse(image_path, media_type="image/jpeg")
+    return FileResponse(image_path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/entities/{entity_id}/image", response_model=BaseResponse[HomeEntityResponse])

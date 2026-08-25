@@ -128,7 +128,7 @@ function MemberForm({ roles, ageGroups, initialValue, pending, onCancel, onSubmi
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           {currentEntity.image_url ? (
             <img
-              src={`${currentEntity.image_url}?t=${currentEntity.updated_at}`}
+              src={currentEntity.image_url}
               alt={currentEntity.name}
               style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8 }}
             />

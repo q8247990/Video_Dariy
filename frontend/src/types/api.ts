@@ -321,6 +321,7 @@ export type SessionPlayback = {
   session_start_time: string
   session_end_time: string
   playback_url: string
+  hls_url: string
   files: SessionPlaybackFile[]
 }
 

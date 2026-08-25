@@ -34,5 +34,15 @@ export async function getSessions(query: SessionQuery): Promise<PaginatedData<Vi
 
 export async function getSessionPlayback(sessionId: number): Promise<SessionPlayback> {
   const response = await apiClient.get(`/media/sessions/${sessionId}/playback`)
-  return unwrapApi<SessionPlayback>(response)
+  const playback = unwrapApi<SessionPlayback>(response)
+  return {
+    ...playback,
+    playback_url: toApiMediaUrl(playback.playback_url),
+    hls_url: toApiMediaUrl(playback.hls_url),
+    files: playback.files.map((file) => ({ ...file, stream_url: toApiMediaUrl(file.stream_url) })),
+  }
+}
+
+function toApiMediaUrl(url: string): string {
+  return url.startsWith('/api/v1/') ? url : `/api/v1${url}`
 }
