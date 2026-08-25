@@ -63,23 +63,25 @@ def astict(body: str) -> dict[int, int]:
     return result
 
 
-def main() -> int:
-    failures: list[str] = []
-
-    env_text = ENV_EXAMPLE.read_text()
+def _check_env_vars(env_text: str, failures: list[str]) -> None:
+    """Verify every required env var is declared in .env.example."""
     for var in REQUIRED_ENV_VARS:
         if not re.search(rf"^{var}\s*=", env_text, re.MULTILINE):
             failures.append(f".env.example: missing required env var {var}")
 
-    compose_texts = [f.read_text() for f in COMPOSE_FILES]
-    for var, required, gate in REQUIRED_SECRETS:
-        for path, text in zip(COMPOSE_FILES, compose_texts):
+
+def _check_compose_secrets(compose_texts: list[str], failures: list[str]) -> None:
+    """Verify required secrets are gated in every docker-compose file."""
+    for var, _required, gate in REQUIRED_SECRETS:
+        for path, text in zip(COMPOSE_FILES, compose_texts, strict=False):
             if not re.search(rf"\${{{var}[:?!]", text):
                 failures.append(f"{path.name}: missing gated reference for {var}")
             if gate and not re.search(rf"\${{{var}:\?set [^}}]* in \.env}}", text):
                 failures.append(f"{path.name}: {var} not gated with ':?set ... in .env'")
 
-    # Error-code mapping: expected from error_status.py, documented in the root README docs.
+
+def _check_error_code_mapping(failures: list[str]) -> None:
+    """Verify root README docs document the error-code mapping from error_status.py."""
     expected = _expect_error_status_table()
     for doc in ROOT_DOCS:
         text = doc.read_text()
@@ -99,12 +101,21 @@ def main() -> int:
                     f"but error_status.py maps to {status}"
                 )
 
+
+def main() -> int:
+    failures: list[str] = []
+
+    _check_env_vars(ENV_EXAMPLE.read_text(), failures)
+    _check_compose_secrets([f.read_text() for f in COMPOSE_FILES], failures)
+    _check_error_code_mapping(failures)
+
     if failures:
         print("DOC VALIDATION FAILED:")
         for f in failures:
             print(f"  - {f}")
         return 1
 
+    expected = _expect_error_status_table()
     print("DOC VALIDATION OK")
     print(f"  env vars present in .env.example: {len(REQUIRED_ENV_VARS)}")
     for var, *_ in REQUIRED_SECRETS:
