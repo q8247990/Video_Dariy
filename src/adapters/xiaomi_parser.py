@@ -1,8 +1,9 @@
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,17 @@ class XiaomiDirectoryParser:
     So exact time is 2026-02-26 15:31:32.
     """
 
-    def __init__(self, root_path: str):
+    def __init__(self, root_path: str, timezone: Optional[ZoneInfo] = None):
         self.root_path = root_path
+        # Camera-local zone. When set, parsed naive camera times are localized
+        # to aware UTC (safe to compare with UTC boundaries); None keeps the
+        # legacy naive output.
+        self.timezone = timezone
+
+    def _to_utc(self, naive_time: datetime) -> datetime:
+        if self.timezone is None:
+            return naive_time
+        return naive_time.replace(tzinfo=self.timezone).astimezone(timezone.utc)
 
     def parse_file_name(self, folder_name: str, file_name: str) -> Optional[dict]:
         """
@@ -42,7 +52,7 @@ class XiaomiDirectoryParser:
             minute = int(match.group(1))
             second = int(match.group(2))
 
-            start_time = datetime(year, month, day, hour, minute, second)
+            start_time = self._to_utc(datetime(year, month, day, hour, minute, second))
 
             # Estimate duration (typically Xiaomi videos are 60 seconds)
             # Without ffprobe, we assume 60s for now
@@ -71,7 +81,7 @@ class XiaomiDirectoryParser:
             if len(folder_name) != 10 or not folder_name.isdigit():
                 continue
             try:
-                folder_times.append(datetime.strptime(folder_name, "%Y%m%d%H"))
+                folder_times.append(self._to_utc(datetime.strptime(folder_name, "%Y%m%d%H")))
             except ValueError:
                 continue
 
@@ -104,7 +114,7 @@ class XiaomiDirectoryParser:
             # Quick filter based on folder name if it matches YYYYMMDDHH
             if len(folder_name) == 10 and folder_name.isdigit():
                 try:
-                    folder_time = datetime.strptime(folder_name, "%Y%m%d%H")
+                    folder_time = self._to_utc(datetime.strptime(folder_name, "%Y%m%d%H"))
                     # If folder is entirely older than min_time hour, skip
                     if min_time and folder_time + timedelta(hours=1) <= min_time:
                         continue
