@@ -1,17 +1,45 @@
+from __future__ import annotations
+
 import base64
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
 from src.services.ffmpeg_utils import run_ffmpeg_concat_to_bytes
-from src.services.keyframe_extractor import (
-    KeyframeExtractionError,
-    KeyframeSet,
-    extract_keyframes_for_sub_chunk,
-)
 from src.services.session_video import get_session_video_files
+
+if TYPE_CHECKING:
+    from src.services.keyframe_extractor import KeyframeSet
+
+
+def extract_keyframes_for_sub_chunk(
+    file_paths: list[str],
+    *,
+    fps_target: int = 2,
+    target_n: int = 64,
+    jpeg_quality: int = 88,
+    mad_threshold: float = 1.0,
+    phash_threshold: int = 6,
+    periodic_anchor_seconds: int = 8,
+) -> KeyframeSet:
+    """关键帧提取的惰性入口（关键帧路径已停用，代码仅为溯源保留）。
+
+    cv2/OpenCV 与 numpy 不在部署依赖中。只有本函数被真正调用时才会导入
+    ``keyframe_extractor``，因此导入本模块以及 raw_mp4 主路径均不依赖 cv2。
+    """
+    from src.services import keyframe_extractor
+
+    return keyframe_extractor.extract_keyframes_for_sub_chunk(
+        file_paths,
+        fps_target=fps_target,
+        target_n=target_n,
+        jpeg_quality=jpeg_quality,
+        mad_threshold=mad_threshold,
+        phash_threshold=phash_threshold,
+        periodic_anchor_seconds=periodic_anchor_seconds,
+    )
 
 
 @dataclass
@@ -265,6 +293,3 @@ __all__ = [
     "build_session_video_chunks",
     "session_chunk_from_sub_chunk",
 ]
-
-
-_ = KeyframeExtractionError  # re-exported for callers
