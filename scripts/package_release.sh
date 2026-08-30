@@ -148,7 +148,7 @@ docker load -i images/redis_alpine.tar.gz
 mkdir -p data xiaomi_video postgres_data redis_data
 \`\`\`
 
-4) 如需修改监控视频目录，只改 `docker-compose.yml` 顶部这一行：
+4) 如需修改监控视频目录，只改 \`docker-compose.yml\` 顶部这一行：
 
 \`\`\`yaml
 x-video-source-mount: &video-source-mount "./xiaomi_video:/data/videos"
