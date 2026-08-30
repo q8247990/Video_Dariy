@@ -7,6 +7,7 @@ full: user-triggered, scans entire history, long timeout.
 
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,7 @@ from src.services.pipeline_constants import (
     TaskType,
 )
 from src.services.session_builder import SessionBuilder
+from src.services.system_config_registry import HOME_TIMEZONE, get_config
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
@@ -75,6 +77,11 @@ def _compute_hot_scan_start(db: Session, source_id: int, now: datetime) -> datet
 def _compute_full_scan_end(now: datetime) -> datetime:
     """Full scan end uses a stable hot boundary fixed at task start."""
     return now - timedelta(hours=HOT_WINDOW_HOURS)
+
+
+def _get_home_timezone(db: Session) -> ZoneInfo:
+    """Camera times parsed from directory/file names are home-local wall time."""
+    return ZoneInfo(str(get_config(db, HOME_TIMEZONE)))
 
 
 def _dispatch_analysis_for_sealed(
@@ -134,6 +141,7 @@ def hot_build_task(self, source_id: int) -> dict:
             if not root_path:
                 raise ValueError(f"root_path not configured for source {source_id}")
 
+            home_zone = _get_home_timezone(db)
             now = datetime.now(timezone.utc)
             scan_start = _compute_hot_scan_start(db, source_id, now)
 
@@ -145,6 +153,7 @@ def hot_build_task(self, source_id: int) -> dict:
                 scan_start=scan_start,
                 scan_end=now,
                 cancel_check=cancel_check,
+                timezone=home_zone,
             )
 
             source.last_scan_at = now
@@ -237,7 +246,8 @@ def full_build_task(self, source_id: int) -> dict:
 
             from src.adapters.xiaomi_parser import XiaomiDirectoryParser
 
-            parser = XiaomiDirectoryParser(root_path)
+            home_zone = _get_home_timezone(db)
+            parser = XiaomiDirectoryParser(root_path, timezone=home_zone)
             earliest_folder_time, _ = parser.get_directory_time_bounds()
             if not earliest_folder_time:
                 finalize_task_log(task_log, TaskStatus.SUCCESS, "No video directories found")
@@ -268,6 +278,7 @@ def full_build_task(self, source_id: int) -> dict:
                 scan_start=scan_start,
                 scan_end=scan_end,
                 cancel_check=cancel_check,
+                timezone=home_zone,
             )
 
             finalize_task_log(

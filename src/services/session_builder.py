@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -64,6 +65,7 @@ class SessionBuilder:
         scan_start: datetime,
         scan_end: datetime,
         cancel_check: Callable[[], None] | None = None,
+        timezone: ZoneInfo | None = None,
     ) -> SessionBuildResult:
         result = SessionBuildResult()
         priority = AnalysisPriority.HOT if scan_mode == ScanMode.HOT else AnalysisPriority.FULL
@@ -72,7 +74,7 @@ class SessionBuilder:
             cancel_check()
 
         # Step 1: Scan files (read-only)
-        parser = XiaomiDirectoryParser(root_path)
+        parser = XiaomiDirectoryParser(root_path, timezone=timezone)
         video_records = parser.scan_directory(
             min_time=scan_start,
             max_time=scan_end,
