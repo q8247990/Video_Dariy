@@ -17,6 +17,7 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
+COPY requirements.lock /app/requirements.lock
 RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
       pip install -i https://mirrors.aliyun.com/pypi/simple/ --no-cache-dir -r /app/requirements.txt; \
     else \
