@@ -95,7 +95,68 @@ def test_healthy_queued_pending_task_is_not_falsely_timed_out() -> None:
             status=TaskStatus.PENDING,
             detail_json={"scan_mode": "hot"},
         )
-        pending.created_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        pending.created_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.add(pending)
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+        count = _recover_orphan_pending_tasks(db, now)
+        db.commit()
+
+        assert count == 0
+        db.refresh(pending)
+        assert pending.status == TaskStatus.PENDING
+    finally:
+        db.close()
+
+
+def test_unleased_stale_build_task_times_out_and_revokes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory = _new_db_session_factory()
+    db: Session = session_factory()
+    try:
+        pending = TaskLog(
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            status=TaskStatus.PENDING,
+            detail_json={"scan_mode": "full"},
+            queue_task_id="lost-celery-task-id",
+        )
+        pending.created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        db.add(pending)
+        db.commit()
+
+        revoke_mock = MagicMock()
+        monkeypatch.setattr("src.tasks.task_maintenance.celery_app.control.revoke", revoke_mock)
+
+        now = datetime.now(timezone.utc)
+        count = _recover_orphan_pending_tasks(db, now)
+        db.commit()
+
+        assert count == 1
+        db.refresh(pending)
+        assert pending.status == TaskStatus.TIMEOUT
+        assert pending.message == "Pending task was never picked up by a worker; timed out"
+        revoke_mock.assert_called_once_with("lost-celery-task-id", terminate=True)
+
+        assert _recover_orphan_pending_tasks(db, now) == 0
+    finally:
+        db.close()
+
+
+def test_unleased_stale_analysis_task_is_not_touched() -> None:
+    session_factory = _new_db_session_factory()
+    db: Session = session_factory()
+    try:
+        pending = TaskLog(
+            task_type=TaskType.SESSION_ANALYSIS,
+            task_target_id=1,
+            status=TaskStatus.PENDING,
+            detail_json={"priority": "hot"},
+            queue_task_id="queued-celery-task-id",
+        )
+        pending.created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         db.add(pending)
         db.commit()
 

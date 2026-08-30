@@ -231,7 +231,47 @@ def _recover_timed_out_tasks(db: Session, now: datetime) -> int:
     return timeout_count
 
 
+def _recover_unleased_pending_tasks(db: Session, now: datetime) -> int:
+    """Time out pending tasks never leased by any worker.
+
+    Covers broker message loss / worker outage. Without this, such a task
+    stays pending forever and, for session builds, keeps deferring hot scans.
+    Analysis tasks are excluded: they may legitimately queue for long stretches
+    on the single-concurrency vision worker.
+    """
+    unleased_before = now - timedelta(seconds=settings.PENDING_UNLEASSED_TIMEOUT_SECONDS)
+    pending_tasks = (
+        db.query(TaskLog)
+        .filter(
+            TaskLog.status == TaskStatus.PENDING,
+            TaskLog.lease_expires_at.is_(None),
+            TaskLog.created_at <= unleased_before,
+        )
+        .order_by(TaskLog.created_at.asc())
+        .all()
+    )
+
+    recovered = 0
+    for item in pending_tasks:
+        if item.cancel_requested or item.task_type == TaskType.SESSION_ANALYSIS:
+            continue
+        if item.queue_task_id:
+            # Revoke so a late broker delivery cannot re-bind and resurrect
+            # the timed-out task log.
+            try:
+                celery_app.control.revoke(item.queue_task_id, terminate=True)
+            except Exception:
+                logger.exception("Failed to revoke unleased task_id=%s", item.queue_task_id)
+        item.status = TaskStatus.TIMEOUT
+        item.finished_at = now
+        item.message = "Pending task was never picked up by a worker; timed out"
+        recovered += 1
+
+    return recovered
+
+
 def _recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
+    recovered = _recover_unleased_pending_tasks(db, now)
     stale_before = now - timedelta(seconds=settings.ANALYSIS_PENDING_GRACE_SECONDS)
     pending_tasks = (
         db.query(TaskLog)
@@ -240,7 +280,6 @@ def _recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
         .all()
     )
 
-    recovered = 0
     for item in pending_tasks:
         if (
             item.cancel_requested
