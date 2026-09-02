@@ -1,38 +1,25 @@
 """API 层公共工具函数。
 
-提供 get_or_404、paginate、reset_default_provider 等重复模式的统一实现。
+提供统一的 GET 列表分页辅助，消除各端点手写 count/offset/limit 的重复。
 """
 
-from typing import Any, Type, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
-from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-from src.models.llm_provider import LLMProvider
 from src.schemas.response import PaginatedData, PaginatedResponse, PaginationDetails
 
-T = TypeVar("T")
-
-
-def get_or_404(db: Session, model: Type[T], record_id: int, message: str = "Not found") -> T | None:
-    """查找记录，不存在时返回 None（调用方负责返回 BaseResponse(code=4002)）。
-
-    用法::
-
-        source = get_or_404(db, VideoSource, id, "Source not found")
-        if source is None:
-            return BaseResponse(code=4002, message="Source not found")
-    """
-    return db.query(model).filter(model.id == record_id).first()  # type: ignore[attr-defined]
+T = TypeVar("T", bound=BaseModel)
 
 
 def paginate(
     query: Any,
     page: int,
     page_size: int,
-    schema: Type[Any],
+    schema: type[T],
     *,
-    transform: Any = None,
-) -> PaginatedResponse:
+    transform: Optional[Callable[[Any], Any]] = None,
+) -> PaginatedResponse[T]:
     """对 SQLAlchemy query 执行分页并返回 PaginatedResponse。
 
     Args:
@@ -56,22 +43,3 @@ def paginate(
             pagination=PaginationDetails(page=page, page_size=page_size, total=total),
         )
     )
-
-
-def reset_other_default_providers(db: Session, provider: LLMProvider) -> None:
-    """将同类型其他 provider 的 default 标记清除，保证唯一默认。
-
-    在 create_provider / update_provider 设置 is_default_vision 或
-    is_default_qa 后调用。
-    """
-    if provider.is_default_vision:
-        db.query(LLMProvider).filter(
-            LLMProvider.supports_vision.is_(True),
-            LLMProvider.id != provider.id,
-        ).update({"is_default_vision": False})
-
-    if provider.is_default_qa:
-        db.query(LLMProvider).filter(
-            LLMProvider.supports_qa.is_(True),
-            LLMProvider.id != provider.id,
-        ).update({"is_default_qa": False})

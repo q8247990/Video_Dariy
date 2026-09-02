@@ -4,12 +4,13 @@ from typing import Any
 from fastapi import APIRouter
 from sqlalchemy import or_
 
+from src.api.common import paginate
 from src.api.deps import DB, CurrentUser, Locale
 from src.core.i18n import t
 from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
+from src.schemas.response import BaseResponse, PaginatedResponse
 from src.schemas.video_source import (
     VideoPathValidateRequest,
     VideoPathValidateResponse,
@@ -53,15 +54,7 @@ def get_video_sources(
             )
         )
 
-    total = query.count()
-    sources = query.offset((page - 1) * page_size).limit(page_size).all()
-
-    return PaginatedResponse(
-        data=PaginatedData(
-            list=[VideoSourceResponse.model_validate(s) for s in sources],
-            pagination=PaginationDetails(page=page, page_size=page_size, total=total),
-        )
-    )
+    return paginate(query, page=page, page_size=page_size, schema=VideoSourceResponse)
 
 
 @router.get("/status/batch", response_model=BaseResponse[list[VideoSourceStatusResponse]])

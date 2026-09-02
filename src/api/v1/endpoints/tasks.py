@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter
 from kombu.exceptions import OperationalError
 
+from src.api.common import paginate
 from src.api.deps import DB, ContainerDep, CurrentUser, Locale, Orchestrator
 from src.application.pipeline.commands import (
     AnalyzeSessionCommand,
@@ -20,7 +21,7 @@ from src.core.i18n import t
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
+from src.schemas.response import BaseResponse, PaginatedResponse
 from src.schemas.task_log import TaskLogResponse
 from src.services.pipeline_constants import (
     ScanMode,
@@ -50,15 +51,7 @@ def get_task_logs(
         query = query.filter(TaskLog.status == status)
 
     query = query.order_by(TaskLog.created_at.desc())
-    total = query.count()
-    rows = query.offset((page - 1) * page_size).limit(page_size).all()
-
-    return PaginatedResponse(
-        data=PaginatedData(
-            list=[TaskLogResponse.model_validate(row) for row in rows],
-            pagination=PaginationDetails(page=page, page_size=page_size, total=total),
-        )
-    )
+    return paginate(query, page=page, page_size=page_size, schema=TaskLogResponse)
 
 
 @router.delete("/logs/{id}", response_model=BaseResponse[dict])

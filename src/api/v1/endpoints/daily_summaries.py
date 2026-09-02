@@ -1,21 +1,45 @@
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy.exc import OperationalError
 
-from src.api.deps import DB, CurrentUser, Locale, Orchestrator
+from src.api.common import paginate
+from src.api.deps import DB, CurrentUser, Locale, get_container_dep
 from src.application.daily_summary import to_daily_summary_response
 from src.application.pipeline.commands import GenerateDailySummaryCommand
+from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.i18n import t
 from src.models.daily_summary import DailySummary
 from src.models.video_session import VideoSession
 from src.schemas.daily_summary import DailySummaryResponse
-from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
+from src.schemas.response import BaseResponse, PaginatedResponse
 from src.services.pipeline_constants import SessionAnalysisStatus, TaskType
 from src.services.task_dispatch_control import build_dedupe_key, find_duplicate_active_task
 
 router = APIRouter()
+
+
+def _build_orchestrator() -> PipelineOrchestrator:
+    """Build the pipeline orchestrator bound to the composition root's dispatcher."""
+
+    return PipelineOrchestrator(dispatcher=get_container_dep().dispatcher)
+
+
+# Module-level orchestrator seam. Endpoints dispatch through this object so
+# tests (and runtime wiring) can substitute the dispatcher by patching
+# ``_pipeline_orchestrator.dispatch_*`` without reassigning the FastAPI
+# dependency graph.
+_pipeline_orchestrator: PipelineOrchestrator = _build_orchestrator()
+
+
+def get_orchestrator() -> PipelineOrchestrator:
+    """FastAPI dependency exposing the module-level orchestrator seam."""
+
+    return _pipeline_orchestrator
+
+
+Orchestrator = Annotated[PipelineOrchestrator, Depends(get_orchestrator)]
 
 
 def _has_active_daily_summary_task(db: DB, target_date: date) -> bool:
@@ -36,16 +60,12 @@ def get_daily_summaries(
 ) -> Any:
     query = db.query(DailySummary).order_by(DailySummary.summary_date.desc())
 
-    total = query.count()
-    summaries = query.offset((page - 1) * page_size).limit(page_size).all()
-
-    payload = [to_daily_summary_response(summary, locale) for summary in summaries]
-
-    return PaginatedResponse(
-        data=PaginatedData(
-            list=payload,
-            pagination=PaginationDetails(page=page, page_size=page_size, total=total),
-        )
+    return paginate(
+        query,
+        page=page,
+        page_size=page_size,
+        schema=DailySummaryResponse,
+        transform=lambda summary: to_daily_summary_response(summary, locale),
     )
 
 

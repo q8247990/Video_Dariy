@@ -71,3 +71,23 @@ def find_required_enabled_provider(db: Session, provider_type: str) -> LLMProvid
     if not provider:
         raise ValueError(f"No enabled {normalized_type} found")
     return provider
+
+
+def reset_other_default_providers(db: Session, provider: LLMProvider) -> None:
+    """Clear ``default`` flags on sibling providers to guarantee a single default.
+
+    Call after setting ``is_default_vision`` / ``is_default_qa`` on a
+    provider during create / update. Keeps the "one default per
+    capability" invariant.
+    """
+    if provider.is_default_vision:
+        db.query(LLMProvider).filter(
+            LLMProvider.supports_vision.is_(True),
+            LLMProvider.id != provider.id,
+        ).update({"is_default_vision": False})
+
+    if provider.is_default_qa:
+        db.query(LLMProvider).filter(
+            LLMProvider.supports_qa.is_(True),
+            LLMProvider.id != provider.id,
+        ).update({"is_default_qa": False})

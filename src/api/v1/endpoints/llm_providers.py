@@ -1,12 +1,18 @@
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
-from sqlalchemy.exc import IntegrityError
 
-from src.api.common import reset_other_default_providers
+from src.api.common import paginate
 from src.api.deps import DB, ContainerDep, CurrentUser, Locale
-from src.core.i18n import t
+from src.application.llm_providers import (
+    create_provider_use_case,
+    delete_provider_use_case,
+    disable_provider_use_case,
+    enable_provider_use_case,
+    set_default_provider_use_case,
+    test_provider_use_case,
+    update_provider_use_case,
+)
 from src.models.llm_provider import LLMProvider
 from src.schemas.llm_provider import (
     LLMProviderCreate,
@@ -14,36 +20,24 @@ from src.schemas.llm_provider import (
     LLMProviderUpdate,
     LLMProviderUsageDailyItem,
 )
-from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
-from src.services.llm_provider_tester import check_provider_connectivity
+from src.schemas.response import BaseResponse, PaginatedResponse
 from src.services.llm_qos import get_daily_usage_stats, provider_availability
-from src.services.provider_key_crypto import encrypt_provider_api_key
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
     PROVIDER_TYPE_VISION,
     capability_field_for_provider_type,
-    find_enabled_provider,
 )
 
 router = APIRouter()
 
 
-def _ensure_provider_capabilities(payload: dict[str, Any], locale: str) -> tuple[bool, bool]:
-    supports_vision = bool(payload.get("supports_vision", False))
-    supports_qa = bool(payload.get("supports_qa", True))
-
-    if not supports_vision and not supports_qa:
-        raise ValueError(t("provider.capability_required", locale))
-
-    return supports_vision, supports_qa
-
-
-def _apply_legacy_fields(payload: dict[str, Any]) -> None:
-    supports_vision = bool(payload.get("supports_vision", False))
-    supports_qa = bool(payload.get("supports_qa", True))
-    payload["provider_type"] = (
-        PROVIDER_TYPE_VISION if supports_vision and not supports_qa else PROVIDER_TYPE_QA
-    )
+def _provider_response_builder(provider: LLMProvider) -> dict[str, Any]:
+    availability_status, availability_message = provider_availability(provider)
+    return {
+        **provider.__dict__,
+        "availability_status": availability_status,
+        "availability_message": availability_message,
+    }
 
 
 @router.get("", response_model=PaginatedResponse[LLMProviderResponse])
@@ -60,40 +54,24 @@ def get_providers(
         try:
             capability_field = capability_field_for_provider_type(provider_type)
         except ValueError as e:
-            return PaginatedResponse(
-                code=4001,
-                message=str(e),
-                data=PaginatedData(
-                    list=[],
-                    pagination=PaginationDetails(page=page, page_size=page_size, total=0),
-                ),
-            )
+            return paginate(
+                db.query(LLMProvider).filter(LLMProvider.id < 0),
+                page=page,
+                page_size=page_size,
+                schema=LLMProviderResponse,
+                transform=_provider_response_builder,
+            ).model_copy(update={"code": 4001, "message": str(e)})
         capability_column = getattr(LLMProvider, capability_field)
         query = query.filter(capability_column.is_(True))
     if enabled is not None:
         query = query.filter(LLMProvider.enabled == enabled)
 
-    total = query.count()
-    providers = query.offset((page - 1) * page_size).limit(page_size).all()
-
-    payload_list: list[LLMProviderResponse] = []
-    for provider in providers:
-        availability_status, availability_message = provider_availability(provider)
-        payload_list.append(
-            LLMProviderResponse.model_validate(
-                {
-                    **provider.__dict__,
-                    "availability_status": availability_status,
-                    "availability_message": availability_message,
-                }
-            )
-        )
-
-    return PaginatedResponse(
-        data=PaginatedData(
-            list=payload_list,
-            pagination=PaginationDetails(page=page, page_size=page_size, total=total),
-        )
+    return paginate(
+        query,
+        page=page,
+        page_size=page_size,
+        schema=LLMProviderResponse,
+        transform=_provider_response_builder,
     )
 
 
@@ -101,124 +79,31 @@ def get_providers(
 def create_provider(
     db: DB, current_user: CurrentUser, locale: Locale, data: LLMProviderCreate
 ) -> Any:
-    dump = data.model_dump()
-    try:
-        supports_vision, supports_qa = _ensure_provider_capabilities(dump, locale)
-    except ValueError as e:
-        return BaseResponse(code=4001, message=str(e))
-
-    if not supports_vision:
-        dump["is_default_vision"] = False
-    if not supports_qa:
-        dump["is_default_qa"] = False
-
-    if dump.get("is_default_vision"):
-        dump["supports_vision"] = True
-        dump["enabled"] = True
-
-    if dump.get("is_default_qa"):
-        dump["supports_qa"] = True
-        dump["enabled"] = True
-
-    _apply_legacy_fields(dump)
-    dump["api_key"] = encrypt_provider_api_key(dump["api_key"])
-
-    provider = LLMProvider(**dump)
-    db.add(provider)
-    db.flush()
-    reset_other_default_providers(db, provider)
+    result = create_provider_use_case(db, data.model_dump(), locale)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
-    db.refresh(provider)
-    return BaseResponse(data=LLMProviderResponse.model_validate(provider))
+    db.refresh(result.provider)
+    return BaseResponse(data=LLMProviderResponse.model_validate(result.provider))
 
 
 @router.put("/{id}", response_model=BaseResponse[LLMProviderResponse])
-def update_provider(  # noqa: C901
+def update_provider(
     db: DB, current_user: CurrentUser, locale: Locale, id: int, data: LLMProviderUpdate
 ) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if not provider:
-        return BaseResponse(code=4002, message=t("provider.not_found", locale))
-
-    dump = data.model_dump(exclude_unset=True)
-    if "api_key" in dump and dump["api_key"] is not None:
-        dump["api_key"] = encrypt_provider_api_key(dump["api_key"])
-
-    next_supports_vision = bool(dump.get("supports_vision", provider.supports_vision))
-    next_supports_qa = bool(dump.get("supports_qa", provider.supports_qa))
-    if not next_supports_vision and not next_supports_qa:
-        return BaseResponse(code=4001, message=t("provider.capability_required", locale))
-
-    next_is_default_vision = bool(dump.get("is_default_vision", provider.is_default_vision))
-    next_is_default_qa = bool(dump.get("is_default_qa", provider.is_default_qa))
-
-    if not next_supports_vision:
-        dump["is_default_vision"] = False
-    if not next_supports_qa:
-        dump["is_default_qa"] = False
-
-    if next_is_default_vision:
-        dump["supports_vision"] = True
-        dump["enabled"] = True
-
-    if next_is_default_qa:
-        dump["supports_qa"] = True
-        dump["enabled"] = True
-
-    would_be_default = (next_is_default_vision and next_supports_vision) or (
-        next_is_default_qa and next_supports_qa
-    )
-    if would_be_default and dump.get("enabled") is False:
-        return BaseResponse(code=4003, message=t("provider.cannot_disable_default", locale))
-
-    final_supports_vision = bool(dump.get("supports_vision", provider.supports_vision))
-    final_supports_qa = bool(dump.get("supports_qa", provider.supports_qa))
-    dump["provider_type"] = (
-        PROVIDER_TYPE_VISION
-        if final_supports_vision and not final_supports_qa
-        else PROVIDER_TYPE_QA
-    )
-
-    for key, value in dump.items():
-        setattr(provider, key, value)
-
-    db.flush()
-    reset_other_default_providers(db, provider)
+    result = update_provider_use_case(db, id, data.model_dump(exclude_unset=True), locale)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
-    db.refresh(provider)
-    return BaseResponse(data=LLMProviderResponse.model_validate(provider))
+    db.refresh(result.provider)
+    return BaseResponse(data=LLMProviderResponse.model_validate(result.provider))
 
 
 @router.delete("/{id}", response_model=BaseResponse[dict])
 def delete_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if provider:
-        if provider.is_default_vision or provider.is_default_qa:
-            return BaseResponse(code=4003, message=t("provider.cannot_delete_default", locale))
-
-        active_vision = find_enabled_provider(db, PROVIDER_TYPE_VISION)
-        active_qa = find_enabled_provider(db, PROVIDER_TYPE_QA)
-        in_use_roles: list[str] = []
-        if active_vision and active_vision.id == provider.id:
-            in_use_roles.append("vision")
-        if active_qa and active_qa.id == provider.id:
-            in_use_roles.append("qa")
-
-        if in_use_roles:
-            role_text = ", ".join(in_use_roles)
-            return BaseResponse(
-                code=4004,
-                message=t("provider.in_use", locale, roles=role_text),
-            )
-        try:
-            db.delete(provider)
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            return BaseResponse(
-                code=4005,
-                message=t("provider.has_references", locale),
-            )
+    result = delete_provider_use_case(db, id, locale)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     return BaseResponse(data={})
 
 
@@ -231,58 +116,34 @@ def get_provider_daily_usage(db: DB, current_user: CurrentUser, days: int = 7) -
 
 @router.post("/{id}/enable", response_model=BaseResponse[dict])
 def enable_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if provider:
-        provider.enabled = True
-        db.commit()
+    enable_provider_use_case(db, id)
+    db.commit()
     return BaseResponse(data={})
 
 
 @router.post("/{id}/disable", response_model=BaseResponse[dict])
 def disable_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if provider:
-        if provider.is_default_vision or provider.is_default_qa:
-            return BaseResponse(code=4003, message=t("provider.cannot_disable_default", locale))
-        provider.enabled = False
-        db.commit()
+    result = disable_provider_use_case(db, id, locale)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
+    db.commit()
     return BaseResponse(data={})
 
 
 @router.post("/{id}/set-default-vision", response_model=BaseResponse[dict])
 def set_default_vision_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if not provider:
-        return BaseResponse(code=4002, message=t("provider.not_found", locale))
-    if not provider.supports_vision:
-        return BaseResponse(code=4004, message=t("provider.not_support_vision", locale))
-
-    db.query(LLMProvider).filter(
-        LLMProvider.supports_vision.is_(True), LLMProvider.id != id
-    ).update({"is_default_vision": False})
-
-    provider.is_default_vision = True
-    provider.enabled = True
-    provider.provider_type = PROVIDER_TYPE_VISION if not provider.supports_qa else PROVIDER_TYPE_QA
+    result = set_default_provider_use_case(db, id, PROVIDER_TYPE_VISION, locale)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
     return BaseResponse(data={})
 
 
 @router.post("/{id}/set-default-qa", response_model=BaseResponse[dict])
 def set_default_qa_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if not provider:
-        return BaseResponse(code=4002, message=t("provider.not_found", locale))
-    if not provider.supports_qa:
-        return BaseResponse(code=4004, message=t("provider.not_support_qa", locale))
-
-    db.query(LLMProvider).filter(LLMProvider.supports_qa.is_(True), LLMProvider.id != id).update(
-        {"is_default_qa": False}
-    )
-
-    provider.is_default_qa = True
-    provider.enabled = True
-    provider.provider_type = PROVIDER_TYPE_VISION if not provider.supports_qa else PROVIDER_TYPE_QA
+    result = set_default_provider_use_case(db, id, PROVIDER_TYPE_QA, locale)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
     return BaseResponse(data={})
 
@@ -295,32 +156,8 @@ def test_provider(
     id: int,
     container: ContainerDep,
 ) -> Any:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if not provider:
-        return BaseResponse(code=4002, message=t("provider.not_found", locale))
-
-    result = check_provider_connectivity(
-        provider,
-        locale=locale,
-        llm_factory=container.llm_factory,
-    )
-
-    provider.supports_vision = result.supports_vision
-    provider.supports_tool_calling = result.supports_tool_calling
-    provider.last_test_status = "success" if result.success else "failed"
-    provider.last_test_message = result.message
-    provider.last_test_at = datetime.now(timezone.utc)
+    result = test_provider_use_case(db, id, locale, container)
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
-    db.refresh(provider)
-
-    return BaseResponse(
-        data={
-            "success": result.success,
-            "message": result.message,
-            "last_test_status": provider.last_test_status,
-            "last_test_message": provider.last_test_message,
-            "last_test_at": provider.last_test_at,
-            "supports_vision": provider.supports_vision,
-            "supports_tool_calling": provider.supports_tool_calling,
-        }
-    )
+    return BaseResponse(data=result.payload)
