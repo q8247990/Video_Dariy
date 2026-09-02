@@ -121,8 +121,7 @@ def test_empty_database_upgrade_drops_three_columns(
         columns = _llm_provider_columns(conn)
         for dropped in DROPPED_COLUMNS:
             assert dropped not in columns, (
-                f"column {dropped!r} should have been dropped by "
-                "20260902_0018 but is still present"
+                f"column {dropped!r} should have been dropped by 20260902_0018 but is still present"
             )
 
 
@@ -191,9 +190,7 @@ def test_seeded_database_upgrade_drops_three_columns_and_keeps_rows(
                 },
             )
 
-            pre_count = conn.execute(
-                text("SELECT count(*) FROM llm_provider")
-            ).scalar_one()
+            pre_count = conn.execute(text("SELECT count(*) FROM llm_provider")).scalar_one()
             assert pre_count == 1
 
         # 2. Apply the contract migration.
@@ -208,9 +205,7 @@ def test_seeded_database_upgrade_drops_three_columns_and_keeps_rows(
                     "20260902_0018 but is still present after upgrade"
                 )
 
-            post_count = conn.execute(
-                text("SELECT count(*) FROM llm_provider")
-            ).scalar_one()
+            post_count = conn.execute(text("SELECT count(*) FROM llm_provider")).scalar_one()
             assert post_count == 1, (
                 "row data must survive the column drop; restoration is "
                 "only possible from the verified pre-upgrade backup"
@@ -246,9 +241,7 @@ def test_migration_preflight_refuses_when_columns_already_absent(
         # half-applied migration; the next run of 20260902_0018 must
         # refuse to proceed instead of silently no-op'ing.
         with engine.begin() as conn:
-            conn.execute(
-                text("ALTER TABLE llm_provider DROP COLUMN video_preprocess_mode")
-            )
+            conn.execute(text("ALTER TABLE llm_provider DROP COLUMN video_preprocess_mode"))
 
         with pytest.raises(RuntimeError) as exc_info:
             _alembic(postgres_database_url, schema, "upgrade", "20260902_0018")
