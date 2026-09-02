@@ -56,10 +56,34 @@ Submodules
     ``mark_failed_to_retry`` / ``mark_failed_terminal``), and the
     retention / supervision helpers. The contract layer (Todo 11) is
     the in-memory shape; this module is the persistence bridge.
+
+``publisher``
+    The standalone publisher process (Todo 13). Owns the
+    claim → ``broker.send_task`` → ``mark_published`` /
+    ``mark_failed_to_retry`` / ``mark_failed_terminal`` loop, the
+    :class:`BrokerPort` Protocol, the production
+    :class:`CeleryBrokerPort` adapter, the broker-exception
+    classification (:func:`classify_celery_error`), the
+    backoff math (:func:`compute_next_attempt_at`), and the
+    :class:`PublisherConfig` / :class:`PublisherStats` /
+    :class:`PublisherHealth` dataclasses.
+
+``cli``
+    The ``python -m src.application.outbox`` entry point. Owns the
+    ``SessionLocal`` lifecycle, the SIGTERM / SIGINT stop flag, and
+    the optional ``--stats-file`` JSON snapshot. The
+    ``outbox_publisher`` docker-compose service runs this CLI; the
+    ``--once`` flag is the test entry point.
+
+``__main__``
+    Re-exports :func:`src.application.outbox.cli.main` so
+    ``python -m src.application.outbox`` resolves to the CLI without
+    requiring ``python -m src.application.outbox.cli``.
 """
 
 from __future__ import annotations
 
+from src.application.outbox.cli import main
 from src.application.outbox.contracts import (
     DEFAULT_MAX_PAYLOAD_BYTES,
     DEFAULT_MAX_PAYLOAD_DEPTH,
@@ -85,6 +109,24 @@ from src.application.outbox.payload_validator import (
     is_json_safe,
     validate_command_payload,
 )
+from src.application.outbox.publisher import (
+    PUBLISHER_BACKLOG_DEGRADED_SECONDS,
+    PUBLISHER_BACKOFF_BASE_SECONDS,
+    PUBLISHER_BACKOFF_CAP_SECONDS,
+    PUBLISHER_BATCH_SIZE,
+    PUBLISHER_LEASE_SECONDS,
+    PUBLISHER_MAX_ATTEMPTS,
+    PUBLISHER_POLL_INTERVAL_SECONDS,
+    PUBLISHER_PUBLISHED_RETENTION_DAYS,
+    BrokerPort,
+    CeleryBrokerPort,
+    OutboxPublisher,
+    PublisherConfig,
+    PublisherHealth,
+    PublisherStats,
+    classify_celery_error,
+    compute_next_attempt_at,
+)
 from src.application.outbox.registry import (
     DEFAULT_QUEUE,
     OutboxCommandRegistry,
@@ -101,6 +143,8 @@ from src.application.outbox.state_machine import (
 
 __all__ = [
     "ALLOWED_TRANSITIONS",
+    "BrokerPort",
+    "CeleryBrokerPort",
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_MAX_PAYLOAD_DEPTH",
     "DEFAULT_QUEUE",
@@ -114,18 +158,33 @@ __all__ = [
     "OutboxError",
     "OutboxEvent",
     "OutboxPayloadError",
+    "OutboxPublisher",
     "OutboxRegistryError",
     "OutboxRepository",
     "OutboxRowDict",
     "OutboxStateError",
     "OutboxStatus",
+    "PUBLISHER_BACKLOG_DEGRADED_SECONDS",
+    "PUBLISHER_BACKOFF_BASE_SECONDS",
+    "PUBLISHER_BACKOFF_CAP_SECONDS",
+    "PUBLISHER_BATCH_SIZE",
+    "PUBLISHER_LEASE_SECONDS",
+    "PUBLISHER_MAX_ATTEMPTS",
+    "PUBLISHER_POLL_INTERVAL_SECONDS",
+    "PUBLISHER_PUBLISHED_RETENTION_DAYS",
+    "PublisherConfig",
+    "PublisherHealth",
+    "PublisherStats",
     "TERMINAL_STATES",
     "can_transition",
+    "classify_celery_error",
+    "compute_next_attempt_at",
     "emit_event",
     "enqueue_command",
     "ensure_json_safe",
     "is_json_safe",
     "is_terminal",
+    "main",
     "new_event_id",
     "transition",
     "validate_command_payload",

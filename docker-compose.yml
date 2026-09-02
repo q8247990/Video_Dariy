@@ -192,6 +192,41 @@ services:
     networks:
       - app_bridge
 
+  outbox_publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hm_outbox_publisher
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/home_monitor
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
+      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./xiaomi_video:/data/videos
+      - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: python -m src.application.outbox
+    networks:
+      - app_bridge
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from src.application.outbox.publisher import OutboxPublisher; print('healthy')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   frontend:
     build:
       context: ./frontend
