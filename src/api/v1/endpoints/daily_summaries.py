@@ -77,10 +77,13 @@ def generate_all_daily_summaries(
                 skipped_dates.append(str(current_date))
             else:
                 task_id = orchestrator.dispatch_generate_daily_summary(
-                    GenerateDailySummaryCommand(target_date_str=str(current_date))
+                    db,
+                    GenerateDailySummaryCommand(target_date_str=str(current_date)),
                 )
                 queued_task_ids.append(str(task_id))
+        db.commit()
     except OperationalError as exc:
+        db.rollback()
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=exc))
 
     return BaseResponse(

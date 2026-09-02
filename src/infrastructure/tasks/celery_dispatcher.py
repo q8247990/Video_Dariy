@@ -1,6 +1,58 @@
-from datetime import datetime, timezone
+"""Celery adapter for :class:`~src.application.ports.task_dispatcher.TaskDispatcherPort`.
+
+This is the **only** ``src.infrastructure.*`` adapter allowed to import
+the outbox seam (``src.application.outbox.enqueue`` /
+``src.application.outbox.contracts``). It is the composition-root
+binding point for the outbox adapter — the architecture-boundary test
+explicitly whitelists the ``src.infrastructure.tasks`` →
+``src.application.outbox`` import as the legitimate bridge.
+
+Cutover (Todo 14)
+=================
+
+Under the previous dispatcher every dispatch call opened a private
+``SessionLocal`` and called ``celery_app.send_task`` directly. The
+transactional outbox (Wave 3, Todos 11-13) replaced that pipeline with
+an in-DB publish intent: the dispatcher now writes a ``TaskLog`` row
+and an ``OutboxEvent`` row **in the caller's transaction**, returns the
+``OutboxEvent.event_id`` as the Celery ``task_id``, and the standalone
+outbox publisher (Todo 13) is the single process that ever pushes
+``send_task`` to the broker.
+
+Atomicity contract
+==================
+
+* ``db`` is caller-owned; the dispatcher never opens, commits or
+  rolls back a session on the caller's behalf.
+* ``enroll_with_task_log`` runs in the caller's transaction so a
+  ``commit()`` makes ``TaskLog`` + ``OutboxEvent`` visible atomically;
+  a ``rollback()`` leaves zero rows behind. The PG ``partial unique
+  index (task_log_id) WHERE status='pending'`` is the concurrency
+  safety net.
+* The dispatcher sets ``TaskLog.queue_task_id = str(event_id)`` so the
+  consumer-side ``bind_or_create_running_task_log(queue_task_id=...)``
+  short-circuit matches the publisher's broker ``task_id``.
+
+Hot/full scan semantics (preserved)
+===================================
+
+* HOT over an active FULL → record a deferred (skipped) TaskLog; do
+  not publish.
+* FULL over an active HOT → supersede the HOT (cancel it), then publish
+  the FULL.
+* Otherwise → reuse the existing active TaskLog's ``queue_task_id`` and
+  return it; no outbox row is created (the existing row's outbox publish
+  intent is the authoritative one).
+"""
+
+from __future__ import annotations
+
 from typing import Optional
 
+from sqlalchemy.orm import Session
+
+from src.application.outbox.contracts import OutboxCommand
+from src.application.outbox.enqueue import enqueue_command
 from src.application.pipeline.commands import (
     AnalyzeSessionCommand,
     GenerateDailySummaryCommand,
@@ -8,144 +60,280 @@ from src.application.pipeline.commands import (
     SessionBuildCommand,
 )
 from src.application.ports.task_dispatcher import TaskDispatcherPort
-from src.core.celery_app import celery_app
-from src.db.session import SessionLocal
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import ScanMode, TaskStatus, TaskType
+from src.services.pipeline_constants import ScanMode, TaskType
 from src.services.task_dispatch_control import (
-    build_dedupe_key,
     create_pending_task_log,
     ensure_dict_detail,
+    find_duplicate_active_task,
     record_deferred_hot_scan,
     supersede_active_hot_scan,
 )
 
+# Default Celery queue the dispatcher uses when a command does not
+# specify one. The outbox registry also has its own default; the two
+# stay in sync because the registry is the whitelist and the dispatcher
+# always passes an explicit ``queue`` for the analyzer's hot/full
+# distinction. Keep this constant importable for tests that want to
+# assert the default.
+DEFAULT_QUEUE: str = "celery"
+
 
 class CeleryTaskDispatcher(TaskDispatcherPort):
-    def _enqueue_with_dedupe(
-        self,
-        *,
-        task_name: str,
-        args: list | None,
-        kwargs: dict | None,
-        task_type: str,
-        task_target_id: int | None,
-        detail_json: dict,
-        queue: str | None = None,
-    ) -> Optional[str]:
-        db = SessionLocal()
-        pending_log: TaskLog | None = None
-        try:
-            dedupe_key = build_dedupe_key(task_type, task_target_id, detail_json)
-            detail_payload = ensure_dict_detail(detail_json)
-            detail_payload["dedupe_key"] = dedupe_key
+    """Production :class:`TaskDispatcherPort` adapter.
 
-            pending_log, created = create_pending_task_log(
-                db,
-                task_type=task_type,
-                task_target_id=task_target_id,
-                detail_json=detail_payload,
-            )
-            if not created:
-                active_scan_mode = ensure_dict_detail(pending_log.detail_json).get("scan_mode")
-                if (
-                    task_type == TaskType.SESSION_BUILD
-                    and detail_payload.get("scan_mode") == ScanMode.HOT
-                    and active_scan_mode == ScanMode.FULL
-                    and task_target_id is not None
-                ):
-                    deferred_log = record_deferred_hot_scan(db, task_target_id, pending_log)
-                    db.commit()
-                    return str(deferred_log.id)
-                if (
-                    task_type == TaskType.SESSION_BUILD
-                    and detail_payload.get("scan_mode") == ScanMode.FULL
-                    and active_scan_mode == ScanMode.HOT
-                    and task_target_id is not None
-                ):
-                    supersede_active_hot_scan(db, task_target_id, pending_log)
-                    pending_log, created = create_pending_task_log(
-                        db,
-                        task_type=task_type,
-                        task_target_id=task_target_id,
-                        detail_json=detail_payload,
-                    )
-                    if not created:
-                        raise RuntimeError(
-                            "Full scan claim not created after hot supersession "
-                            f"for source {task_target_id}"
-                        )
-                else:
-                    return pending_log.queue_task_id or str(pending_log.id)
+    Each ``dispatch_*`` call writes the business ``TaskLog`` row and the
+    matching ``OutboxEvent`` row to the caller-supplied ``db`` session
+    without committing. The caller (``src.tasks`` heartbeat, an API
+    endpoint, the recovery path in ``task_maintenance``, …) owns the
+    transaction and commits when appropriate.
+    """
 
-            send_kwargs: dict = {"args": args or [], "kwargs": kwargs or {}}
-            if queue:
-                send_kwargs["queue"] = queue
+    # ------------------------------------------------------------------
+    # Session build dispatch
+    # ------------------------------------------------------------------
 
-            task = celery_app.send_task(task_name, **send_kwargs)
-            pending_log.queue_task_id = str(task.id)
-            pending_log.message = "Queued"
-            db.commit()
-            return str(task.id)
-        except Exception as exc:
-            if isinstance(pending_log, TaskLog):
-                db.rollback()
-                pending_log.status = TaskStatus.FAILED
-                pending_log.finished_at = datetime.now(timezone.utc)
-                pending_log.message = f"Failed to enqueue: {exc}"
-                db.add(pending_log)
-                db.commit()
-            raise
-        finally:
-            db.close()
+    def dispatch_session_build(self, db: Session, command: SessionBuildCommand) -> Optional[str]:
+        """Enqueue a hot or full session build via the outbox.
 
-    def dispatch_session_build(self, command: SessionBuildCommand) -> Optional[str]:
-        if command.scan_mode == ScanMode.FULL:
-            task_name = "src.tasks.session_build.full_build_task"
-        else:
-            task_name = "src.tasks.session_build.hot_build_task"
-
+        Hot-over-full is recorded as a deferred (skipped) TaskLog; the
+        active FULL already has its own publish intent, so we do NOT
+        create a second outbox row. Full-over-hot supersedes the
+        HOT and publishes the FULL.
+        """
+        task_name = (
+            "src.tasks.session_build.full_build_task"
+            if command.scan_mode == ScanMode.FULL
+            else "src.tasks.session_build.hot_build_task"
+        )
         detail_json = {"scan_mode": command.scan_mode, "source_id": command.source_id}
-        return self._enqueue_with_dedupe(
-            task_name=task_name,
-            args=[],
-            kwargs={"source_id": command.source_id},
+        kwargs = {"source_id": command.source_id}
+
+        pending_log, created = create_pending_task_log(
+            db,
             task_type=TaskType.SESSION_BUILD,
             task_target_id=command.source_id,
             detail_json=detail_json,
         )
+        db.flush()
 
-    def dispatch_analyze_session(self, command: AnalyzeSessionCommand) -> Optional[str]:
+        if not created:
+            return self._resolve_session_build_dedupe(
+                db,
+                pending_log=pending_log,
+                detail_json=detail_json,
+                source_id=command.source_id,
+            )
+
+        enroll_outcome = enqueue_command(
+            db,
+            OutboxCommand(task_name=task_name, queue=DEFAULT_QUEUE, kwargs=kwargs),
+            pending_log,
+        )
+        event_id_str = str(enroll_outcome.event.event_id)
+        pending_log.queue_task_id = event_id_str
+        pending_log.message = "Queued via outbox"
+        return event_id_str
+
+    # ------------------------------------------------------------------
+    # Session analysis dispatch
+    # ------------------------------------------------------------------
+
+    def dispatch_analyze_session(
+        self, db: Session, command: AnalyzeSessionCommand
+    ) -> Optional[str]:
+        """Enqueue a session analysis via the outbox.
+
+        Queue selection honors the priority: ``hot`` → ``analysis_hot``,
+        ``full`` → ``analysis_full``. The Celery vision worker pool is
+        partitioned by queue so hot vs full do not contend for slots.
+        """
         queue = "analysis_hot" if command.priority == ScanMode.HOT else "analysis_full"
-        return self._enqueue_with_dedupe(
-            task_name="src.tasks.analyzer.analyze_session_task",
-            args=[command.session_id],
-            kwargs={"priority": command.priority},
+        detail_json = {
+            "priority": command.priority,
+            "recovery_attempt": command.recovery_attempt,
+        }
+
+        pending_log, created = create_pending_task_log(
+            db,
             task_type=TaskType.SESSION_ANALYSIS,
             task_target_id=command.session_id,
-            detail_json={
-                "priority": command.priority,
-                "recovery_attempt": command.recovery_attempt,
-            },
-            queue=queue,
+            detail_json=detail_json,
         )
+        db.flush()
+
+        if not created:
+            active = find_duplicate_active_task(
+                db,
+                TaskType.SESSION_ANALYSIS,
+                command.session_id,
+                pending_log.dedupe_key or "",
+            )
+            if active is not None:
+                return active.queue_task_id or str(active.id)
+            # Defensive: a duplicate is reported by the partial unique
+            # index but ``find_duplicate_active_task`` did not find it
+            # (e.g. SQLite tests without the partial index). Fall back
+            # to the ``pending_log`` that came back from the
+            # ``create`` helper.
+            return pending_log.queue_task_id or str(pending_log.id)
+
+        outcome = enqueue_command(
+            db,
+            OutboxCommand(
+                task_name="src.tasks.analyzer.analyze_session_task",
+                queue=queue,
+                args=(command.session_id,),
+                kwargs={"priority": command.priority},
+            ),
+            pending_log,
+        )
+        event_id_str = str(outcome.event.event_id)
+        pending_log.queue_task_id = event_id_str
+        pending_log.message = "Queued via outbox"
+        return event_id_str
+
+    # ------------------------------------------------------------------
+    # Daily summary dispatch
+    # ------------------------------------------------------------------
 
     def dispatch_generate_daily_summary(
-        self, command: GenerateDailySummaryCommand
+        self, db: Session, command: GenerateDailySummaryCommand
     ) -> Optional[str]:
-        args = [] if command.target_date_str is None else [command.target_date_str]
-        return self._enqueue_with_dedupe(
-            task_name="src.tasks.summarizer.generate_daily_summary_task",
-            args=args,
-            kwargs={},
+        """Enqueue a daily-summary generation via the outbox."""
+        args = () if command.target_date_str is None else (command.target_date_str,)
+        detail_json = {"target_date": command.target_date_str}
+
+        pending_log, created = create_pending_task_log(
+            db,
             task_type=TaskType.DAILY_SUMMARY_GENERATION,
             task_target_id=None,
-            detail_json={"target_date": command.target_date_str},
+            detail_json=detail_json,
         )
+        db.flush()
 
-    def dispatch_webhook(self, command: SendWebhookCommand) -> Optional[str]:
-        task = celery_app.send_task(
-            "src.tasks.webhook.send_webhook_task",
-            kwargs={"event_type": command.event_type, "payload": command.payload},
+        if not created:
+            return pending_log.queue_task_id or str(pending_log.id)
+
+        outcome = enqueue_command(
+            db,
+            OutboxCommand(
+                task_name="src.tasks.summarizer.generate_daily_summary_task",
+                queue=DEFAULT_QUEUE,
+                args=args,
+                kwargs={},
+            ),
+            pending_log,
         )
-        return str(task.id)
+        event_id_str = str(outcome.event.event_id)
+        pending_log.queue_task_id = event_id_str
+        pending_log.message = "Queued via outbox"
+        return event_id_str
+
+    # ------------------------------------------------------------------
+    # Webhook dispatch
+    # ------------------------------------------------------------------
+
+    def dispatch_webhook(self, db: Session, command: SendWebhookCommand) -> Optional[str]:
+        """Enqueue a webhook delivery via the outbox.
+
+        Webhooks do not participate in the ``TaskLog`` active-dedupe
+        pipeline (the broker-level at-least-once semantics are the
+        source of truth and the consumer's HTTP layer is responsible
+        for retries). We still create a fresh ``TaskLog`` row so the
+        outbox row's FK target is non-null and so operators have a
+        delivery trail.
+        """
+        pending_log = TaskLog(
+            task_type="webhook_delivery",
+            task_target_id=None,
+            dedupe_key=None,
+            status="pending",
+            detail_json={
+                "event_type": command.event_type,
+                "payload_keys": sorted((command.payload or {}).keys()),
+            },
+        )
+        db.add(pending_log)
+        db.flush()
+
+        outcome = enqueue_command(
+            db,
+            OutboxCommand(
+                task_name="src.tasks.webhook.send_webhook_task",
+                queue=DEFAULT_QUEUE,
+                args=(),
+                kwargs={
+                    "event_type": command.event_type,
+                    "payload": command.payload,
+                },
+            ),
+            pending_log,
+        )
+        event_id_str = str(outcome.event.event_id)
+        pending_log.queue_task_id = event_id_str
+        pending_log.message = "Queued via outbox"
+        return event_id_str
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_session_build_dedupe(
+        self,
+        db: Session,
+        *,
+        pending_log: TaskLog,
+        detail_json: dict,
+        source_id: int,
+    ) -> Optional[str]:
+        """Apply the HOT↔FULL precedence rule and return the right id.
+
+        Returns the ``queue_task_id`` (or ``id``) of whichever existing
+        TaskLog the caller should treat as the authoritative publish
+        intent. Never creates a second outbox row.
+        """
+        detail_payload = ensure_dict_detail(detail_json)
+        active_scan_mode = ensure_dict_detail(pending_log.detail_json).get("scan_mode")
+        requested_scan_mode = detail_payload.get("scan_mode")
+
+        # HOT over an active FULL → defer; the FULL already owns the
+        # publish intent.
+        if requested_scan_mode == ScanMode.HOT and active_scan_mode == ScanMode.FULL:
+            deferred = record_deferred_hot_scan(db, source_id, pending_log)
+            return str(deferred.id)
+
+        # FULL over an active HOT → supersede the HOT and re-publish.
+        if requested_scan_mode == ScanMode.FULL and active_scan_mode == ScanMode.HOT:
+            supersede_active_hot_scan(db, source_id, pending_log)
+            pending_log, created = create_pending_task_log(
+                db,
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=source_id,
+                detail_json=detail_payload,
+            )
+            db.flush()
+            if not created:
+                raise RuntimeError(
+                    f"Full scan claim not created after hot supersession for source {source_id}"
+                )
+            outcome = enqueue_command(
+                db,
+                OutboxCommand(
+                    task_name="src.tasks.session_build.full_build_task",
+                    queue=DEFAULT_QUEUE,
+                    kwargs={"source_id": source_id},
+                ),
+                pending_log,
+            )
+            event_id_str = str(outcome.event.event_id)
+            pending_log.queue_task_id = event_id_str
+            pending_log.message = "Queued via outbox"
+            return event_id_str
+
+        # Same scan-mode / no precedence rule → reuse the existing
+        # active row's publish intent.
+        return pending_log.queue_task_id or str(pending_log.id)
+
+
+__all__ = ["CeleryTaskDispatcher", "DEFAULT_QUEUE"]

@@ -101,7 +101,8 @@ def _dispatch_analysis_for_sealed(
     for info in sealed_sessions:
         try:
             task_id = dispatcher.dispatch_analyze_session(
-                AnalyzeSessionCommand(session_id=info.session_id, priority=info.priority)
+                db,
+                AnalyzeSessionCommand(session_id=info.session_id, priority=info.priority),
             )
             dispatched.append({"session_id": info.session_id, "task_id": task_id})
         except Exception:

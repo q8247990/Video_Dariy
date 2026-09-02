@@ -222,7 +222,7 @@ def test_dispatch_daily_summary_runs_once_per_target_date(db_session_factory, mo
 
         dispatch_calls: list[dict] = []
 
-        def _mock_dispatch_daily_summary(command):
+        def _mock_dispatch_daily_summary(_db, command):
             dispatch_calls.append({"target_date_str": command.target_date_str})
             return "dispatch-task-id"
 
@@ -257,7 +257,7 @@ def test_dispatch_daily_summary_retries_after_dispatch_failure(
 
         dispatch_calls: list[str] = []
 
-        def _mock_dispatch_daily_summary(command):
+        def _mock_dispatch_daily_summary(_db, command):
             dispatch_calls.append(str(command.target_date_str))
             if len(dispatch_calls) == 1:
                 raise RuntimeError("queue unavailable")
@@ -302,7 +302,7 @@ def test_dispatch_daily_summary_uses_home_local_schedule_and_date(
             summarizer,
             "_get_pipeline_orchestrator",
             lambda: SimpleNamespace(
-                dispatch_generate_daily_summary=lambda command: (
+                dispatch_generate_daily_summary=lambda _db, command: (
                     dispatched_dates.append(command.target_date_str) or "summary-task"
                 )
             ),
@@ -396,7 +396,7 @@ def test_concurrent_schedulers_publish_one_daily_summary_task(postgres_engine, m
         summarizer,
         "_get_pipeline_orchestrator",
         lambda: SimpleNamespace(
-            dispatch_generate_daily_summary=lambda command: (
+            dispatch_generate_daily_summary=lambda _db, command: (
                 dispatches.append(command.target_date_str) or "summary-task"
             )
         ),
@@ -571,7 +571,7 @@ def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
 
         webhook_calls: list[dict] = []
 
-        def _capture_webhook(command):
+        def _capture_webhook(_db, command):
             webhook_calls.append({"event_type": command.event_type, "payload": command.payload})
             return "mock-webhook-task"
 

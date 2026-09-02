@@ -119,8 +119,13 @@ def test_webhook(
     )
 
     try:
-        orchestrator.dispatch_webhook(SendWebhookCommand(event_type="test_event", payload=payload))
+        orchestrator.dispatch_webhook(
+            db,
+            SendWebhookCommand(event_type="test_event", payload=payload),
+        )
+        db.commit()
     except OperationalError as e:
+        db.rollback()
         logger.exception("Failed to enqueue test webhook task for webhook_id=%s", id)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     return BaseResponse(data={"success": True, "message": "Test webhook scheduled."})

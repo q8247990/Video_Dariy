@@ -862,7 +862,8 @@ def dispatch_scheduled_daily_summary_task(self: Any) -> dict[str, Any]:
                 }
 
             task_id = _get_pipeline_orchestrator().dispatch_generate_daily_summary(
-                GenerateDailySummaryCommand(target_date_str=str(target_date))
+                db,
+                GenerateDailySummaryCommand(target_date_str=str(target_date)),
             )
             db.commit()
             return {"scheduled": True, "target_date": str(target_date), "task_id": task_id}
@@ -1076,10 +1077,11 @@ def generate_daily_summary_task(self: Any, target_date_str: str | None = None) -
                 )
                 try:
                     _get_pipeline_orchestrator().dispatch_webhook(
+                        db,
                         SendWebhookCommand(
                             event_type=WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
                             payload=payload,
-                        )
+                        ),
                     )
                 except Exception:
                     logger.exception("Failed to enqueue daily summary webhook task")

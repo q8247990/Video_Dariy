@@ -51,6 +51,7 @@ class FakeTaskDispatcher(TaskDispatcherPort):
         self.dispatched_analyze_session: list[Any] = []
         self.dispatched_daily_summary: list[Any] = []
         self.dispatched_webhook: list[Any] = []
+        self.dispatched_sessions: list[Any] = []
         # Sentinel distinguishes "no scripted return" (counter fallback)
         # from "scripted return of None" (dispatcher declined to enqueue).
         self._next_return: Any = _UNSET
@@ -73,19 +74,23 @@ class FakeTaskDispatcher(TaskDispatcherPort):
     # TaskDispatcherPort protocol
     # ------------------------------------------------------------------
 
-    def dispatch_session_build(self, command: Any) -> Optional[str]:
+    def dispatch_session_build(self, db: Any, command: Any) -> Optional[str]:
+        self.dispatched_sessions.append(db)
         self.dispatched_session_build.append(command)
         return self._dispatch_or_scripted()
 
-    def dispatch_analyze_session(self, command: Any) -> Optional[str]:
+    def dispatch_analyze_session(self, db: Any, command: Any) -> Optional[str]:
+        self.dispatched_sessions.append(db)
         self.dispatched_analyze_session.append(command)
         return self._dispatch_or_scripted()
 
-    def dispatch_generate_daily_summary(self, command: Any) -> Optional[str]:
+    def dispatch_generate_daily_summary(self, db: Any, command: Any) -> Optional[str]:
+        self.dispatched_sessions.append(db)
         self.dispatched_daily_summary.append(command)
         return self._dispatch_or_scripted()
 
-    def dispatch_webhook(self, command: Any) -> Optional[str]:
+    def dispatch_webhook(self, db: Any, command: Any) -> Optional[str]:
+        self.dispatched_sessions.append(db)
         self.dispatched_webhook.append(command)
         return self._dispatch_or_scripted()
 

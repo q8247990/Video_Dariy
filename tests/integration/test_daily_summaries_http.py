@@ -68,7 +68,7 @@ def test_generate_all_daily_summaries_route_hits_post_handler(
 
     monkeypatch.setattr(
         "src.api.v1.endpoints.daily_summaries._pipeline_orchestrator.dispatch_generate_daily_summary",
-        lambda command: f"task-{command.target_date_str}",
+        lambda _db, command: f"task-{command.target_date_str}",
     )
 
     response = client.post("/api/v1/daily-summaries/generate-all")

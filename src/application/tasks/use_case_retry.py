@@ -103,7 +103,7 @@ def retry_task(
     elif task_log.task_type == TaskType.SESSION_ANALYSIS:
         return _retry_session_analysis(db, task_log, detail, dispatcher)
     elif task_log.task_type == TaskType.DAILY_SUMMARY_GENERATION:
-        return _retry_daily_summary(detail, dispatcher)
+        return _retry_daily_summary(db, detail, dispatcher)
     else:
         return RetryResult(
             success=False,
@@ -132,7 +132,8 @@ def _retry_session_build(
 
     scan_mode = str(detail.get("scan_mode") or ScanMode.HOT.value)
     task_id = dispatcher.dispatch_session_build(
-        SessionBuildCommand(source_id=task_log.task_target_id, scan_mode=scan_mode)
+        db,
+        SessionBuildCommand(source_id=task_log.task_target_id, scan_mode=scan_mode),
     )
     return RetryResult(success=True, task_id=task_id)
 
@@ -183,20 +184,23 @@ def _retry_session_analysis(
 
     priority = str(detail.get("priority") or session.analysis_priority or "hot")
     task_id = dispatcher.dispatch_analyze_session(
-        AnalyzeSessionCommand(session_id=task_log.task_target_id, priority=priority)
+        db,
+        AnalyzeSessionCommand(session_id=task_log.task_target_id, priority=priority),
     )
     return RetryResult(success=True, task_id=task_id)
 
 
 def _retry_daily_summary(
+    db: Session,
     detail: dict[str, Any],
     dispatcher: TaskDispatcherPort,
 ) -> RetryResult:
     target_date = detail.get("target_date")
     task_id = dispatcher.dispatch_generate_daily_summary(
+        db,
         GenerateDailySummaryCommand(
             target_date_str=str(target_date) if target_date is not None else None
-        )
+        ),
     )
     return RetryResult(success=True, task_id=task_id)
 

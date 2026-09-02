@@ -91,7 +91,6 @@ def test_hot_collision_records_recoverable_deferred_task_log(
 
 def test_full_dispatch_supersedes_hot_and_enqueues_full_on_postgres(
     postgres_migrated_engine: Engine,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     local_session = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
     with local_session() as db:
@@ -105,17 +104,12 @@ def test_full_dispatch_supersedes_hot_and_enqueues_full_on_postgres(
         db.commit()
         hot_log_id = hot_log.id
 
-    monkeypatch.setattr("src.infrastructure.tasks.celery_dispatcher.SessionLocal", local_session)
-    monkeypatch.setattr(
-        "src.infrastructure.tasks.celery_dispatcher.celery_app.send_task",
-        lambda *args, **kwargs: type("Task", (), {"id": "postgres-full-task"})(),
-    )
+        task_id = CeleryTaskDispatcher().dispatch_session_build(
+            db,
+            SessionBuildCommand(source_id=303, scan_mode="full"),
+        )
+        db.commit()
 
-    task_id = CeleryTaskDispatcher().dispatch_session_build(
-        SessionBuildCommand(source_id=303, scan_mode="full")
-    )
-
-    with Session(postgres_migrated_engine) as db:
         hot_log = db.query(TaskLog).filter(TaskLog.id == hot_log_id).one()
         full_log = (
             db.query(TaskLog)
@@ -126,7 +120,7 @@ def test_full_dispatch_supersedes_hot_and_enqueues_full_on_postgres(
             )
             .one()
         )
-        assert task_id == "postgres-full-task"
+        assert task_id == full_log.queue_task_id
         assert hot_log.status == TaskStatus.CANCELLED
         assert full_log.detail_json["scan_mode"] == "full"
 

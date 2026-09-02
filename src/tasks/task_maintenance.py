@@ -68,7 +68,8 @@ def _dispatch_hot_builds(db: Session) -> list[dict]:
     for source in sources:
         try:
             task_id = dispatcher.dispatch_session_build(
-                SessionBuildCommand(source_id=source.id, scan_mode=ScanMode.HOT)
+                db,
+                SessionBuildCommand(source_id=source.id, scan_mode=ScanMode.HOT),
             )
             dispatched.append({"source_id": source.id, "task_id": task_id})
         except Exception:
@@ -188,11 +189,12 @@ def _resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool
     if isinstance(task_log.detail_json, dict):
         priority = str(task_log.detail_json.get("priority") or priority)
     get_container().dispatcher.dispatch_analyze_session(
+        db,
         AnalyzeSessionCommand(
             session_id=task_log.task_target_id,
             priority=priority,
             recovery_attempt=next_attempt,
-        )
+        ),
     )
     return True
 

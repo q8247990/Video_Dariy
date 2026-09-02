@@ -132,9 +132,12 @@ def trigger_full_build(
 
     try:
         task_id = orchestrator.dispatch_session_build(
-            SessionBuildCommand(source_id=id, scan_mode=ScanMode.FULL)
+            db,
+            SessionBuildCommand(source_id=id, scan_mode=ScanMode.FULL),
         )
+        db.commit()
     except OperationalError as e:
+        db.rollback()
         logger.exception("Failed to enqueue full build task for source_id=%s", id)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     return BaseResponse(data={"task_id": task_id})
@@ -160,9 +163,12 @@ def trigger_analyze(
     priority = session.analysis_priority or "hot"
     try:
         task_id = orchestrator.dispatch_analyze_session(
-            AnalyzeSessionCommand(session_id=session_id, priority=priority)
+            db,
+            AnalyzeSessionCommand(session_id=session_id, priority=priority),
         )
+        db.commit()
     except OperationalError as e:
+        db.rollback()
         logger.exception("Failed to enqueue analyze task for session_id=%s", session_id)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     return BaseResponse(data={"task_id": task_id})
@@ -179,9 +185,12 @@ def trigger_summarize(
     """Trigger daily summary generation. Date format: YYYY-MM-DD"""
     try:
         task_id = orchestrator.dispatch_generate_daily_summary(
-            GenerateDailySummaryCommand(target_date_str=target_date)
+            db,
+            GenerateDailySummaryCommand(target_date_str=target_date),
         )
+        db.commit()
     except OperationalError as e:
+        db.rollback()
         logger.exception("Failed to enqueue summarize task for target_date=%s", target_date)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     return BaseResponse(data={"task_id": task_id})

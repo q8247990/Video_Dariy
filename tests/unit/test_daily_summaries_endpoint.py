@@ -129,7 +129,7 @@ def test_generate_all_daily_summaries_dispatches_full_date_range() -> None:
         dispatched_dates: list[str] = []
         mock_orchestrator = MagicMock()
 
-        def _mock_dispatch(command):
+        def _mock_dispatch(_db, command):
             dispatched_dates.append(str(command.target_date_str))
             return f"task-{command.target_date_str}"
 
@@ -185,7 +185,7 @@ def test_generate_all_daily_summaries_skips_active_dates() -> None:
         db.commit()
 
         mock_orchestrator = MagicMock()
-        mock_orchestrator.dispatch_generate_daily_summary.side_effect = lambda command: (
+        mock_orchestrator.dispatch_generate_daily_summary.side_effect = lambda _db, command: (
             f"task-{command.target_date_str}"
         )
 

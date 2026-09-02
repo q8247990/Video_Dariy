@@ -63,11 +63,6 @@ def test_concurrent_lost_analysis_recovery_creates_one_resume(
         session_id = session.id
 
     local_session = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
-    monkeypatch.setattr("src.infrastructure.tasks.celery_dispatcher.SessionLocal", local_session)
-    monkeypatch.setattr(
-        "src.infrastructure.tasks.celery_dispatcher.celery_app.send_task",
-        lambda *args, **kwargs: type("Task", (), {"id": "recovery-task"})(),
-    )
     monkeypatch.setattr(
         "src.tasks.task_maintenance.celery_app.control.revoke", lambda *args, **kwargs: None
     )

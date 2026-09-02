@@ -104,6 +104,7 @@ def test_bootstrap_for_tests_accepts_dispatcher_override() -> None:
         # SendWebhookCommand lives in pipeline.commands but the fake
         # only inspects the argument object identity, so any object
         # works; using the dataclass keeps the test realistic.
+        None,
         _build_webhook_command(),
     )
     assert task_id == "custom-1"
@@ -264,12 +265,12 @@ def test_fake_dispatcher_records_every_command() -> None:
 
     dispatcher = FakeTaskDispatcher()
 
-    build_id = dispatcher.dispatch_session_build(_build_session_build_command(source_id=1))
-    analyze_id = dispatcher.dispatch_analyze_session(_build_analyze_command(session_id=2))
+    build_id = dispatcher.dispatch_session_build(None, _build_session_build_command(source_id=1))
+    analyze_id = dispatcher.dispatch_analyze_session(None, _build_analyze_command(session_id=2))
     summary_id = dispatcher.dispatch_generate_daily_summary(
-        _build_daily_summary_command(target_date_str="2025-01-01")
+        None, _build_daily_summary_command(target_date_str="2025-01-01")
     )
-    webhook_id = dispatcher.dispatch_webhook(_build_webhook_command())
+    webhook_id = dispatcher.dispatch_webhook(None, _build_webhook_command())
 
     assert build_id == "fake-task-1"
     assert analyze_id == "fake-task-2"
@@ -287,15 +288,18 @@ def test_fake_dispatcher_supports_scripted_returns() -> None:
     dispatcher = FakeTaskDispatcher()
 
     dispatcher.set_next_return(None)
-    assert dispatcher.dispatch_session_build(_build_session_build_command(source_id=1)) is None
+    assert (
+        dispatcher.dispatch_session_build(None, _build_session_build_command(source_id=1)) is None
+    )
 
     dispatcher.set_next_return("fixed-id")
     assert (
-        dispatcher.dispatch_session_build(_build_session_build_command(source_id=2)) == "fixed-id"
+        dispatcher.dispatch_session_build(None, _build_session_build_command(source_id=2))
+        == "fixed-id"
     )
     # Scripted return is single-use — the next call falls back to the counter.
     assert (
-        dispatcher.dispatch_session_build(_build_session_build_command(source_id=3))
+        dispatcher.dispatch_session_build(None, _build_session_build_command(source_id=3))
         == "fake-task-1"
     )
 
