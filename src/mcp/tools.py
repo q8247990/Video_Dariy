@@ -3,7 +3,9 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from src.application.mcp.service import MCPInvalidArgumentError, MCPNotFoundError, MCPToolService
+from src.application.bootstrap import Container, bootstrap_production
+from src.application.mcp.service import MCPInvalidArgumentError, MCPNotFoundError
+from src.application.mcp.use_case_tools import MCPToolUseCase
 from src.application.qa.service import (
     QAProviderInvokeError,
     QAProviderNotConfiguredError,
@@ -34,9 +36,40 @@ def _build_session_playback_url(session_id: int) -> str:
     return f"{settings.API_V1_STR}/media/sessions/{session_id}/playback"
 
 
-def build_tool_service(db: Session) -> MCPToolService:
-    return MCPToolService(
+# Module-level composition root singleton. Bound once at import time
+# exactly like ``src.api.deps._container`` so that every MCP request
+# reuses the same LLM gateway factory without going through the
+# composition root on each call. Tests that need hermetic isolation
+# override ``set_container_for_tests`` (see :func:`set_container_for_tests`).
+_container: Container = bootstrap_production()
+
+
+def get_container() -> Container:
+    """Return the module-level composition-root container.
+
+    Tests that wish to inject fakes call :func:`set_container_for_tests`
+    from a fixture before any MCP request fires.
+    """
+
+    return _container
+
+
+def set_container_for_tests(container: Container) -> None:
+    """Replace the module-level container (test-only escape hatch).
+
+    Production code never calls this — it exists so unit tests can
+    substitute a fake-bound :class:`Container` without monkeypatching
+    :mod:`src.application.bootstrap` or any concrete adapter.
+    """
+
+    global _container
+    _container = container
+
+
+def build_tool_use_case(db: Session) -> MCPToolUseCase:
+    return MCPToolUseCase(
         db=db,
+        container=get_container(),
         stream_url_builder=_build_stream_url,
         session_playback_url_builder=_build_session_playback_url,
     )
@@ -191,44 +224,6 @@ def list_tools(locale: str | None = None) -> dict[str, Any]:
     return {"tools": _build_tools(locale)}
 
 
-def _execute_tool(
-    service: MCPToolService,
-    tool_name: str,
-    arguments: dict[str, Any],
-    locale: str | None = None,
-) -> dict[str, Any]:
-    handlers = {
-        "get_data_availability": lambda: service.get_data_availability(),
-        "search_events": lambda: service.search_events(
-            start_time=_optional_str(arguments.get("start_time")),
-            end_time=_optional_str(arguments.get("end_time")),
-            subjects=_optional_str_list(arguments.get("subjects")),
-            keywords=_optional_str_list(arguments.get("keywords")),
-            event_types=_optional_str_list(arguments.get("event_types")),
-            importance_levels=_optional_str_list(arguments.get("importance_levels")),
-            limit=arguments.get("limit", 20),
-        ),
-        "get_sessions": lambda: service.get_sessions(
-            start_time=_optional_str(arguments.get("start_time")),
-            end_time=_optional_str(arguments.get("end_time")),
-            subjects=_optional_str_list(arguments.get("subjects")),
-            limit=arguments.get("limit", 20),
-        ),
-        "get_daily_summary": lambda: service.get_daily_summary(
-            start_date=_required_str(arguments, "start_date"),
-            end_date=_optional_str(arguments.get("end_date")),
-        ),
-        "ask_home_monitor": lambda: service.ask_home_monitor(
-            _required_str(arguments, "question"),
-            locale=locale,
-        ),
-    }
-    handler = handlers.get(tool_name)
-    if handler is None:
-        raise MCPInvalidArgumentError("tool not found")
-    return handler()
-
-
 def call_tool(
     db: Session,
     tool_name: str,
@@ -246,10 +241,10 @@ def call_tool(
             "session_id": session_id or "unknown",
         },
     }
-    service = build_tool_service(db)
+    use_case = build_tool_use_case(db)
 
     try:
-        response = _execute_tool(service, tool_name, arguments, locale=locale)
+        response = use_case.execute(tool_name, arguments, locale=locale)
     except MCPInvalidArgumentError as exc:
         error_result = _tool_error(MCP_ERROR_INVALID_ARGUMENT, str(exc))
         log_mcp_call(db, tool_name, request_data, error_result, "failed")

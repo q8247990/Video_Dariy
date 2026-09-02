@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
+from src.application.ports.llm_gateway import LLMGatewayFactoryPort
 from src.application.qa.service import (
     QAProviderInvokeError,
     QAProviderNotConfiguredError,
@@ -36,10 +37,12 @@ class MCPToolService:
         db: Session,
         stream_url_builder: Callable[[int], str],
         session_playback_url_builder: Callable[[int], str],
+        llm_factory: Optional[LLMGatewayFactoryPort] = None,
     ):
         self.db = db
         self.stream_url_builder = stream_url_builder
         self.session_playback_url_builder = session_playback_url_builder
+        self._llm_factory = llm_factory
         self._query_service = HomeQueryService(db)
 
     # ------------------------------------------------------------------
@@ -164,7 +167,7 @@ class MCPToolService:
         from src.application.qa.schemas import QARequest
         from src.application.qa.service import QAService
 
-        service = QAService(self.db)
+        service = QAService(self.db, llm_factory=self._llm_factory)
         result = service.answer(
             QARequest(
                 question=clean_question,

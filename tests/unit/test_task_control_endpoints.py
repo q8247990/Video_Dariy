@@ -1,11 +1,10 @@
 from datetime import datetime
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.api.v1.endpoints.tasks import delete_task_log, retry_task_log, stop_task_log
+from src.application.bootstrap import bootstrap_for_tests
+from src.application.tasks import retry_task_log_use_case, stop_task_log_use_case
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -21,11 +20,7 @@ def _new_db_session() -> Session:
     return local_session()
 
 
-def _current_user() -> SimpleNamespace:
-    return SimpleNamespace(id=1, username="admin")
-
-
-def test_stop_analysis_task_marks_cancel_requested_without_resetting_session(monkeypatch) -> None:
+def test_stop_analysis_task_marks_cancel_requested_without_resetting_session() -> None:
     db = _new_db_session()
     try:
         source = VideoSource(
@@ -57,18 +52,31 @@ def test_stop_analysis_task_marks_cancel_requested_without_resetting_session(mon
         db.add(log)
         db.commit()
 
-        monkeypatch.setattr(
-            "src.api.v1.endpoints.tasks.celery_app.control.revoke", lambda *args, **kwargs: None
+        container = bootstrap_for_tests()
+
+        resp = stop_task_log_use_case(
+            db=db, task_log_id=log.id, locale="zh-CN", container=container
         )
 
-        resp = stop_task_log(db=db, current_user=_current_user(), locale="zh-CN", id=log.id)
-        assert resp.code == 0
+        assert resp.error_code == 0
+        assert resp.payload == {
+            "task_log_id": log.id,
+            "status": TaskStatus.RUNNING,
+            "cancel_requested": True,
+        }
+        db.commit()
         db.refresh(log)
         db.refresh(session)
         assert log.status == TaskStatus.RUNNING
         assert log.cancel_requested is True
         assert log.message == "Cancellation requested by user"
         assert session.analysis_status == SessionAnalysisStatus.ANALYZING
+        # Fake task control recorded the revoke call (terminate=True).
+        from src.application.bootstrap_fakes import FakeTaskControl
+
+        fake_task_control = container.task_control
+        assert isinstance(fake_task_control, FakeTaskControl)
+        assert fake_task_control.revocations == [("task-1", True)]
     finally:
         db.close()
 
@@ -111,17 +119,15 @@ def test_retry_task_log_rejects_duplicate_running() -> None:
         db.add_all([failed, running])
         db.commit()
 
-        mock_orchestrator = MagicMock()
+        container = bootstrap_for_tests()
 
-        resp = retry_task_log(
-            db=db,
-            current_user=_current_user(),
-            locale="zh-CN",
-            id=failed.id,
-            orchestrator=mock_orchestrator,
+        resp = retry_task_log_use_case(
+            db=db, task_log_id=failed.id, locale="zh-CN", container=container
         )
-        assert resp.code == 4004
-        assert "already running" in str(resp.message)
+
+        assert resp.error_code == 4004
+        assert "already running" in resp.error_message
+        assert resp.task_id == "existing-task"
     finally:
         db.close()
 
@@ -161,26 +167,95 @@ def test_retry_analysis_task_resets_failed_session_to_sealed() -> None:
         db.add(failed)
         db.commit()
 
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.dispatch_analyze_session.return_value = "analysis-task-1"
+        from src.application.bootstrap_fakes import FakeTaskDispatcher
 
-        resp = retry_task_log(
-            db=db,
-            current_user=_current_user(),
-            locale="zh-CN",
-            id=failed.id,
-            orchestrator=mock_orchestrator,
+        fake_dispatcher = FakeTaskDispatcher()
+        fake_dispatcher.set_next_return("analysis-task-1")
+        container = bootstrap_for_tests(dispatcher=fake_dispatcher)
+
+        resp = retry_task_log_use_case(
+            db=db, task_log_id=failed.id, locale="zh-CN", container=container
         )
 
-        assert resp.code == 0
-        assert resp.data["task_id"] == "analysis-task-1"
+        assert resp.error_code == 0
+        assert resp.task_id == "analysis-task-1"
+        assert fake_dispatcher.dispatched_analyze_session, "fake dispatcher received a dispatch"
+        db.commit()
         db.refresh(session)
         assert session.analysis_status == SessionAnalysisStatus.SEALED
     finally:
         db.close()
 
 
+def test_stop_task_log_returns_4004_when_not_active() -> None:
+    db = _new_db_session()
+    try:
+        log = TaskLog(
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            status=TaskStatus.SUCCESS,
+        )
+        db.add(log)
+        db.commit()
+
+        container = bootstrap_for_tests()
+
+        resp = stop_task_log_use_case(
+            db=db, task_log_id=log.id, locale="zh-CN", container=container
+        )
+
+        assert resp.error_code == 4004
+        assert resp.payload is None
+    finally:
+        db.close()
+
+
+def test_stop_task_log_returns_5001_on_revoke_error() -> None:
+    db = _new_db_session()
+    try:
+        log = TaskLog(
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            queue_task_id="bad-task",
+            status=TaskStatus.RUNNING,
+        )
+        db.add(log)
+        db.commit()
+
+        class _ExplodingTaskControl:
+            def revoke(self, task_id: str, *, terminate: bool = False) -> None:
+                raise RuntimeError("broker unreachable")
+
+            def heartbeat(self, queue: str = ""):  # pragma: no cover - unused in this test
+                raise NotImplementedError
+
+        from src.application.ports.task_control import TaskControlPort
+
+        if not isinstance(_ExplodingTaskControl(), TaskControlPort):
+            raise AssertionError("exploding control must satisfy TaskControlPort Protocol")
+        container = bootstrap_for_tests(task_control=_ExplodingTaskControl())
+
+        resp = stop_task_log_use_case(
+            db=db, task_log_id=log.id, locale="zh-CN", container=container
+        )
+
+        assert resp.error_code == 5001
+        assert "broker unreachable" in resp.error_message
+        assert resp.payload is None
+    finally:
+        db.close()
+
+
 def test_delete_task_log_blocks_running_and_allows_finished() -> None:
+    """Legacy delete-task endpoint smoke test, kept alongside the new
+    use-case coverage. This endpoint never touched Celery directly, so
+    it does not need a container — but we keep the call shape stable
+    for consistency with the new endpoint signatures."""
+
+    from types import SimpleNamespace
+
+    from src.api.v1.endpoints.tasks import delete_task_log
+
     db = _new_db_session()
     try:
         running = TaskLog(
@@ -193,11 +268,19 @@ def test_delete_task_log_blocks_running_and_allows_finished() -> None:
         db.commit()
 
         blocked = delete_task_log(
-            db=db, current_user=_current_user(), locale="zh-CN", id=running.id
+            db=db,
+            current_user=SimpleNamespace(id=1, username="admin"),
+            locale="zh-CN",
+            id=running.id,
         )
         assert blocked.code == 4004
 
-        ok = delete_task_log(db=db, current_user=_current_user(), locale="zh-CN", id=finished.id)
+        ok = delete_task_log(
+            db=db,
+            current_user=SimpleNamespace(id=1, username="admin"),
+            locale="zh-CN",
+            id=finished.id,
+        )
         assert ok.code == 0
     finally:
         db.close()

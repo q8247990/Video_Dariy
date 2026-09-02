@@ -1,9 +1,10 @@
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from src.application.ports.llm_gateway import LLMGatewayFactoryPort
 from src.application.qa.agent import QAAgent
 from src.application.qa.evidence_compressor import compress_evidence
 from src.application.qa.planner import (
@@ -42,9 +43,15 @@ class QAProviderInvokeError(RuntimeError):
 
 
 class QAService:
-    def __init__(self, db: Session):
+    def __init__(
+        self,
+        db: Session,
+        llm_factory: Optional[LLMGatewayFactoryPort] = None,
+    ):
         self.db = db
-        self._gateway_factory = OpenAICompatGatewayFactory()
+        if llm_factory is None:
+            llm_factory = OpenAICompatGatewayFactory()
+        self._gateway_factory = llm_factory
 
     def answer(self, request: QARequest) -> QAResult:
         question = request.question.strip()

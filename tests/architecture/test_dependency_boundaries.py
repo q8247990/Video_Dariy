@@ -157,22 +157,9 @@ VALID_OWNER_TODOS = frozenset({"Todo 5", "Todo 6", "Todo 7", "Todo 8"})
 
 KNOWN_VIOLATIONS: tuple[tuple[str, str, str, str], ...] = (
     # ---- api → infrastructure (Todo 6) ----------------------------------
-    (
-        "src/api/deps.py",
-        "src.infrastructure.tasks.celery_dispatcher",
-        "Todo 6",
-        "deps.py instantiates CeleryTaskDispatcher; replaced by composition-root "
-        "factory + application use case under Todo 6.",
-    ),
-    (
-        "src/api/v1/endpoints/home_profile.py",
-        "src.infrastructure.llm.openai_gateway",
-        "Todo 6",
-        "home_profile endpoint directly builds OpenAICompatGatewayFactory; "
-        "moved behind an application use case under Todo 6.",
-    ),
+    # Cleared under Todo 6.
     # ---- mcp → infrastructure (Todo 6) ----------------------------------
-    # (none — mcp currently only calls application services)
+    # Cleared under Todo 6.
     # ---- tasks → infrastructure (Todo 7) --------------------------------
     (
         "src/tasks/analyzer.py",

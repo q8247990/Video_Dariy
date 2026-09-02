@@ -1,17 +1,21 @@
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
 from kombu.exceptions import OperationalError
 
-from src.api.deps import DB, CurrentUser, Locale, Orchestrator
+from src.api.deps import DB, ContainerDep, CurrentUser, Locale, Orchestrator
 from src.application.pipeline.commands import (
     AnalyzeSessionCommand,
     GenerateDailySummaryCommand,
     SessionBuildCommand,
 )
-from src.core.celery_app import celery_app
+from src.application.tasks import (
+    RetryTaskLogResult,
+    StopTaskLogResult,
+    retry_task_log_use_case,
+    stop_task_log_use_case,
+)
 from src.core.i18n import t
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
@@ -25,7 +29,6 @@ from src.services.pipeline_constants import (
     TaskType,
 )
 from src.services.task_dispatch_control import is_singleton_task_running
-from src.services.task_retry import retry_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -73,56 +76,42 @@ def delete_task_log(db: DB, current_user: CurrentUser, locale: Locale, id: int) 
 
 
 @router.post("/logs/{id}/stop", response_model=BaseResponse[dict])
-def stop_task_log(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    row = db.query(TaskLog).filter(TaskLog.id == id).first()
-    if not row:
-        return BaseResponse(code=4002, message=t("task.log_not_found", locale))
-    if row.status not in {TaskStatus.PENDING, TaskStatus.RUNNING}:
-        return BaseResponse(code=4004, message=t("task.only_active_can_stop", locale))
-
-    if row.queue_task_id:
-        try:
-            celery_app.control.revoke(row.queue_task_id, terminate=True)
-        except Exception as exc:
-            logger.exception("Failed to revoke task_id=%s", row.queue_task_id)
-            return BaseResponse(code=5001, message=t("task.stop_failed", locale, error=exc))
-
-    row.cancel_requested = True
-    if row.status == TaskStatus.PENDING:
-        row.status = TaskStatus.CANCELLED
-        row.message = t("task.cancelled_before_exec", locale)
-        row.finished_at = datetime.now(timezone.utc)
-    else:
-        row.message = t("task.cancel_requested", locale)
-
-    db.commit()
-    return BaseResponse(
-        data={
-            "task_log_id": row.id,
-            "status": row.status,
-            "cancel_requested": row.cancel_requested,
-        }
+def stop_task_log(
+    db: DB,
+    current_user: CurrentUser,
+    locale: Locale,
+    container: ContainerDep,
+    id: int,
+) -> Any:
+    result: StopTaskLogResult = stop_task_log_use_case(
+        db=db,
+        task_log_id=id,
+        locale=locale,
+        container=container,
     )
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
+    db.commit()
+    return BaseResponse(data=result.payload)
 
 
 @router.post("/logs/{id}/retry", response_model=BaseResponse[dict])
 def retry_task_log(
-    db: DB, current_user: CurrentUser, locale: Locale, orchestrator: Orchestrator, id: int
+    db: DB,
+    current_user: CurrentUser,
+    locale: Locale,
+    container: ContainerDep,
+    id: int,
 ) -> Any:
-    row = db.query(TaskLog).filter(TaskLog.id == id).first()
-    if not row:
-        return BaseResponse(code=4002, message=t("task.log_not_found", locale))
-
-    try:
-        result = retry_task(db, row, orchestrator)
-    except OperationalError as exc:
-        logger.exception("Failed to retry task log id=%s", id)
-        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=exc))
-
-    if not result.success:
+    result: RetryTaskLogResult = retry_task_log_use_case(
+        db=db,
+        task_log_id=id,
+        locale=locale,
+        container=container,
+    )
+    if result.error_code != 0:
         data = {"task_id": result.task_id} if result.task_id else None
         return BaseResponse(code=result.error_code, message=result.error_message, data=data)
-
     db.commit()
     return BaseResponse(data={"task_id": result.task_id})
 

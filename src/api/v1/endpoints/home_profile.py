@@ -1,4 +1,3 @@
-import base64
 import io
 import logging
 import os
@@ -8,10 +7,13 @@ from typing import Any, Optional, cast
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
-from src.api.deps import DB, CurrentUser, Locale
+from src.api.deps import DB, ContainerDep, CurrentUser, Locale
+from src.application.home_profile import (
+    GenerateEntityAppearanceResult,
+    generate_entity_appearance_use_case,
+)
 from src.core.config import settings
 from src.core.i18n import t
-from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.home_entity_profile import HomeEntityProfile
 from src.schemas.home_profile import (
     HomeContextResponse,
@@ -37,8 +39,6 @@ from src.services.home_profile import (
     update_entity,
 )
 from src.services.media_signing import MediaCapability, MediaCapabilityError, MediaSigningService
-from src.services.provider_key_crypto import decrypt_provider_api_key
-from src.services.provider_selector import PROVIDER_TYPE_VISION, find_enabled_provider
 from src.services.system_config_registry import HOME_PROFILE_INITIALIZED, set_config
 
 logger = logging.getLogger(__name__)
@@ -274,69 +274,20 @@ def generate_entity_appearance(
     db: DB,
     current_user: CurrentUser,
     locale: Locale,
+    container: ContainerDep,
 ) -> Any:
-    entity = get_entity_by_id(db, entity_id)
-    if entity is None:
-        return BaseResponse(code=4002, message=t("entity.not_found", locale))
-
-    image_path = _entity_image_path(entity_id)
-    if not entity.image_path or not os.path.exists(image_path):
-        return BaseResponse(code=4000, message=t("entity.upload_image_first", locale))
-
-    provider = find_enabled_provider(db, PROVIDER_TYPE_VISION)
-    if provider is None:
-        return BaseResponse(code=5000, message=t("entity.no_vision_provider", locale))
-
-    try:
-        with open(image_path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode("utf-8")
-        data_url = f"data:image/jpeg;base64,{image_b64}"
-    except OSError as exc:
-        logger.error("Failed to read image for entity %s: %s", entity_id, exc)
-        return BaseResponse(code=5000, message=t("entity.image_read_failed", locale))
-
-    entity_label = "宠物" if entity.entity_type == "pet" else "家庭成员"
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"请仔细观察图片中的{entity_label}，用中文描述其外观特征。"
-                        f"描述应包括：体型、毛发/发型发色、面部特征、常见穿着风格等可观察到的外观信息。"
-                        f"只描述外观，不要推测性格或行为。"
-                        f"描述控制在 150 字以内，语言简洁自然。"
-                    ),
-                },
-                {"type": "image_url", "image_url": {"url": data_url}},
-            ],
-        }
-    ]
-
-    gateway = None
-    try:
-        gateway = OpenAICompatGatewayFactory().build(
-            api_base_url=provider.api_base_url,
-            api_key=decrypt_provider_api_key(provider.api_key),
-            model_name=provider.model_name,
-            timeout_seconds=provider.timeout_seconds,
-        )
-        result = gateway.chat_completion(messages=messages, temperature=0.3, max_tokens=300)
-    except Exception as exc:
-        logger.error("Vision LLM call failed for entity %s: %s", entity_id, exc)
-        return BaseResponse(code=5002, message=t("entity.ai_generate_failed", locale, error=exc))
-    finally:
-        if gateway is not None:
-            gateway.close()
-
-    if not result:
-        return BaseResponse(code=5002, message=t("entity.ai_no_result", locale))
-
-    entity.appearance_desc = result.strip()
+    result: GenerateEntityAppearanceResult = generate_entity_appearance_use_case(
+        db=db,
+        entity_id=entity_id,
+        locale=locale,
+        container=container,
+        entity_image_path_resolver=_entity_image_path,
+        entity_response_builder=_build_entity_response,
+    )
+    if result.error_code != 0:
+        return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
-    db.refresh(entity)
-    return BaseResponse(data=_build_entity_response(entity))
+    return BaseResponse(data=result.entity)
 
 
 @router.get("/context", response_model=BaseResponse[HomeContextResponse])
