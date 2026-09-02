@@ -1,6 +1,7 @@
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, runtime_checkable
 
 
+@runtime_checkable
 class LLMGatewayPort(Protocol):
     supports_tool_calling: bool
 
@@ -32,6 +33,7 @@ class LLMGatewayPort(Protocol):
     def probe_tool_calling(self) -> bool: ...
 
 
+@runtime_checkable
 class LLMGatewayFactoryPort(Protocol):
     def build(
         self,

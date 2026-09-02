@@ -1,4 +1,4 @@
-from typing import Optional, Protocol
+from typing import Optional, Protocol, runtime_checkable
 
 from src.application.pipeline.commands import (
     AnalyzeSessionCommand,
@@ -8,6 +8,7 @@ from src.application.pipeline.commands import (
 )
 
 
+@runtime_checkable
 class TaskDispatcherPort(Protocol):
     def dispatch_session_build(self, command: SessionBuildCommand) -> Optional[str]: ...
 
