@@ -47,7 +47,6 @@ from src.services.provider_selector import PROVIDER_TYPE_VISION, find_required_e
 from src.services.session_analysis_video import (
     SessionVideoChunk,
     SubChunk,
-    build_chunk_keyframe_payload,
     build_chunk_sub_chunks,
     build_chunk_video_data_url,
     build_session_video_chunks,
@@ -72,6 +71,7 @@ logger = logging.getLogger(__name__)
 NOT_FOUND_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 POSTGRES_RETRYABLE_SQLSTATES = {"40P01", "40001"}
 DEADLOCK_MAX_RETRIES = 3
+RAW_MP4_NUM_FRAMES = 120
 
 
 def _claim_session_for_analysis(
@@ -483,29 +483,11 @@ def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> d
             )
             analysis_run_id = _analysis_run_id(chunks)
             client, provider = _build_provider_client(db)
-            configured_mode = (
-                (getattr(provider, "video_preprocess_mode", "raw_mp4") or "raw_mp4").strip().lower()
-            )
-            if configured_mode != "raw_mp4":
-                logger.warning(
-                    "Provider %s has video_preprocess_mode=%r, but the keyframe "
-                    "mode is disabled; forcing raw_mp4",
-                    provider.id,
-                    configured_mode,
-                )
-            # The keyframe path below is kept intentionally, but it is not
-            # reachable: this pipeline always sends raw mp4 to the vision model.
-            preprocess_mode = "raw_mp4"
-            keyframe_target_n = int(getattr(provider, "video_keyframe_target_n", 64) or 64)
-            keyframe_jpeg_quality = int(getattr(provider, "video_keyframe_jpeg_quality", 88) or 88)
-            fallback_to_mp4 = settings.ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4
 
             parse_modes: list[str] = []
             events_to_persist: list[EventRecord] = []
             structured_results: list[tuple[int, int, RecognitionResultDTO]] = []
             sub_chunk_count = 0
-            keyframe_fallback_count = 0
-            keyframe_total_count = 0
             for chunk in chunks:
                 ensure_task_not_cancelled(
                     db,
@@ -530,63 +512,21 @@ def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> d
                     last_chunk_index = chunk.chunk_index
                     last_sub_chunk_index = sub_chunk.sub_chunk_index
 
-                    effective_mode = preprocess_mode
-                    extra_body: dict[str, Any] | None = None
-                    video_part: dict[str, Any]
-
-                    if effective_mode == "keyframe":
-                        try:
-                            payload = build_chunk_keyframe_payload(
-                                sub_chunk,
-                                target_n=keyframe_target_n,
-                                jpeg_quality=keyframe_jpeg_quality,
-                                mad_threshold=settings.ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD,
-                                phash_threshold=settings.ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD,
-                                periodic_anchor_seconds=settings.ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS,
-                            )
-                            keyframe_total_count += 1
-                            extra_body = {"media_io_kwargs": payload.media_io_kwargs}
-                            video_part = {
-                                "type": "video_url",
-                                "video_url": {"url": payload.jpeg_data_url},
-                            }
-                        except Exception as exc:
-                            if not fallback_to_mp4:
-                                logger.exception(
-                                    "keyframe extraction failed for session %s "
-                                    "chunk %s-%s; fallback disabled",
-                                    session_id,
-                                    chunk.chunk_index,
-                                    sub_chunk.sub_chunk_index,
-                                )
-                                raise
-                            logger.warning(
-                                "keyframe extraction failed for session %s "
-                                "chunk %s-%s, falling back to raw_mp4: %s",
-                                session_id,
-                                chunk.chunk_index,
-                                sub_chunk.sub_chunk_index,
-                                exc,
-                            )
-                            keyframe_fallback_count += 1
-                            effective_mode = "raw_mp4"
-
-                    if effective_mode == "raw_mp4":
-                        fallback_chunk = session_chunk_from_sub_chunk(
-                            sub_chunk, parent_chunk_index=chunk.chunk_index
-                        )
-                        video_data_url = build_chunk_video_data_url(fallback_chunk)
-                        extra_body = {
-                            "media_io_kwargs": {
-                                "video": {
-                                    "num_frames": keyframe_target_n,
-                                }
+                    payload_chunk = session_chunk_from_sub_chunk(
+                        sub_chunk, parent_chunk_index=chunk.chunk_index
+                    )
+                    video_data_url = build_chunk_video_data_url(payload_chunk)
+                    extra_body = {
+                        "media_io_kwargs": {
+                            "video": {
+                                "num_frames": RAW_MP4_NUM_FRAMES,
                             }
                         }
-                        video_part = {
-                            "type": "video_url",
-                            "video_url": {"url": video_data_url},
-                        }
+                    }
+                    video_part = {
+                        "type": "video_url",
+                        "video_url": {"url": video_data_url},
+                    }
 
                     system_prompt, user_prompt = _build_prompts(
                         source, home_context, session, sub_chunk
@@ -705,9 +645,7 @@ def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> d
                     "sub_chunk_count": sub_chunk_count,
                     "chunk_seconds": settings.ANALYZER_SEGMENT_SECONDS,
                     "llm_chunk_seconds": settings.ANALYZER_LLM_CHUNK_SECONDS,
-                    "preprocess_mode": preprocess_mode,
-                    "keyframe_total": keyframe_total_count,
-                    "keyframe_fallback": keyframe_fallback_count,
+                    "media_num_frames": RAW_MP4_NUM_FRAMES,
                     "parse_modes": parse_modes,
                     "priority": priority,
                 },

@@ -6,14 +6,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
-from src.services import session_analysis_video as sav
 from src.services.session_analysis_video import (
-    ChunkKeyframePayload,
     SessionVideoChunk,
     SubChunk,
     _concat_video_files_to_mp4_bytes,
-    build_chunk_keyframe_payload,
     build_chunk_sub_chunks,
+    build_chunk_video_data_url,
     build_session_video_chunks,
     session_chunk_from_sub_chunk,
 )
@@ -222,44 +220,6 @@ def test_build_session_video_chunks_populates_file_durations() -> None:
         db.close()
 
 
-def test_build_chunk_keyframe_payload_uses_ascending_indices_and_jpeg_url(
-    monkeypatch: object,
-) -> None:
-    del monkeypatch
-
-    class _FakeKS:
-        jpeg_base64_list = ["AAA", "BBB"]
-        fps = 19.955
-        total_num_frames = 5985
-        frames_indices = [24, 130]
-        extra = {"frames_decoded": 100}
-
-    def _fake_extract(file_paths: list[str], **kwargs):  # type: ignore[no-untyped-def]
-        del file_paths, kwargs
-        return _FakeKS()
-
-    sav.extract_keyframes_for_sub_chunk = _fake_extract  # type: ignore[assignment]
-
-    sub_chunk = SubChunk(
-        chunk_index=0,
-        sub_chunk_index=0,
-        start_offset_seconds=0,
-        duration_seconds=300,
-        file_paths=["/fake/a.mp4"],
-    )
-
-    payload = build_chunk_keyframe_payload(sub_chunk)
-
-    assert isinstance(payload, ChunkKeyframePayload)
-    assert payload.jpeg_data_url == "data:video/jpeg;base64,AAA,BBB"
-    video_meta = payload.media_io_kwargs["video"]
-    assert video_meta["fps"] == 19.955
-    assert video_meta["total_num_frames"] == 5985
-    assert video_meta["frames_indices"] == [24, 130]
-    assert video_meta["num_frames"] == -1
-    assert payload.diagnostics == {"frames_decoded": 100}
-
-
 def test_session_chunk_from_sub_chunk_projects_correctly() -> None:
     sub_chunk = SubChunk(
         chunk_index=3,
@@ -273,3 +233,20 @@ def test_session_chunk_from_sub_chunk_projects_correctly() -> None:
     assert projected.start_offset_seconds == 900
     assert projected.duration_seconds == 300
     assert projected.file_paths == ["/fake/a.mp4", "/fake/b.mp4"]
+
+
+def test_build_chunk_video_data_url_wraps_mp4_data_url(tmp_path) -> None:
+    mp4_path = tmp_path / "fake.mp4"
+    mp4_path.write_bytes(b"\x00\x01\x02\x03")
+    chunk = SessionVideoChunk(
+        chunk_index=0,
+        start_offset_seconds=0,
+        duration_seconds=60,
+        file_paths=[str(mp4_path)],
+    )
+    url = build_chunk_video_data_url(chunk)
+    assert url.startswith("data:video/mp4;base64,")
+    import base64 as _b64
+
+    raw = _b64.b64decode(url.split(",", 1)[1])
+    assert raw == b"\x00\x01\x02\x03"

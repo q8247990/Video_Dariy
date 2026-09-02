@@ -1,9 +1,18 @@
+"""Raw MP4 session/chunk helpers for the analyzer task.
+
+The analyzer pipeline always sends ``data:video/mp4`` payloads to the
+vision model with a ``num_frames`` hint (see ``RAW_MP4_NUM_FRAMES``). The
+historical keyframe (MAD/pHash, JPEG top-N) path is no longer reachable
+and lives only in ADR ``0009-remove-keyframe-pipeline.md``; nothing in
+this module imports ``cv2`` or ``numpy``.
+"""
+
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -12,35 +21,6 @@ from src.services.session_video import get_session_video_files
 
 if TYPE_CHECKING:
     from src.models.video_file import VideoFile
-    from src.services.keyframe_extractor import KeyframeSet
-
-
-def extract_keyframes_for_sub_chunk(
-    file_paths: list[str],
-    *,
-    fps_target: int = 2,
-    target_n: int = 64,
-    jpeg_quality: int = 88,
-    mad_threshold: float = 1.0,
-    phash_threshold: int = 6,
-    periodic_anchor_seconds: int = 8,
-) -> KeyframeSet:
-    """关键帧提取的惰性入口（关键帧路径已停用，代码仅为溯源保留）。
-
-    cv2/OpenCV 与 numpy 不在部署依赖中。只有本函数被真正调用时才会导入
-    ``keyframe_extractor``，因此导入本模块以及 raw_mp4 主路径均不依赖 cv2。
-    """
-    from src.services import keyframe_extractor
-
-    return keyframe_extractor.extract_keyframes_for_sub_chunk(
-        file_paths,
-        fps_target=fps_target,
-        target_n=target_n,
-        jpeg_quality=jpeg_quality,
-        mad_threshold=mad_threshold,
-        phash_threshold=phash_threshold,
-        periodic_anchor_seconds=periodic_anchor_seconds,
-    )
 
 
 @dataclass
@@ -59,14 +39,6 @@ class SubChunk:
     start_offset_seconds: int
     duration_seconds: int
     file_paths: list[str]
-
-
-@dataclass
-class ChunkKeyframePayload:
-    jpeg_data_url: str
-    media_io_kwargs: dict[str, Any]
-    diagnostics: dict[str, Any] = field(default_factory=dict)
-    keyframe_set: KeyframeSet | None = None
 
 
 def build_session_video_chunks(
@@ -196,44 +168,6 @@ def build_chunk_sub_chunks(
     return sub_chunks
 
 
-def build_chunk_keyframe_payload(
-    sub_chunk: SubChunk,
-    *,
-    target_n: int = 64,
-    jpeg_quality: int = 88,
-    mad_threshold: float = 1.0,
-    phash_threshold: int = 6,
-    periodic_anchor_seconds: int = 8,
-) -> ChunkKeyframePayload:
-    """提取 sub_chunk 的关键帧，组装 data URL + media_io_kwargs。"""
-    ks: KeyframeSet = extract_keyframes_for_sub_chunk(
-        sub_chunk.file_paths,
-        target_n=target_n,
-        jpeg_quality=jpeg_quality,
-        mad_threshold=mad_threshold,
-        phash_threshold=phash_threshold,
-        periodic_anchor_seconds=periodic_anchor_seconds,
-    )
-
-    joined_b64 = ",".join(ks.jpeg_base64_list)
-    data_url = f"data:video/jpeg;base64,{joined_b64}" if joined_b64 else ""
-
-    media_io_kwargs: dict[str, Any] = {
-        "video": {
-            "fps": ks.fps,
-            "total_num_frames": ks.total_num_frames,
-            "frames_indices": list(ks.frames_indices),
-            "num_frames": -1,
-        }
-    }
-    return ChunkKeyframePayload(
-        jpeg_data_url=data_url,
-        media_io_kwargs=media_io_kwargs,
-        diagnostics=ks.extra,
-        keyframe_set=ks,
-    )
-
-
 def build_chunk_video_data_url(chunk: SessionVideoChunk) -> str:
     if not chunk.file_paths:
         raise ValueError("chunk has no source files")
@@ -252,7 +186,7 @@ def build_chunk_video_data_url(chunk: SessionVideoChunk) -> str:
 
 
 def session_chunk_from_sub_chunk(sub_chunk: SubChunk, parent_chunk_index: int) -> SessionVideoChunk:
-    """Project a SubChunk back to a SessionVideoChunk shape (for raw_mp4 fallback)."""
+    """Project a SubChunk back to a SessionVideoChunk shape."""
     return SessionVideoChunk(
         chunk_index=parent_chunk_index,
         start_offset_seconds=sub_chunk.start_offset_seconds,
@@ -276,19 +210,9 @@ def _concat_video_files_to_mp4_bytes(file_paths: list[str]) -> bytes:
     return run_ffmpeg_concat_to_bytes(file_paths)
 
 
-def _build_concat_payload(file_paths: list[str]) -> bytes:
-    lines = []
-    for path in file_paths:
-        escaped_path = path.replace("'", "'\\''")
-        lines.append(f"file '{escaped_path}'")
-    return ("\n".join(lines) + "\n").encode("utf-8")
-
-
 __all__ = [
-    "ChunkKeyframePayload",
     "SessionVideoChunk",
     "SubChunk",
-    "build_chunk_keyframe_payload",
     "build_chunk_sub_chunks",
     "build_chunk_video_data_url",
     "build_session_video_chunks",
