@@ -2,6 +2,7 @@ from .admin_user import AdminUser
 from .app_runtime_state import AppRuntimeState
 from .chat_query_log import ChatQueryLog
 from .daily_summary import DailySummary
+from .daily_summary_attempt import DailySummaryGenerationAttempt
 from .event_record import EventRecord
 from .event_tag_rel import EventTagRel
 from .home_entity_profile import HomeEntityProfile
@@ -27,6 +28,7 @@ __all__ = [
     "AppRuntimeState",
     "ChatQueryLog",
     "DailySummary",
+    "DailySummaryGenerationAttempt",
     "EventRecord",
     "EventTagRel",
     "HomeEntityProfile",
