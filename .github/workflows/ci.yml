@@ -5,37 +5,242 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+
+# PR-triggered runs from forks need explicit `contents: read`; everything
+# stays un-privileged otherwise. No `secrets.*` are read here on purpose.
+permissions:
+  contents: read
+
+# Defaults are surfaced as plain env so every shell step can use them
+# without re-defining. `shell: bash` is also pinned via `defaults.run` to
+# make `set -euo pipefail` deterministic on Linux runners.
+env:
+  TZ: Asia/Shanghai
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Backend quality gates: lint, format, types, alembic, unit, architecture,
+  # and live PostgreSQL integration tests. PG is the same major+alpine as
+  # docker-compose.yml (postgres:17-alpine) so behavior matches production.
+  # ---------------------------------------------------------------------------
   backend:
-    name: Backend Checks
+    name: Backend Quality Gates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: home_monitor
+          TZ: Asia/Shanghai
+        ports:
+          - 5432:5432
+        # Mirror docker-compose.yml healthcheck (image-aliyun mirror kept out
+        # of CI to avoid registry redirection; alpine image is the same tag).
+        options: >-
+          --health-cmd "pg_isready -U postgres -d home_monitor"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/home_monitor
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt
 
-      - name: Ruff check
-        run: ruff check .
+      # Belt-and-suspenders: GitHub runner already waits for the service
+      # healthcheck, but we re-poll with the same `pg_isready` command and
+      # fail the job if it does not respond within 5 minutes (covers a
+      # missing pg_isready, slow image pull, or runner quirk).
+      - name: Wait for PostgreSQL (pg_isready, max 5 minutes)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 300); do
+            if pg_isready -h localhost -U postgres -d home_monitor; then
+              echo "PostgreSQL ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::PostgreSQL not ready within 300s" >&2
+          exit 1
 
-      - name: Run unit tests
-        run: pytest tests/unit
+      # Defensive guard: without DATABASE_URL, `tests/conftest.py` will
+      # raise UsageError on `-m postgres` runs and skip on default runs.
+      # We never want the latter, so we fail loudly here too.
+      - name: Verify DATABASE_URL is set
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::DATABASE_URL must be set for PG integration tests" >&2
+            exit 1
+          fi
+          echo "DATABASE_URL=${DATABASE_URL}"
 
+      - name: Ruff lint
+        run: |
+          set -euo pipefail
+          ruff check .
+
+      - name: Ruff format check
+        run: |
+          set -euo pipefail
+          ruff format --check src tests
+
+      - name: Mypy strict
+        env:
+          MYPYPATH: src
+        run: |
+          set -euo pipefail
+          mypy src
+
+      # Hard rule: exactly one alembic head. Multi-head will silently break
+      # `alembic upgrade head` in production. We parse plain-text output
+      # (JSON-friendly: one "<rev> (head)" line per head) and assert count.
+      - name: Alembic single head
+        run: |
+          set -euo pipefail
+          set +e
+          HEADS=$(python3 -m alembic heads 2>&1 | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+          HEAD_RC=${PIPESTATUS[0]}
+          set -e
+          echo "${HEADS}"
+          if [ "${HEAD_RC}" -ne 0 ]; then
+            echo "::error::alembic heads exited ${HEAD_RC}" >&2
+            exit "${HEAD_RC}"
+          fi
+          HEAD_COUNT=$(printf '%s\n' "${HEADS}" | grep -cE '^[0-9]{8}_[0-9]{4} \(head\)$' || true)
+          if [ "${HEAD_COUNT:-0}" -ne 1 ]; then
+            echo "::error::Expected exactly 1 alembic head, found ${HEAD_COUNT:-0}" >&2
+            exit 1
+          fi
+          echo "Single alembic head confirmed: $(printf '%s\n' "${HEADS}" | tail -n1)"
+
+      # alembic upgrade head against a throwaway schema so we don't
+      # touch the default `public` schema. Mirrors the schema-isolation
+      # pattern in tests/conftest.py.
+      - name: Alembic upgrade head (isolated schema)
+        run: |
+          set -euo pipefail
+          SCHEMA="ci_$(date +%s)_$$"
+          echo "Using schema: ${SCHEMA}"
+          psql "postgresql://postgres:postgres@localhost:5432/home_monitor" \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE SCHEMA \"${SCHEMA}\""
+          PGOPTIONS="-c search_path=${SCHEMA}" \
+            DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/home_monitor" \
+            python3 -m alembic upgrade head
+          VERSION=$(psql "postgresql://postgres:postgres@localhost:5432/home_monitor" \
+            -tAc "SELECT version_num FROM \"${SCHEMA}\".alembic_version")
+          echo "alembic_version in schema ${SCHEMA} = ${VERSION}"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::alembic_version row missing after upgrade head" >&2
+            psql "postgresql://postgres:postgres@localhost:5432/home_monitor" \
+              -c "DROP SCHEMA IF EXISTS \"${SCHEMA}\" CASCADE" || true
+            exit 1
+          fi
+          psql "postgresql://postgres:postgres@localhost:5432/home_monitor" \
+            -c "DROP SCHEMA \"${SCHEMA}\" CASCADE"
+          echo "Upgrade verified and schema dropped."
+
+      - name: pytest unit
+        run: |
+          set -euo pipefail
+          python3 -m pytest tests/unit
+
+      # Architecture boundary tests (Todo 2): AST-driven, no DB required.
+      - name: pytest architecture boundaries
+        run: |
+          set -euo pipefail
+          python3 -m pytest tests/architecture
+
+      # Hard rules from the plan: missing DATABASE_URL, zero collected
+      # tests, silent skips, or command timeout must all fail the build.
+      # - Pre-step: collect-only must report >0 tests.
+      # - Run: pass-through with `-v` so we can grep SKIPPED lines.
+      # - Post-step: any SKIPPED line in the verbose log fails the job.
+      - name: pytest postgres (integration, no silent skip)
+        run: |
+          set -euo pipefail
+          set +e
+          COLLECT_OUT=$(python3 -m pytest --collect-only tests/integration -m postgres -q 2>&1)
+          COLLECT_RC=$?
+          set -e
+          echo "${COLLECT_OUT}"
+          if [ "${COLLECT_RC}" -ne 0 ]; then
+            echo "::error::pytest --collect-only -m postgres exited ${COLLECT_RC} (likely missing DATABASE_URL)" >&2
+            exit "${COLLECT_RC}"
+          fi
+          # Format is "X tests collected" (no DATABASE_URL) or
+          # "X/Y tests collected (Z deselected)" (with DATABASE_URL).
+          COLLECT_LINE=$(printf '%s\n' "${COLLECT_OUT}" | grep -E 'tests collected' | tail -n 1)
+          if [ -z "${COLLECT_LINE}" ]; then
+            echo "::error::pytest -m postgres collect summary line not found" >&2
+            exit 1
+          fi
+          echo "Collect summary: ${COLLECT_LINE}"
+          SELECTED=$(printf '%s\n' "${COLLECT_LINE}" | sed -nE 's#^([0-9]+)(/[0-9]+)? tests collected.*$#\1#p')
+          TOTAL=$(printf '%s\n' "${COLLECT_LINE}" | sed -nE 's#^[0-9]+/([0-9]+) tests collected.*$#\1#p')
+          TOTAL="${TOTAL:-${SELECTED}}"
+          if [ "${SELECTED}" -lt 1 ] || [ "${TOTAL}" -lt 1 ]; then
+            echo "::error::pytest -m postgres collected ${SELECTED}/${TOTAL} tests, expected > 0" >&2
+            exit 1
+          fi
+          echo "Selected ${SELECTED}/${TOTAL} postgres-tagged tests"
+          set +e
+          python3 -m pytest -m postgres -v --tb=short --color=no 2>&1 \
+            | tee pytest-postgres.log
+          PG_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ "${PG_EXIT}" -ne 0 ]; then
+            echo "::error::pytest -m postgres exited ${PG_EXIT}" >&2
+            exit "${PG_EXIT}"
+          fi
+          # Loud-on-skip: any `path::test SKIPPED` line means conftest
+          # silently skipped a postgres test, which is a CI regression.
+          if grep -E '^[A-Za-z_./-]+\.py::[A-Za-z0-9_]+ SKIPPED' pytest-postgres.log; then
+            echo "::error::PostgreSQL tests were unexpectedly skipped" >&2
+            exit 1
+          fi
+          echo "All ${SELECTED} postgres tests ran without skips."
+
+  # ---------------------------------------------------------------------------
+  # Frontend quality gates: lint, build, vitest. Playwright stays in the
+  # manual-only `playwright` job below.
+  # ---------------------------------------------------------------------------
   frontend:
-    name: Frontend Checks
+    name: Frontend Quality Gates
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     defaults:
       run:
         working-directory: frontend
+        shell: bash
 
     steps:
       - name: Checkout
@@ -49,10 +254,92 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: |
+          set -euo pipefail
+          npm ci
 
-      - name: Run frontend lint
-        run: npm run lint
+      - name: Lint
+        run: |
+          set -euo pipefail
+          npm run lint
 
-      - name: Build frontend
-        run: npm run build
+      - name: Build
+        run: |
+          set -euo pipefail
+          npm run build
+
+      - name: Vitest unit tests
+        run: |
+          set -euo pipefail
+          npm run test:unit
+
+  # ---------------------------------------------------------------------------
+  # Docker Compose smoke: builds backend + frontend images to validate
+  # that the compose pipeline still produces runnable artifacts. Full
+  # `docker compose up` lives behind release.yml/runtime smoke (Todo 23).
+  # ---------------------------------------------------------------------------
+  smoke:
+    name: Docker Compose Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        run: |
+          set -euo pipefail
+          docker build --build-arg USE_CN_MIRROR=false \
+            -t hm_backend_smoke -f Dockerfile .
+
+      - name: Build frontend image
+        run: |
+          set -euo pipefail
+          docker build --build-arg USE_CN_MIRROR=false \
+            -t hm_frontend_smoke -f Dockerfile ./frontend
+
+  # ---------------------------------------------------------------------------
+  # Playwright E2E: gated behind `workflow_dispatch` so it stays out of
+  # PR CI (per plan / Todo 4 acceptance). Browser install + suite run on
+  # demand from the Actions tab.
+  # ---------------------------------------------------------------------------
+  playwright:
+    name: Playwright E2E (manual only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: frontend
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps
+
+      - name: Run Playwright E2E
+        run: |
+          set -euo pipefail
+          npm run test:e2e
