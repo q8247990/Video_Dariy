@@ -15,6 +15,7 @@ ownership with the caller (FastAPI dependency) and prevents use cases
 from holding ORM sessions across calls.
 """
 
+from src.application.tasks.use_case_retry import RetryResult, retry_task
 from src.application.tasks.use_case_stop_retry import (
     RetryTaskLogResult,
     StopTaskLogResult,
@@ -23,8 +24,10 @@ from src.application.tasks.use_case_stop_retry import (
 )
 
 __all__ = [
+    "RetryResult",
     "RetryTaskLogResult",
     "StopTaskLogResult",
+    "retry_task",
     "retry_task_log_use_case",
     "stop_task_log_use_case",
 ]

@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from src.application.pipeline.commands import AnalyzeSessionCommand
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
-from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import (
@@ -35,6 +34,7 @@ from src.services.task_dispatch_control import (
     finalize_task_log,
     get_task_log_for_update,
 )
+from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def _dispatch_analysis_for_sealed(
     每 60 秒被 heartbeat 触发一次时对同一 Session 重复派发分析任务。
     """
     dispatched: list[dict] = []
-    dispatcher = CeleryTaskDispatcher()
+    dispatcher = get_container().dispatcher
     for info in sealed_sessions:
         try:
             task_id = dispatcher.dispatch_analyze_session(

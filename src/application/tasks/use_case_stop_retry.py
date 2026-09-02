@@ -12,10 +12,9 @@ in :mod:`src.api.v1.endpoints.tasks`:
   details.
 
 * ``retry_task_log_use_case`` delegates to
-  :func:`src.services.task_retry.retry_task` while binding the
-  ``PipelineOrchestrator`` to the ``TaskDispatcherPort`` from the
-  composition root — that keeps the service-layer helper untouched
-  (Wave 5 scope) while removing the need for the endpoint to import
+  :func:`src.application.tasks.use_case_retry.retry_task`, handing it the
+  ``TaskDispatcherPort`` from the composition root — so neither the
+  endpoint nor the retry orchestration needs to import
   :mod:`src.infrastructure.tasks.celery_dispatcher` directly.
 
 The use cases own **no** SQLAlchemy session: the caller passes the
@@ -35,11 +34,10 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from src.application.bootstrap import Container
-from src.application.pipeline.orchestrator import PipelineOrchestrator
+from src.application.tasks.use_case_retry import retry_task
 from src.core.i18n import t
 from src.models.task_log import TaskLog
 from src.services.pipeline_constants import TaskStatus
-from src.services.task_retry import retry_task
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +64,7 @@ class RetryTaskLogResult:
 
     On success ``task_id`` carries the Celery task identifier and
     ``error_code`` is ``0``. On failure ``error_code`` is the business
-    code returned by :func:`src.services.task_retry.retry_task` and
+    code returned by :func:`src.application.tasks.use_case_retry.retry_task` and
     ``task_id`` (when set) is the duplicate task's identifier, matching
     the legacy endpoint response.
     """
@@ -144,8 +142,8 @@ def retry_task_log_use_case(
     OperationalError raised by the underlying broker is converted into
     the existing ``5001`` business code (``task.queue_unavailable``) to
     preserve the legacy HTTP status mapping (``502``). All other
-    validation outcomes are produced by :func:`src.services.task_retry.retry_task`
-    and returned verbatim.
+    validation outcomes are produced by
+    :func:`src.application.tasks.use_case_retry.retry_task` and returned verbatim.
     """
 
     from kombu.exceptions import OperationalError  # local import — keeps use case hermetic in tests
@@ -154,9 +152,8 @@ def retry_task_log_use_case(
     if row is None:
         return RetryTaskLogResult(error_code=4002, error_message=t("task.log_not_found", locale))
 
-    orchestrator = PipelineOrchestrator(dispatcher=container.dispatcher)
     try:
-        result = retry_task(db, row, orchestrator)
+        result = retry_task(db, row, container.dispatcher)
     except OperationalError as exc:
         logger.exception("Failed to retry task log id=%s", task_log_id)
         return RetryTaskLogResult(

@@ -19,7 +19,6 @@ from src.application.pipeline.commands import AnalyzeSessionCommand, SessionBuil
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.db.session import task_db_session
-from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
@@ -33,6 +32,7 @@ from src.services.pipeline_constants import (
 )
 from src.services.pipeline_state import transition_session, transition_task_log
 from src.services.session_video import mark_missing_source_video_files
+from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def _dispatch_hot_builds(db: Session) -> list[dict]:
         .all()
     )
     dispatched: list[dict] = []
-    dispatcher = CeleryTaskDispatcher()
+    dispatcher = get_container().dispatcher
     for source in sources:
         try:
             task_id = dispatcher.dispatch_session_build(
@@ -187,7 +187,7 @@ def _resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool
     priority = "hot"
     if isinstance(task_log.detail_json, dict):
         priority = str(task_log.detail_json.get("priority") or priority)
-    CeleryTaskDispatcher().dispatch_analyze_session(
+    get_container().dispatcher.dispatch_analyze_session(
         AnalyzeSessionCommand(
             session_id=task_log.task_target_id,
             priority=priority,

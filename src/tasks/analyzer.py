@@ -26,7 +26,6 @@ from src.application.prompt.contracts import (
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.db.session import task_db_session
-from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
@@ -67,6 +66,7 @@ from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.mapper import build_event_record_from_recognized_event
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 from src.services.video_analysis.schemas import RecognitionResultDTO
+from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
 NOT_FOUND_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
@@ -302,7 +302,7 @@ def _replace_session_events(db: Session, session_id: int, events: list[EventReco
 
 def _build_provider_client(db: Session) -> tuple[Any, LLMProvider]:
     provider = find_required_enabled_provider(db, PROVIDER_TYPE_VISION)
-    client = OpenAICompatGatewayFactory().build(
+    client = get_container().llm_factory.build(
         api_base_url=provider.api_base_url,
         api_key=decrypt_provider_api_key(provider.api_key),
         model_name=provider.model_name,

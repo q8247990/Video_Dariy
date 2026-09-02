@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.application.tasks.use_case_retry import RetryResult, retry_task
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -12,7 +13,6 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
-from src.services.task_retry import RetryResult, retry_task
 
 
 def _new_db_session() -> Session:
@@ -24,12 +24,12 @@ def _new_db_session() -> Session:
     return local_session()
 
 
-def _mock_orchestrator() -> MagicMock:
-    orch = MagicMock()
-    orch.dispatch_session_build.return_value = "build-task-1"
-    orch.dispatch_analyze_session.return_value = "analysis-task-1"
-    orch.dispatch_generate_daily_summary.return_value = "summary-task-1"
-    return orch
+def _mock_dispatcher() -> MagicMock:
+    dispatcher = MagicMock()
+    dispatcher.dispatch_session_build.return_value = "build-task-1"
+    dispatcher.dispatch_analyze_session.return_value = "analysis-task-1"
+    dispatcher.dispatch_generate_daily_summary.return_value = "summary-task-1"
+    return dispatcher
 
 
 def test_retry_rejects_non_retryable_status() -> None:
@@ -43,7 +43,7 @@ def test_retry_rejects_non_retryable_status() -> None:
         db.add(log)
         db.commit()
 
-        result = retry_task(db, log, _mock_orchestrator())
+        result = retry_task(db, log, _mock_dispatcher())
 
         assert isinstance(result, RetryResult)
         assert result.success is False
@@ -85,7 +85,7 @@ def test_retry_detects_duplicate_active_task() -> None:
         db.add_all([failed, running])
         db.commit()
 
-        result = retry_task(db, failed, _mock_orchestrator())
+        result = retry_task(db, failed, _mock_dispatcher())
 
         assert result.success is False
         assert result.error_code == 4004
@@ -118,12 +118,12 @@ def test_retry_session_build() -> None:
         db.add(log)
         db.commit()
 
-        orch = _mock_orchestrator()
-        result = retry_task(db, log, orch)
+        dispatcher = _mock_dispatcher()
+        result = retry_task(db, log, dispatcher)
 
         assert result.success is True
         assert result.task_id == "build-task-1"
-        orch.dispatch_session_build.assert_called_once()
+        dispatcher.dispatch_session_build.assert_called_once()
     finally:
         db.close()
 
@@ -163,14 +163,14 @@ def test_retry_session_analysis_resets_to_sealed() -> None:
         db.add(log)
         db.commit()
 
-        orch = _mock_orchestrator()
-        result = retry_task(db, log, orch)
+        dispatcher = _mock_dispatcher()
+        result = retry_task(db, log, dispatcher)
 
         assert result.success is True
         assert result.task_id == "analysis-task-1"
         db.refresh(session)
         assert session.analysis_status == SessionAnalysisStatus.SEALED
-        orch.dispatch_analyze_session.assert_called_once()
+        dispatcher.dispatch_analyze_session.assert_called_once()
     finally:
         db.close()
 
@@ -187,12 +187,12 @@ def test_retry_daily_summary() -> None:
         db.add(log)
         db.commit()
 
-        orch = _mock_orchestrator()
-        result = retry_task(db, log, orch)
+        dispatcher = _mock_dispatcher()
+        result = retry_task(db, log, dispatcher)
 
         assert result.success is True
         assert result.task_id == "summary-task-1"
-        orch.dispatch_generate_daily_summary.assert_called_once()
+        dispatcher.dispatch_generate_daily_summary.assert_called_once()
     finally:
         db.close()
 
@@ -208,7 +208,7 @@ def test_retry_unsupported_task_type() -> None:
         db.add(log)
         db.commit()
 
-        result = retry_task(db, log, _mock_orchestrator())
+        result = retry_task(db, log, _mock_dispatcher())
 
         assert result.success is False
         assert result.error_code == 4004

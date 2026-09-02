@@ -25,8 +25,6 @@ from src.core.i18n.locale_directive import (
     get_summary_title,
 )
 from src.db.session import task_db_session
-from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
-from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
 from src.models.task_log import TaskLog
@@ -65,6 +63,7 @@ from src.services.task_dispatch_control import (
 )
 from src.services.webhook_payload import build_webhook_event_payload
 from src.services.webhook_subscription import webhook_subscribes
+from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +73,7 @@ SERIAL_SPLIT_PROMPT_THRESHOLD = 28000
 
 
 def _get_pipeline_orchestrator() -> PipelineOrchestrator:
-    return PipelineOrchestrator(dispatcher=CeleryTaskDispatcher())
+    return PipelineOrchestrator(dispatcher=get_container().dispatcher)
 
 
 def _summary_title(target_date: date, locale: str | None = None) -> str:
@@ -979,7 +978,7 @@ def generate_daily_summary_task(self: Any, target_date_str: str | None = None) -
                 )
             )
 
-            client = OpenAICompatGatewayFactory().build(
+            client = get_container().llm_factory.build(
                 api_base_url=provider.api_base_url,
                 api_key=decrypt_provider_api_key(provider.api_key),
                 model_name=provider.model_name,

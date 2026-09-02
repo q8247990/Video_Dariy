@@ -161,56 +161,8 @@ KNOWN_VIOLATIONS: tuple[tuple[str, str, str, str], ...] = (
     # ---- mcp → infrastructure (Todo 6) ----------------------------------
     # Cleared under Todo 6.
     # ---- tasks → infrastructure (Todo 7) --------------------------------
-    (
-        "src/tasks/analyzer.py",
-        "src.infrastructure.llm.openai_gateway",
-        "Todo 7",
-        "analyzer directly instantiates OpenAICompatGatewayFactory; replaced "
-        "by LLMGatewayFactoryPort binding from composition root under Todo 7.",
-    ),
-    (
-        "src/tasks/session_build.py",
-        "src.infrastructure.tasks.celery_dispatcher",
-        "Todo 7",
-        "session_build directly constructs CeleryTaskDispatcher; replaced "
-        "by TaskDispatcherPort binding from composition root under Todo 7.",
-    ),
-    (
-        "src/tasks/summarizer.py",
-        "src.infrastructure.llm.openai_gateway",
-        "Todo 7",
-        "summarizer directly instantiates OpenAICompatGatewayFactory; replaced "
-        "by LLMGatewayFactoryPort binding from composition root under Todo 7.",
-    ),
-    (
-        "src/tasks/summarizer.py",
-        "src.infrastructure.tasks.celery_dispatcher",
-        "Todo 7",
-        "summarizer directly constructs CeleryTaskDispatcher; replaced "
-        "by TaskDispatcherPort binding from composition root under Todo 7.",
-    ),
-    (
-        "src/tasks/task_maintenance.py",
-        "src.infrastructure.tasks.celery_dispatcher",
-        "Todo 7",
-        "task_maintenance directly constructs CeleryTaskDispatcher; replaced "
-        "by TaskDispatcherPort binding from composition root under Todo 7.",
-    ),
+    # Cleared under Todo 7: task modules read ports from src/tasks/_container.py.
     # ---- services → application (Todo 5) -------------------------------
-    (
-        "src/services/task_retry.py",
-        "src.application.pipeline.commands",
-        "Todo 5",
-        "task_retry imports application pipeline commands; will be replaced "
-        "by port-driven composition under Todo 5.",
-    ),
-    (
-        "src/services/task_retry.py",
-        "src.application.pipeline.orchestrator",
-        "Todo 5",
-        "task_retry imports application PipelineOrchestrator; service "
-        "depends on use-case layer, removed under Todo 5.",
-    ),
     (
         "src/services/prompt_builder/v2/qa_answer.py",
         "src.application.qa.schemas",
