@@ -11,6 +11,7 @@ from .llm_provider import LLMProvider
 from .llm_usage_log import LLMUsageLog
 from .mcp_call_log import McpCallLog
 from .outbox import OutboxEvent
+from .pipeline_transition_log import PipelineTransitionLog
 from .session_analysis_checkpoint import SessionAnalysisCheckpoint
 from .system_config import SystemConfig
 from .tag_definition import TagDefinition
@@ -36,6 +37,7 @@ __all__ = [
     "LLMProvider",
     "LLMUsageLog",
     "OutboxEvent",
+    "PipelineTransitionLog",
     "SessionAnalysisCheckpoint",
     "McpCallLog",
     "SystemConfig",

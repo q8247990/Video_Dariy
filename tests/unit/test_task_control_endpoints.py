@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.tasks import retry_task_log_use_case, stop_task_log_use_case
+from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -16,6 +17,7 @@ def _new_db_session() -> Session:
     VideoSource.__table__.create(bind=engine)
     VideoSession.__table__.create(bind=engine)
     TaskLog.__table__.create(bind=engine)
+    PipelineTransitionLog.__table__.create(bind=engine)
     local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     return local_session()
 

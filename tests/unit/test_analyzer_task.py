@@ -7,6 +7,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.models.event_record import EventRecord
+from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
@@ -28,6 +29,7 @@ def _new_session_factory():
     EventRecord.__table__.create(bind=engine)
     SessionAnalysisCheckpoint.__table__.create(bind=engine)
     TaskLog.__table__.create(bind=engine)
+    PipelineTransitionLog.__table__.create(bind=engine)
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 

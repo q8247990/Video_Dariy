@@ -119,15 +119,24 @@ RULES: tuple[BoundaryRule, ...] = (
         source_module_prefix="src.services",
         target_module_prefix="src.application",
         # Port Protocols are shared types by design: every layer may
-        # import them. Only use cases / orchestrators / schemas /
-        # bootstrap glue are off-limits for ``src.services``.
-        excluded_target_subprefixes=("src.application.ports",),
+        # import them. ``src.application.transition_log`` is a
+        # write-only audit-row helper called from ``src.services.pipeline_state``
+        # so the append-only audit row sits in the same transaction as
+        # the state-machine CAS UPDATE — it is the same shape of
+        # shared helper as ``src.application.ports`` (by-design
+        # importable from every layer; not an orchestrator / use case /
+        # schema).
+        excluded_target_subprefixes=(
+            "src.application.ports",
+            "src.application.transition_log",
+        ),
         owner_todo="Todo 5",
         description=(
             "Services are pure business rules; they must not depend on "
             "application-layer use cases / orchestrators / schemas. "
-            "``src.application.ports.*`` Protocol definitions are "
-            "intentionally importable from every layer."
+            "``src.application.ports.*`` Protocol definitions and "
+            "``src.application.transition_log.*`` audit-row writers "
+            "are intentionally importable from every layer."
         ),
     ),
     BoundaryRule(

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
+from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
@@ -31,6 +32,7 @@ def _new_db_session_factory():
     VideoSession.__table__.create(bind=engine)
     TaskLog.__table__.create(bind=engine)
     SessionAnalysisCheckpoint.__table__.create(bind=engine)
+    PipelineTransitionLog.__table__.create(bind=engine)
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
