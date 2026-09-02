@@ -125,6 +125,7 @@ def transition_session(
     reason: str,
     source: str,
     task_log: TaskLog | None = None,
+    force: bool = False,
 ) -> TransitionResult:
     """Compare-and-set a session state, the inline audit, and the append-only audit row.
 
@@ -150,6 +151,11 @@ def transition_session(
             that drove the transition still carries a one-step audit;
             the append-only audit row correlates with the row via
             ``task_log_id``.
+        force: When ``True`` the ``task_log.cancel_requested``
+            short-circuit is bypassed. Reserved for system-initiated
+            cancel transitions that need to roll the session back to
+            ``SEALED`` despite the driving task log being in
+            ``cancel_requested=True`` state.
 
     Returns:
         :class:`TransitionResult`. ``applied=True`` means the CAS
@@ -165,7 +171,7 @@ def transition_session(
     """
     if (from_status, to_status) not in SESSION_ALLOWED_TRANSITIONS:
         raise PipelineTransitionConflict("VideoSession", from_status.value, to_status.value)
-    if task_log is not None and task_log.cancel_requested:
+    if not force and task_log is not None and task_log.cancel_requested:
         return TransitionResult(applied=False)
 
     updated = (

@@ -1,20 +1,46 @@
-"""Session analysis task: LLM-based video recognition.
+"""Session analysis Celery task: thin orchestrator over the analysis stages.
 
-Uses dedicated Celery queues (analysis_hot / analysis_full) consumed by the
-dedicated celery_vision_worker with --concurrency=1, so globally at most one
-session analysis task runs at any moment.
+Wave 5 split the previous monolith (~780 LOC, mixed lease / LLM /
+checkpoint / finalize responsibilities) into a Celery task plus
+stage modules under :mod:`src.services.analysis`. The task:
+
+* opens a ``task_db_session`` for the orchestration lifetime —
+  claim + plan + cancel checks + finalize all run against the same
+  session;
+* delegates to :func:`claim_session_for_analysis` (claim stage);
+* delegates to :func:`assemble_chunk_plan` after building chunks /
+  sub-chunks (which use the monkey-patchable names this task
+  re-exports for the existing test suite);
+* iterates over the chunk plan in a loop that opens one **fresh**
+  transaction before each LLM call (``pre_db``) and one after
+  (``post_db``) so the HTTP / ffmpeg work happens with **no**
+  checked-out DB connection — the structural enforcement of the
+  "no long-lived DB connection during LLM call" requirement;
+* delegates to :func:`finalize_session_success` /
+  :func:`cancel_session` for the terminal state machines;
+* translates PG deadlocks into Celery ``self.retry`` and other
+  failures into the standard TaskLog / Session transition via
+  :func:`record_recovery_failure` /
+  :func:`record_partial_failure_transition` /
+  :func:`record_failed_transition`.
+
+Every legacy helper used by the existing unit / PG tests
+(``_checkpoint_for_work``, ``_build_provider_client``,
+``_build_prompts``, ``_replace_session_events`,
+``build_chunk_video_data_url``, ``session_chunk_from_sub_chunk``,
+``parse_video_recognition_output``, ``record_token_usage`,
+``enforce_token_quota``, ``ensure_task_not_cancelled``,
+``build_home_context``, ``build_session_video_chunks``,
+``build_chunk_sub_chunks``, ``RAW_MP4_NUM_FRAMES``) is re-exported
+from this module unchanged so the tests'
+``monkeypatch.setattr("src.tasks.analyzer.X", ...)`` calls keep
+working.
 """
 
-import json
-import logging
-import time
-from datetime import datetime, timezone
-from hashlib import sha256
-from pathlib import Path
-from typing import Any
+from __future__ import annotations
 
-from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.orm import Session
+import logging
+from typing import Any
 
 from src.application.prompt.compiler import compile_video_recognition_prompt
 from src.application.prompt.contracts import (
@@ -26,24 +52,53 @@ from src.application.prompt.contracts import (
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.db.session import task_db_session
-from src.models.event_record import EventRecord
-from src.models.llm_provider import LLMProvider
-from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
-from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.analysis import (
+    RAW_MP4_NUM_FRAMES,
+    ClaimGuards,
+    DeadlockRetrySignal,
+    LateWorkerFencingError,
+    build_sub_chunk_extra_body,
+    cancel_session,
+    claim_session_for_analysis,
+    finalize_session_success,
+    finalize_skip,
+    finalize_stale_message,
+    get_or_create_checkpoint,
+    is_deadlock_operational_error,
+    mark_checkpoint_error,
+    mark_checkpoint_processing,
+    record_recovery_failure,
+    write_sub_chunk_checkpoint,
+    write_token_usage,
+)
+from src.services.analysis.aggregator import (
+    _replace_session_events,  # noqa: F401 — re-exported for legacy test contract
+)
+from src.services.analysis.checkpoint_writer import (
+    _checkpoint_for_work,  # noqa: F401 — re-exported for legacy test contract
+)
+from src.services.analysis.chunk_plan import SubChunkPlan, assemble_chunk_plan
+from src.services.analysis.claim import (  # noqa: E402,F401 — re-exported for legacy tests
+    _claim_session_for_analysis,
+)
+from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
+from src.services.analysis.finalize import (
+    record_failed_transition,
+    record_partial_failure_transition,
+)
+from src.services.analysis.provider import (
+    _build_provider_client,  # noqa: F401 — re-exported for legacy test contract
+)
+from src.services.analysis.sub_chunk_runner import execute_sub_chunk
 from src.services.home_profile import build_home_context
 from src.services.llm_output_utils import truncate_text
-from src.services.llm_qos import enforce_token_quota, record_token_usage
-from src.services.pipeline_constants import (
-    SessionAnalysisStatus,
-    SourceType,
-    TaskStatus,
-    TaskType,
+from src.services.llm_qos import (  # noqa: F401 — re-exported for legacy test contract
+    enforce_token_quota,
+    record_token_usage,
 )
-from src.services.pipeline_state import transition_session, transition_task_log
+from src.services.pipeline_constants import SourceType
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
-from src.services.provider_key_crypto import decrypt_provider_api_key
-from src.services.provider_selector import PROVIDER_TYPE_VISION, find_required_enabled_provider
 from src.services.session_analysis_video import (
     SessionVideoChunk,
     SubChunk,
@@ -54,134 +109,13 @@ from src.services.session_analysis_video import (
 )
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
-    bind_or_create_running_task_log,
     ensure_task_not_cancelled,
-    finalize_cancelled_task_log,
-    finalize_task_log,
-    get_task_log_for_update,
     renew_task_lease,
 )
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
-from src.services.video_analysis.mapper import build_event_record_from_recognized_event
 from src.services.video_analysis.output_parser import parse_video_recognition_output
-from src.services.video_analysis.schemas import RecognitionResultDTO
-from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
-NOT_FOUND_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
-POSTGRES_RETRYABLE_SQLSTATES = {"40P01", "40001"}
-DEADLOCK_MAX_RETRIES = 3
-RAW_MP4_NUM_FRAMES = 120
-
-
-def _claim_session_for_analysis(
-    db: Session, session_id: int
-) -> tuple[VideoSession | None, str | None]:
-    attempts = (0.0,) + NOT_FOUND_RETRY_DELAYS_SECONDS
-    for index, delay in enumerate(attempts):
-        updated = any(
-            transition_session(
-                db,
-                session_id,
-                from_status,
-                SessionAnalysisStatus.ANALYZING,
-                reason="analysis_claim",
-                source="claim_session_for_analysis",
-            ).applied
-            for from_status in (SessionAnalysisStatus.SEALED, SessionAnalysisStatus.PARTIAL)
-        )
-        db.commit()
-        if updated:
-            session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-            return session, None
-
-        session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-        if session is not None:
-            if session.analysis_status == SessionAnalysisStatus.ANALYZING:
-                return None, "already_analyzing"
-            if session.analysis_status == SessionAnalysisStatus.OPEN:
-                return None, "session_open"
-            return None, f"status_{session.analysis_status}"
-
-        if index == len(attempts) - 1:
-            break
-
-        time.sleep(delay)
-        db.rollback()
-
-    return None, "not_found"
-
-
-def _skip_analysis_task(
-    db: Session,
-    task_log: Any,
-    session_id: int,
-    reason: str,
-    priority: str,
-) -> dict[str, Any]:
-    reason_messages = {
-        "not_found": f"Skipped session {session_id}, not found",
-        "already_analyzing": f"Skipped session {session_id}, already analyzing",
-        "session_open": f"Skipped session {session_id}, session still open",
-    }
-    current_status = None
-    if reason.startswith("status_"):
-        current_status = reason.removeprefix("status_")
-    message = reason_messages.get(reason)
-    if message is None:
-        status_text = current_status or reason
-        message = f"Skipped session {session_id}, current status is {status_text}"
-
-    detail = {
-        "session_id": session_id,
-        "skipped": True,
-        "reason": reason,
-        "priority": priority,
-    }
-    if current_status is not None:
-        detail["current_status"] = current_status
-
-    transition_task_log(
-        db,
-        task_log.id,
-        TaskStatus.RUNNING,
-        TaskStatus.SKIPPED,
-        reason="analysis_skipped",
-        source="skip_analysis_task",
-    )
-    finalize_task_log(task_log, TaskStatus.SKIPPED, message, detail)
-    db.commit()
-    return {"events_created": 0, "skipped": True, "reason": reason}
-
-
-def _is_deadlock_operational_error(exc: Exception) -> bool:
-    if not isinstance(exc, OperationalError):
-        return False
-    original = getattr(exc, "orig", None)
-    if original is None:
-        return False
-
-    pgcode = str(getattr(original, "pgcode", "") or "")
-    if pgcode in POSTGRES_RETRYABLE_SQLSTATES:
-        return True
-
-    message = str(original).lower()
-    return "deadlock detected" in message or "could not serialize access" in message
-
-
-def _mark_session_sealed_for_retry(db: Session, session_id: int) -> None:
-    session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-    if session is None:
-        return
-    if session.analysis_status == SessionAnalysisStatus.ANALYZING:
-        transition_session(
-            db,
-            session.id,
-            SessionAnalysisStatus.ANALYZING,
-            SessionAnalysisStatus.SEALED,
-            reason="deadlock_retry",
-            source="mark_session_sealed_for_retry",
-        )
 
 
 def _resolve_ingest_type(source: VideoSource) -> str:
@@ -193,9 +127,17 @@ def _resolve_ingest_type(source: VideoSource) -> str:
 def _build_prompts(
     source: VideoSource,
     home_context: dict[str, Any],
-    session: VideoSession,
+    session: Any,
     chunk: SessionVideoChunk | SubChunk,
 ) -> tuple[str, str]:
+    """Assemble the recognition prompts for one sub-chunk work item.
+
+    Lives in ``src.tasks.analyzer`` (and not in
+    ``src.services.analysis``) because the assembly calls
+    ``src.application.prompt.compiler.compile_video_recognition_prompt``
+    — a contract/compiler pair the service layer is not allowed to
+    reach. The Celery task layer has free application access.
+    """
     ingest_type = _resolve_ingest_type(source)
     strategy_note = build_strategy_note(ingest_type=ingest_type, source_type=source.source_type)
     return compile_video_recognition_prompt(
@@ -228,556 +170,598 @@ def _build_prompts(
     )
 
 
-def _aggregate_session_fields(
-    session: VideoSession,
-    structured_results: list[tuple[int, int, RecognitionResultDTO]],
-    events: list[EventRecord],
-) -> None:
-    if not structured_results:
-        session.summary_text = (
-            f"分段识别完成，共识别 {len(events)} 个事件" if events else "未识别到有效事件"
-        )
-        session.activity_level = "medium" if events else "low"
-        session.main_subjects_json = []
-        session.has_important_event = any(
-            event.importance_level in {"high", "medium"} for event in events
-        )
-        session.analysis_notes_json = []
-        return
-
-    summary_lines: list[str] = []
-    if len(structured_results) == 1:
-        summary_lines.append(structured_results[0][2].session_summary.summary_text)
-    else:
-        for chunk_index, sub_index, result in structured_results:
-            summary_lines.append(
-                f"片段{chunk_index + 1}-{sub_index + 1}: {result.session_summary.summary_text}"
-            )
-
-    activity_score = {"low": 1, "medium": 2, "high": 3}
-    highest_activity = "low"
-    subjects_seen: set[str] = set()
-    merged_subjects: list[str] = []
-    merged_notes: list[dict[str, str]] = []
-    notes_seen: set[tuple[str, str]] = set()
-    has_important_event = any(event.importance_level in {"high", "medium"} for event in events)
-
-    for _, _, result in structured_results:
-        summary = result.session_summary
-        if activity_score[summary.activity_level] > activity_score[highest_activity]:
-            highest_activity = summary.activity_level
-        has_important_event = has_important_event or summary.has_important_event
-
-        for subject in summary.main_subjects:
-            key = subject.strip()
-            if not key or key in subjects_seen:
-                continue
-            subjects_seen.add(key)
-            merged_subjects.append(key)
-
-        for note in result.analysis_notes:
-            note_key = (note.type, note.note.strip())
-            if not note_key[1] or note_key in notes_seen:
-                continue
-            notes_seen.add(note_key)
-            merged_notes.append({"type": note.type, "note": note.note})
-
-    session.summary_text = "\n".join(summary_lines)
-    session.activity_level = highest_activity
-    session.main_subjects_json = merged_subjects
-    session.has_important_event = has_important_event
-    session.analysis_notes_json = merged_notes
-
-
-def _replace_session_events(db: Session, session_id: int, events: list[EventRecord]) -> int:
-    deleted_count = (
-        db.query(EventRecord)
-        .filter(EventRecord.session_id == session_id)
-        .delete(synchronize_session=False)
-    )
-    for event in events:
-        db.add(event)
-    return int(deleted_count or 0)
-
-
-def _build_provider_client(db: Session) -> tuple[Any, LLMProvider]:
-    provider = find_required_enabled_provider(db, PROVIDER_TYPE_VISION)
-    client = get_container().llm_factory.build(
-        api_base_url=provider.api_base_url,
-        api_key=decrypt_provider_api_key(provider.api_key),
-        model_name=provider.model_name,
-        timeout_seconds=provider.timeout_seconds,
-    )
-    return client, provider
-
-
-def _analysis_run_id(chunks: list[SessionVideoChunk]) -> str:
-    identities: list[dict[str, Any]] = []
-    for chunk in chunks:
-        for path in chunk.file_paths:
-            path_info: dict[str, Any] = {"path": path}
-            if Path(path).exists():
-                stat = Path(path).stat()
-                path_info.update({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
-            identities.append(path_info)
-    encoded = json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()
-    return sha256(encoded).hexdigest()
-
-
-def _sub_chunk_fingerprint(
-    system_prompt: str,
-    user_prompt: str,
-    video_data_url: str,
-    sub_chunk: SubChunk,
-) -> str:
-    payload = {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt,
-        "video_sha256": sha256(video_data_url.encode()).hexdigest(),
-        "start_offset_seconds": sub_chunk.start_offset_seconds,
-        "duration_seconds": sub_chunk.duration_seconds,
-        "file_paths": sub_chunk.file_paths,
-    }
-    return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
-def _checkpoint_for_work(
-    db: Session,
-    *,
-    session_id: int,
-    analysis_run_id: str,
-    chunk_index: int,
-    sub_chunk: SubChunk,
-    input_fingerprint: str,
-) -> SessionAnalysisCheckpoint:
-    checkpoint = (
-        db.query(SessionAnalysisCheckpoint)
-        .filter(
-            SessionAnalysisCheckpoint.session_id == session_id,
-            SessionAnalysisCheckpoint.analysis_run_id == analysis_run_id,
-            SessionAnalysisCheckpoint.chunk_index == chunk_index,
-            SessionAnalysisCheckpoint.sub_chunk_index == sub_chunk.sub_chunk_index,
-        )
-        .first()
-    )
-    if checkpoint is not None:
-        if checkpoint.input_fingerprint != input_fingerprint:
-            checkpoint.state = "pending"
-            checkpoint.input_fingerprint = input_fingerprint
-            checkpoint.event_payload = None
-            checkpoint.prompt_tokens = 0
-            checkpoint.completion_tokens = 0
-            checkpoint.total_tokens = 0
-            checkpoint.completed_at = None
-        return checkpoint
-
-    checkpoint = SessionAnalysisCheckpoint(
-        session_id=session_id,
-        analysis_run_id=analysis_run_id,
-        chunk_index=chunk_index,
-        sub_chunk_index=sub_chunk.sub_chunk_index,
-        start_offset_seconds=sub_chunk.start_offset_seconds,
-        input_fingerprint=input_fingerprint,
-        state="pending",
-    )
-    try:
-        with db.begin_nested():
-            db.add(checkpoint)
-            db.flush()
-    except IntegrityError:
-        checkpoint = (
-            db.query(SessionAnalysisCheckpoint)
-            .filter(
-                SessionAnalysisCheckpoint.session_id == session_id,
-                SessionAnalysisCheckpoint.analysis_run_id == analysis_run_id,
-                SessionAnalysisCheckpoint.chunk_index == chunk_index,
-                SessionAnalysisCheckpoint.sub_chunk_index == sub_chunk.sub_chunk_index,
-            )
-            .one()
-        )
-    return checkpoint
-
-
-def _completed_results(
-    db: Session, session: VideoSession, analysis_run_id: str
-) -> tuple[list[tuple[int, int, RecognitionResultDTO]], list[EventRecord]]:
-    checkpoints = (
-        db.query(SessionAnalysisCheckpoint)
-        .filter(
-            SessionAnalysisCheckpoint.session_id == session.id,
-            SessionAnalysisCheckpoint.analysis_run_id == analysis_run_id,
-            SessionAnalysisCheckpoint.state == "success",
-        )
-        .order_by(SessionAnalysisCheckpoint.chunk_index, SessionAnalysisCheckpoint.sub_chunk_index)
-        .all()
-    )
-    results: list[tuple[int, int, RecognitionResultDTO]] = []
-    events: list[EventRecord] = []
-    for checkpoint in checkpoints:
-        if checkpoint.event_payload is None:
-            continue
-        result = RecognitionResultDTO.model_validate(checkpoint.event_payload)
-        results.append((checkpoint.chunk_index, checkpoint.sub_chunk_index, result))
-        for item in result.events:
-            events.append(
-                build_event_record_from_recognized_event(
-                    session, item, base_offset_seconds=checkpoint.start_offset_seconds
-                )
-            )
-    return results, events
-
-
 @celery_app.task(bind=True, max_retries=DEADLOCK_MAX_RETRIES)  # type: ignore[untyped-decorator]
-def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> dict[str, Any]:  # noqa: C901
+def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> dict[str, Any]:
     """Analyze a sealed session using LLM vision.
 
-    Dispatched to the analysis_hot or analysis_full queue by the caller and
-    consumed by the dedicated celery_vision_worker (--concurrency=1).
-    The worker process runs at most one session analysis task at a time.
+    Dispatched to ``analysis_hot`` or ``analysis_full`` and consumed
+    by the dedicated ``celery_vision_worker --concurrency=1``; the
+    worker process runs at most one session analysis task at a
+    time. The fencing guards in the analysis stages are the new
+    defence against two workers overlapping on the same
+    ``(session, queue_task_id)``.
     """
+    queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
+    last_prompt_text: str | None = None
+    last_response_text: str | None = None
+    last_raw_response_text: str | None = None
+
     with task_db_session() as db:
-        session = None
-        last_chunk_index: int | None = None
-        last_sub_chunk_index: int | None = None
-        last_prompt_text: str | None = None
-        last_response_text: str | None = None
-        last_raw_response_text: str | None = None
-        current_checkpoint: SessionAnalysisCheckpoint | None = None
-        client: Any | None = None
-        queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
-        task_log = bind_or_create_running_task_log(
-            db,
-            queue_task_id=queue_task_id or None,
-            task_type=TaskType.SESSION_ANALYSIS,
-            task_target_id=session_id,
-            detail_json={"priority": priority},
+        chunks = build_session_video_chunks(
+            db, session_id, chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS
         )
-        if task_log is None:
-            logger.warning(
-                "Stale analysis message %s for session %s; task log already finalized, skipping",
-                queue_task_id,
-                session_id,
+        chunk_sub_chunks_list = [
+            build_chunk_sub_chunks(chunk, db, sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS)
+            for chunk in chunks
+        ]
+        plan = assemble_chunk_plan(
+            session_id=session_id,
+            chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
+            sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS,
+            chunks=chunks,
+            chunk_sub_chunks_list=chunk_sub_chunks_list,
+        )
+        claim, skip = claim_session_for_analysis(
+            db,
+            session_id=session_id,
+            priority=priority,
+            queue_task_id=queue_task_id,
+            analysis_run_id=plan.analysis_run_id,
+        )
+        if claim is None and skip is None:
+            return finalize_stale_message()
+        if claim is None:
+            assert skip is not None
+            from src.models.task_log import TaskLog
+
+            task_log = (
+                db.query(TaskLog)
+                .filter_by(task_target_id=session_id, task_type="session_analysis")
+                .order_by(TaskLog.id.desc())
+                .first()
             )
-            return {"skipped": True, "reason": "stale_message"}
-        db.commit()
+            assert task_log is not None
+            return finalize_skip(
+                db,
+                task_log=task_log,
+                session_id=session_id,
+                outcome=skip,
+                priority=priority,
+            )
+        home_context = build_home_context(db)
+        client, provider = _build_provider_client(db)
+        success_return: dict[str, Any]
 
         try:
-            ensure_task_not_cancelled(
-                db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
+            loop_result = _run_sub_chunk_loop(
+                db=db,
+                self=self,
+                claim=claim,
+                plan=plan,
+                chunk_sub_chunks_list=chunk_sub_chunks_list,
+                home_context=home_context,
+                client=client,
+                provider=provider,
+                priority=priority,
             )
-            session, skip_reason = _claim_session_for_analysis(db, session_id)
-            if skip_reason is not None:
-                return _skip_analysis_task(db, task_log, session_id, skip_reason, priority)
-            if session is None:
-                return _skip_analysis_task(db, task_log, session_id, "not_found", priority)
-
-            source = db.query(VideoSource).filter(VideoSource.id == session.source_id).first()
-            if not source:
-                raise ValueError(f"Video source {session.source_id} not found")
-
-            home_context = build_home_context(db)
-            chunks = build_session_video_chunks(
-                db,
-                session.id,
-                chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
-            )
-            analysis_run_id = _analysis_run_id(chunks)
-            client, provider = _build_provider_client(db)
-
-            parse_modes: list[str] = []
-            events_to_persist: list[EventRecord] = []
-            structured_results: list[tuple[int, int, RecognitionResultDTO]] = []
-            sub_chunk_count = 0
-            for chunk in chunks:
-                ensure_task_not_cancelled(
+            if isinstance(loop_result, dict):
+                return loop_result
+            sub_chunk_count, parse_modes, late_worker = loop_result
+            if late_worker:
+                return {"late_worker": True, "session_id": session_id}
+            try:
+                success_return = finalize_session_success(
                     db,
-                    task_log.id,
-                    default_message=f"Analysis cancelled for session {session_id}",
+                    claim=claim.to_guards(),
+                    session=claim.session,
+                    task_log=claim.task_log,
+                    analysis_run_id=plan.analysis_run_id,
+                    chunk_count=len(plan.chunks),
+                    sub_chunk_count=sub_chunk_count,
+                    priority=priority,
+                    raw_mp4_num_frames=RAW_MP4_NUM_FRAMES,
+                    chunk_seconds=plan.chunk_seconds,
+                    sub_chunk_seconds=plan.sub_chunk_seconds,
+                    parse_modes=parse_modes,
+                    replace_session_events_fn=_replace_session_events,
                 )
-                last_chunk_index = chunk.chunk_index
-                sub_chunks = build_chunk_sub_chunks(
-                    chunk,
+            except Exception as exc:
+                # finalize_session_success can raise (e.g. a deadlock
+                # on event-row INSERT); route that through the same
+                # deadlock-retry / permanent-failure machinery used
+                # for sub-chunk failures.
+                raw_text = getattr(client, "get_last_raw_response_text", lambda: None)()
+                if raw_text:
+                    last_raw_response_text = raw_text
+                last_response_text = last_raw_response_text or last_response_text
+                _handle_top_level_failure(
                     db,
-                    sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS,
+                    self=self,
+                    claim=claim,
+                    exc=exc,
+                    last_prompt_text=last_prompt_text,
+                    last_response_text=last_response_text,
+                    last_raw_response_text=last_raw_response_text,
+                    priority=priority,
                 )
-                for sub_chunk in sub_chunks:
-                    ensure_task_not_cancelled(
-                        db,
-                        task_log.id,
-                        default_message=(
-                            f"Analysis cancelled for session {session_id}, "
-                            f"chunk {chunk.chunk_index}-{sub_chunk.sub_chunk_index}"
-                        ),
-                    )
-                    last_chunk_index = chunk.chunk_index
-                    last_sub_chunk_index = sub_chunk.sub_chunk_index
-
-                    payload_chunk = session_chunk_from_sub_chunk(
-                        sub_chunk, parent_chunk_index=chunk.chunk_index
-                    )
-                    video_data_url = build_chunk_video_data_url(payload_chunk)
-                    extra_body = {
-                        "media_io_kwargs": {
-                            "video": {
-                                "num_frames": RAW_MP4_NUM_FRAMES,
-                            }
-                        }
-                    }
-                    video_part = {
-                        "type": "video_url",
-                        "video_url": {"url": video_data_url},
-                    }
-
-                    system_prompt, user_prompt = _build_prompts(
-                        source, home_context, session, sub_chunk
-                    )
-                    last_prompt_text = user_prompt
-                    input_fingerprint = _sub_chunk_fingerprint(
-                        system_prompt, user_prompt, video_data_url, sub_chunk
-                    )
-                    current_checkpoint = _checkpoint_for_work(
-                        db,
-                        session_id=session.id,
-                        analysis_run_id=analysis_run_id,
-                        chunk_index=chunk.chunk_index,
-                        sub_chunk=sub_chunk,
-                        input_fingerprint=input_fingerprint,
-                    )
-                    if current_checkpoint.state == "success":
-                        continue
-                    current_checkpoint.state = "processing"
-                    current_checkpoint.attempt_count += 1
-                    renew_task_lease(db, task_log.id, queue_task_id or None)
-                    db.commit()
-                    enforce_token_quota(db, provider)
-
-                    response_text = client.chat_completion(
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {
-                                "role": "user",
-                                "content": [
-                                    video_part,
-                                    {"type": "text", "text": user_prompt},
-                                ],
-                            },
-                        ],
-                        temperature=0,
-                        max_tokens=8192,
-                        response_format={"type": "json_object"},
-                        extra_body=extra_body,
-                    )
-                    last_response_text = response_text
-                    last_raw_response_text = client.get_last_raw_response_text()
-                    if not response_text:
-                        raise ValueError(
-                            f"Empty response from vision provider for chunk "
-                            f"{chunk.chunk_index}-{sub_chunk.sub_chunk_index}"
-                        )
-
-                    recognition_result = parse_video_recognition_output(response_text)
-                    usage = client.get_last_usage() or {}
-                    prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                    completion_tokens = int(usage.get("completion_tokens") or 0)
-                    total_tokens = int(usage.get("total_tokens") or 0)
-                    if total_tokens <= 0:
-                        total_tokens = prompt_tokens + completion_tokens
-                    current_checkpoint.event_payload = recognition_result.model_dump(mode="json")
-                    current_checkpoint.prompt_tokens = prompt_tokens
-                    current_checkpoint.completion_tokens = completion_tokens
-                    current_checkpoint.total_tokens = total_tokens
-                    current_checkpoint.state = "success"
-                    current_checkpoint.completed_at = datetime.now(timezone.utc)
-                    record_token_usage(
-                        db,
-                        provider_id=provider.id,
-                        provider_name_snapshot=provider.provider_name,
-                        scene="video_analysis",
-                        usage=usage,
-                        session_id=session.id,
-                        analysis_checkpoint_id=current_checkpoint.id,
-                    )
-                    renew_task_lease(db, task_log.id, queue_task_id or None)
-                    db.commit()
-                    parse_modes.append("new")
-                    sub_chunk_count += 1
-
-            ensure_task_not_cancelled(
-                db, task_log.id, default_message=f"Analysis cancelled for session {session_id}"
-            )
-            structured_results, events_to_persist = _completed_results(db, session, analysis_run_id)
-            _aggregate_session_fields(session, structured_results, events_to_persist)
-            replaced_deleted_count = _replace_session_events(db, session_id, events_to_persist)
-
-            completed = transition_session(
-                db,
-                session.id,
-                SessionAnalysisStatus.ANALYZING,
-                SessionAnalysisStatus.SUCCESS,
-                reason="analysis_completed",
-                source="analyze_session_task",
-                task_log=task_log,
-            )
-            if not completed.applied:
-                return _skip_analysis_task(
-                    db, task_log, session_id, "completion_transition_conflict", priority
-                )
-            session.last_analyzed_at = datetime.now(timezone.utc)
-
-            transition_task_log(
-                db,
-                task_log.id,
-                TaskStatus.RUNNING,
-                TaskStatus.SUCCESS,
-                reason="analysis_completed",
-                source="analyze_session_task",
-            )
-            finalize_task_log(
-                task_log,
-                TaskStatus.SUCCESS,
-                f"Analyzed session in {len(chunks)} chunks / "
-                f"{sub_chunk_count} sub-chunks, created {len(events_to_persist)} events.",
-                {
-                    "session_id": session_id,
-                    "events_created": len(events_to_persist),
-                    "events_replaced_deleted": replaced_deleted_count,
-                    "chunk_count": len(chunks),
-                    "sub_chunk_count": sub_chunk_count,
-                    "chunk_seconds": settings.ANALYZER_SEGMENT_SECONDS,
-                    "llm_chunk_seconds": settings.ANALYZER_LLM_CHUNK_SECONDS,
-                    "media_num_frames": RAW_MP4_NUM_FRAMES,
-                    "parse_modes": parse_modes,
-                    "priority": priority,
-                },
-            )
-            db.commit()
-            return {
-                "events_created": len(events_to_persist),
-                "chunk_count": len(chunks),
-                "sub_chunk_count": sub_chunk_count,
-            }
-
-        except TaskCancellationRequested as exc:
-            logger.info("Analysis task cancelled for session %s", session_id)
-            db.rollback()
-            refreshed_task_log = get_task_log_for_update(db, task_log.id)
-            if refreshed_task_log is None:
                 raise
-
-            refreshed_session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
-            if (
-                refreshed_session is not None
-                and refreshed_session.analysis_status == SessionAnalysisStatus.ANALYZING
-            ):
-                transition_session(
-                    db,
-                    refreshed_session.id,
-                    SessionAnalysisStatus.ANALYZING,
-                    SessionAnalysisStatus.SEALED,
-                    reason="analysis_cancelled",
-                    source="analyze_session_task",
-                    task_log=refreshed_task_log,
-                )
-
-            transition_task_log(
-                db,
-                refreshed_task_log.id,
-                TaskStatus.RUNNING,
-                TaskStatus.CANCELLED,
-                reason="analysis_cancelled",
-                source="analyze_session_task",
-            )
-            finalize_cancelled_task_log(
-                refreshed_task_log,
-                str(exc),
-                {
-                    "session_id": session_id,
-                    "cancelled": True,
-                    "failed_chunk_index": last_chunk_index,
-                    "failed_sub_chunk_index": last_sub_chunk_index,
-                    "priority": priority,
-                },
-            )
-            db.commit()
-            return {
-                "cancelled": True,
-                "session_id": session_id,
-                "chunk_index": last_chunk_index,
-                "sub_chunk_index": last_sub_chunk_index,
-            }
-
-        except Exception as e:
-            logger.exception(
-                "Failed to analyze session %s, chunk=%s, prompt=%r, raw_response=%r",
-                session_id,
-                last_chunk_index,
-                truncate_text(last_prompt_text, 4000),
-                truncate_text(last_raw_response_text, 16000)
-                or truncate_text(last_response_text, 16000),
-            )
-            db.rollback()
-
-            if current_checkpoint is not None:
-                current_checkpoint = db.merge(current_checkpoint)
-                current_checkpoint.state = "error"
-                current_checkpoint.last_error = truncate_text(str(e), 500) or str(e)
-                current_checkpoint.error_type = type(e).__name__
-                db.commit()
-
-            if _is_deadlock_operational_error(e) and self.request.retries < DEADLOCK_MAX_RETRIES:
-                countdown = 2**self.request.retries
-                _mark_session_sealed_for_retry(db, session_id)
-                task_log.retry_count = self.request.retries + 1
-                task_log.message = (
-                    f"Deadlock detected, retry {self.request.retries + 1}/"
-                    f"{DEADLOCK_MAX_RETRIES} in {countdown}s"
-                )
-                db.commit()
-                raise self.retry(exc=e, countdown=countdown) from e
-
-            transition_task_log(
-                db,
-                task_log.id,
-                TaskStatus.RUNNING,
-                TaskStatus.FAILED,
-                reason="analysis_failed",
-                source="analyze_session_task",
-            )
-            finalize_task_log(
-                task_log,
-                TaskStatus.FAILED,
-                truncate_text(str(e), 500) or str(e),
-                {
-                    "session_id": session_id,
-                    "failed_chunk_index": last_chunk_index,
-                    "failed_sub_chunk_index": last_sub_chunk_index,
-                    "error_type": type(e).__name__,
-                    "prompt_text": truncate_text(last_prompt_text, 4000),
-                    "raw_response_excerpt": truncate_text(last_response_text, 1500),
-                    "raw_response_full": truncate_text(last_response_text, 16000),
-                    "raw_llm_response_excerpt": truncate_text(last_raw_response_text, 1500),
-                    "raw_llm_response_full": truncate_text(last_raw_response_text, 16000),
-                    "priority": priority,
-                },
-            )
-            if session:
-                failed_status = (
-                    SessionAnalysisStatus.PARTIAL
-                    if current_checkpoint is not None
-                    else SessionAnalysisStatus.FAILED
-                )
-                transition_session(
-                    db,
-                    session.id,
-                    SessionAnalysisStatus.ANALYZING,
-                    failed_status,
-                    reason="analysis_failed",
-                    source="analyze_session_task",
-                    task_log=task_log,
-                )
-            db.commit()
-            raise
         finally:
             close = getattr(client, "close", None)
             if close is not None:
                 close()
+    return success_return
+
+
+def _handle_top_level_failure(
+    db: Any,
+    *,
+    self: Any,
+    claim: Any,
+    exc: BaseException,
+    last_prompt_text: str | None,
+    last_response_text: str | None,
+    last_raw_response_text: str | None,
+    priority: str,
+) -> None:
+    """Top-level error handler: deadlock retry, FAILED finalize, raise."""
+    if is_deadlock_operational_error(exc) and self.request.retries < DEADLOCK_MAX_RETRIES:
+        from src.services.analysis.claim import mark_session_sealed_for_retry
+
+        mark_session_sealed_for_retry(db, claim.session.id)
+        claim.task_log.retry_count = self.request.retries + 1
+        claim.task_log.message = (
+            f"Deadlock detected, retry {self.request.retries + 1}/"
+            f"{DEADLOCK_MAX_RETRIES} in {2**self.request.retries}s"
+        )
+        db.commit()
+        raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
+    from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+
+    current_checkpoint = (
+        db.query(SessionAnalysisCheckpoint)
+        .filter(
+            SessionAnalysisCheckpoint.session_id == claim.session.id,
+            SessionAnalysisCheckpoint.analysis_run_id == claim.to_guards().analysis_run_id,
+            SessionAnalysisCheckpoint.state == "processing",
+        )
+        .order_by(SessionAnalysisCheckpoint.id.desc())
+        .first()
+    )
+    if current_checkpoint is not None:
+        mark_checkpoint_error(db, claim=claim.to_guards(), checkpoint=current_checkpoint, error=exc)
+    record_recovery_failure(
+        db,
+        claim=claim.to_guards(),
+        task_log=claim.task_log,
+        error=exc,
+        failed_chunk_index=None,
+        failed_sub_chunk_index=None,
+        last_prompt_text=last_prompt_text,
+        last_response_text=last_response_text,
+        last_raw_response_text=last_raw_response_text,
+        priority=priority,
+        session_id=claim.session.id,
+    )
+    if current_checkpoint is not None:
+        record_partial_failure_transition(db, session=claim.session, task_log=claim.task_log)
+    else:
+        record_failed_transition(db, session=claim.session, task_log=claim.task_log)
+    db.commit()
+    logger.exception(
+        "Failed to analyze session %s, prompt=%r, raw_response=%r",
+        claim.session.id,
+        truncate_text(last_prompt_text, 4000),
+        truncate_text(last_raw_response_text, 16000) or truncate_text(last_response_text, 16000),
+    )
+
+
+def _run_sub_chunk_loop(
+    *,
+    db: Any,
+    self: Any,
+    claim: Any,
+    plan: Any,
+    chunk_sub_chunks_list: list[list[Any]],
+    home_context: dict[str, Any],
+    client: Any,
+    provider: Any,
+    priority: str,
+) -> tuple[int, list[str], bool] | dict[str, Any]:
+    """Iterate over the chunk plan; one short txn per sub-chunk stage.
+
+    Returns ``(sub_chunk_count, parse_modes, late_worker)`` on the
+    normal / late-worker paths, or a structured ``dict`` (the same
+    shape :func:`cancel_session` emits) when the loop exits through
+    the ``TaskCancellationRequested`` branch. The orchestrator
+    dispatches on ``isinstance(..., dict)`` before unpacking the
+    tuple.
+
+    The orchestration session ``db`` stays open for the lifetime of
+    the call so the in-memory ``claim.session`` / ``claim.task_log``
+    stay attached; per-sub-chunk DB writes go through the dedicated
+    :func:`_run_one_sub_chunk` helper which opens a fresh
+    transaction (released between the pre / post stages so the LLM
+    HTTP call happens with **no** checked-out connection).
+    """
+    guards = claim.to_guards()
+    sub_chunk_count = 0
+    parse_modes: list[str] = []
+    last_prompt_text: str | None = None
+    last_response_text: str | None = None
+    last_raw_response_text: str | None = None
+    try:
+        # Mirror the pre-Wave-5 cancel-fence placement: checked once
+        # after the claim succeeds (before any chunk work) so a cancel
+        # request that arrived during the claim is honoured even when
+        # only one sub-chunk would otherwise have been processed.
+        ensure_task_not_cancelled(
+            db,
+            claim.task_log.id,
+            default_message=f"Analysis cancelled for session {claim.session.id}",
+        )
+        for chunk in plan.chunks:
+            ensure_task_not_cancelled(
+                db,
+                claim.task_log.id,
+                default_message=f"Analysis cancelled for session {claim.session.id}",
+            )
+            chunk_sub_chunks = chunk_sub_chunks_list[chunk.chunk_index]
+            for sub_chunk_dto in chunk_sub_chunks:
+                ensure_task_not_cancelled(
+                    db,
+                    claim.task_log.id,
+                    default_message=(
+                        f"Analysis cancelled for session {claim.session.id}, "
+                        f"chunk {chunk.chunk_index}-{sub_chunk_dto.sub_chunk_index}"
+                    ),
+                )
+                plan_item = SubChunkPlan(
+                    chunk_index=sub_chunk_dto.chunk_index,
+                    sub_chunk_index=sub_chunk_dto.sub_chunk_index,
+                    start_offset_seconds=sub_chunk_dto.start_offset_seconds,
+                    duration_seconds=sub_chunk_dto.duration_seconds,
+                    file_paths=tuple(sub_chunk_dto.file_paths),
+                )
+                system_prompt, user_prompt = _build_prompts(
+                    claim.source,
+                    home_context,
+                    claim.session,
+                    sub_chunk_dto,
+                )
+                last_prompt_text = user_prompt
+                projected_chunk = session_chunk_from_sub_chunk(
+                    sub_chunk_dto, parent_chunk_index=chunk.chunk_index
+                )
+                video_data_url = build_chunk_video_data_url(projected_chunk)
+                extra_body = build_sub_chunk_extra_body()
+                prepared, result = _run_one_sub_chunk(
+                    db=db,
+                    self=self,
+                    claim=claim,
+                    guards=guards,
+                    chunk_index=chunk.chunk_index,
+                    sub_chunk=sub_chunk_dto,
+                    plan_item=plan_item,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    projected_chunk=projected_chunk,
+                    video_data_url=video_data_url,
+                    extra_body=extra_body,
+                    client=client,
+                    provider=provider,
+                )
+                if result is not None:
+                    last_response_text = getattr(result, "raw_response_text", None) or ""
+                    last_raw_response_text = last_response_text
+                if prepared.did_call_llm:
+                    sub_chunk_count += 1
+                    parse_modes.append("new")
+        # Post-loop cancel fence: a cancel that arrives between the
+        # last sub-chunk's commit and the ``_completed_results``
+        # query must still roll the session back to ``SEALED``
+        # rather than to ``PARTIAL``.
+        ensure_task_not_cancelled(
+            db,
+            claim.task_log.id,
+            default_message=f"Analysis cancelled for session {claim.session.id}",
+        )
+    except TaskCancellationRequested as exc:
+        return cancel_session(
+            db,
+            task_log_id=claim.task_log.id,
+            session_id=claim.session.id,
+            priority=priority,
+            last_chunk_index=None,
+            last_sub_chunk_index=None,
+            message=str(exc),
+        )
+    except DeadlockRetrySignal as exc:
+        from src.services.analysis.failure import handle_deadlock_retry_exhausted
+
+        handle_deadlock_retry_exhausted(db, exc=exc, claim=claim, session_id=claim.session.id)
+        raise self.retry(exc=exc.original, countdown=2 ** (self.request.retries + 1)) from exc
+    except LateWorkerFencingError as exc:
+        logger.info(
+            "Late worker detected for session %s: %s; exiting cleanly",
+            claim.session.id,
+            exc,
+        )
+        return sub_chunk_count, parse_modes, True
+    except Exception as exc:  # noqa: BLE001 — boundary handler for the orchestrator
+        return _handle_loop_exception(
+            db=db,
+            self=self,
+            claim=claim,
+            guards=guards,
+            priority=priority,
+            last_prompt_text=last_prompt_text,
+            last_response_text=last_response_text,
+            last_raw_response_text=last_raw_response_text,
+            exc=exc,
+            sub_chunk_count=sub_chunk_count,
+            parse_modes=parse_modes,
+        )
+    return sub_chunk_count, parse_modes, False
+
+
+def _handle_loop_exception(
+    *,
+    db: Any,
+    self: Any,
+    claim: Any,
+    guards: ClaimGuards,
+    priority: str,
+    last_prompt_text: str | None,
+    last_response_text: str | None,
+    last_raw_response_text: str | None,
+    exc: BaseException,
+    sub_chunk_count: int,
+    parse_modes: list[str],
+) -> tuple[int, list[str], bool]:
+    """Unwrap + classify an exception escaped from the sub-chunk loop.
+
+    Mirrors the pre-Wave-5 orchestrator's exception handler: a PG
+    deadlock triggers ``self.retry``; a
+    :class:`LateWorkerFencingError` becomes a silent no-op; any
+    other exception marks the session PARTIAL (if a sub-chunk was
+    in-flight) or FAILED (if no work had started) and re-raises so
+    Celery records the failure.
+    """
+    from src.services.analysis.errors import RawResponseCapture
+
+    if isinstance(exc, RawResponseCapture):
+        last_raw_response_text = exc.raw_response_text or last_raw_response_text
+        last_response_text = last_raw_response_text or last_response_text
+        exc = exc.original
+    if is_deadlock_operational_error(exc) and self.request.retries < DEADLOCK_MAX_RETRIES:
+        from src.services.analysis.claim import mark_session_sealed_for_retry
+
+        mark_session_sealed_for_retry(db, claim.session.id)
+        claim.task_log.retry_count = self.request.retries + 1
+        claim.task_log.message = (
+            f"Deadlock detected, retry {self.request.retries + 1}/"
+            f"{DEADLOCK_MAX_RETRIES} in {2**self.request.retries}s"
+        )
+        db.commit()
+        raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
+    from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+
+    current_checkpoint = (
+        db.query(SessionAnalysisCheckpoint)
+        .filter(
+            SessionAnalysisCheckpoint.session_id == claim.session.id,
+            SessionAnalysisCheckpoint.analysis_run_id == guards.analysis_run_id,
+            SessionAnalysisCheckpoint.state == "processing",
+        )
+        .order_by(SessionAnalysisCheckpoint.id.desc())
+        .first()
+    )
+    if current_checkpoint is not None:
+        mark_checkpoint_error(db, claim=guards, checkpoint=current_checkpoint, error=exc)
+    record_recovery_failure(
+        db,
+        claim=guards,
+        task_log=claim.task_log,
+        error=exc,
+        failed_chunk_index=None,
+        failed_sub_chunk_index=None,
+        last_prompt_text=last_prompt_text,
+        last_response_text=last_response_text,
+        last_raw_response_text=last_raw_response_text,
+        priority=priority,
+        session_id=claim.session.id,
+    )
+    if current_checkpoint is not None:
+        record_partial_failure_transition(db, session=claim.session, task_log=claim.task_log)
+    else:
+        record_failed_transition(db, session=claim.session, task_log=claim.task_log)
+    db.commit()
+    logger.exception(
+        "Failed to analyze session %s, prompt=%r, raw_response=%r",
+        claim.session.id,
+        truncate_text(last_prompt_text, 4000),
+        truncate_text(last_raw_response_text, 16000) or truncate_text(last_response_text, 16000),
+    )
+    raise exc from None
+
+
+class _PreparedSubChunk:
+    """Per-sub-chunk state produced by the ``pre`` stage."""
+
+    __slots__ = (
+        "checkpoint_id",
+        "did_call_llm",
+        "extra_body",
+        "plan_item",
+        "system_prompt",
+        "user_prompt",
+        "video_data_url",
+    )
+
+    def __init__(
+        self,
+        *,
+        checkpoint_id: int,
+        system_prompt: str,
+        user_prompt: str,
+        plan_item: Any,
+        video_data_url: str,
+        extra_body: dict[str, Any],
+        did_call_llm: bool,
+    ) -> None:
+        self.checkpoint_id = checkpoint_id
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
+        self.plan_item = plan_item
+        self.video_data_url = video_data_url
+        self.extra_body = extra_body
+        self.did_call_llm = did_call_llm
+
+
+def _run_one_sub_chunk(
+    *,
+    db: Any,
+    self: Any,
+    claim: Any,
+    guards: ClaimGuards,
+    chunk_index: int,
+    sub_chunk: Any,
+    plan_item: Any,
+    system_prompt: str,
+    user_prompt: str,
+    projected_chunk: Any,
+    video_data_url: str,
+    extra_body: dict[str, Any],
+    client: Any,
+    provider: Any,
+) -> tuple[_PreparedSubChunk, Any]:
+    """Open / close a fresh transaction around the LLM HTTP call.
+
+    ``pre_db`` writes the ``processing`` state + lease renewal;
+    ``post_db`` writes the ``success`` state + LLMUsageLog + lease
+    renewal. Both transactions use a NEW ``task_db_session`` so the
+    LLM call sits between two connection-released windows — the
+    structural enforcement of "no DB connection during LLM call".
+
+    When the checkpoint is already ``state=success`` from a
+    previous partial run, the function returns without calling the
+    vision provider — the resumed run only re-charges the failed
+    sub-chunks.
+    """
+    with task_db_session() as pre_db:
+        checkpoint = get_or_create_checkpoint(
+            pre_db,
+            session_id=claim.session.id,
+            claim=guards,
+            sub_chunk=plan_item,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            video_data_url=video_data_url,
+        )
+        did_call_llm = checkpoint.state != "success"
+        if did_call_llm:
+            mark_checkpoint_processing(
+                pre_db,
+                claim=guards,
+                checkpoint=checkpoint,
+                lease_owner=claim.task_log.lease_owner or "",
+            )
+            renew_task_lease(pre_db, claim.task_log.id, claim.task_log.lease_owner or "")
+            enforce_token_quota(pre_db, provider)
+        pre_db.commit()
+        checkpoint_id = checkpoint.id
+        prepared = _PreparedSubChunk(
+            checkpoint_id=checkpoint_id,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            plan_item=plan_item,
+            video_data_url=video_data_url,
+            extra_body=extra_body,
+            did_call_llm=did_call_llm,
+        )
+
+    if not did_call_llm:
+        # Resumed run; the LLM call is intentionally skipped.
+        return prepared, None
+
+    # LLM / ffmpeg call — no DB connection held here.
+    from src.services.analysis.errors import RawResponseCapture
+
+    try:
+        result = execute_sub_chunk(
+            client=client,
+            provider=provider,
+            sub_chunk=plan_item,
+            plan_chunk_index=chunk_index,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            video_data_url=video_data_url,
+            extra_body=extra_body,
+            response_parser=parse_video_recognition_output,
+        )
+    except Exception as exc:
+        # If the LLM call or the parser raised, capture the raw
+        # gateway response (already captured inside
+        # ``execute_sub_chunk`` before parsing) so the failure log
+        # carries the same payload the pre-Wave-5 monolith used to
+        # surface. Re-raise the original exception so the
+        # orchestrator's deadlock / permanent-failure branches see
+        # the real cause.
+        raw_text = getattr(client, "get_last_raw_response_text", lambda: None)()
+        if isinstance(exc, RawResponseCapture):
+            raise
+        raise RawResponseCapture(exc, raw_text) from exc
+
+    with task_db_session() as post_db:
+        from src.models.session_analysis_checkpoint import (
+            SessionAnalysisCheckpoint,
+        )
+
+        post_db_checkpoint = (
+            post_db.query(SessionAnalysisCheckpoint)
+            .filter(SessionAnalysisCheckpoint.id == checkpoint_id)
+            .one()
+        )
+        write_sub_chunk_checkpoint(
+            post_db,
+            claim=guards,
+            checkpoint=post_db_checkpoint,
+            recognition_result=result.recognition_result,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.total_tokens,
+        )
+        write_token_usage(
+            post_db,
+            provider=provider,
+            checkpoint=post_db_checkpoint,
+            session_id=claim.session.id,
+            usage=result.usage,
+            record_token_usage_fn=record_token_usage,
+        )
+        renew_task_lease(post_db, claim.task_log.id, claim.task_log.lease_owner or "")
+        post_db.commit()
+    return prepared, result
+
+
+__all__ = [
+    "RAW_MP4_NUM_FRAMES",
+    "analyze_session_task",
+    "build_chunk_sub_chunks",
+    "build_chunk_video_data_url",
+    "build_home_context",
+    "build_session_video_chunks",
+    "enforce_token_quota",
+    "ensure_task_not_cancelled",
+    "parse_video_recognition_output",
+    "record_token_usage",
+    "renew_task_lease",
+    "session_chunk_from_sub_chunk",
+    "task_db_session",
+    "truncate_text",
+    "_build_prompts",
+    "_build_provider_client",
+    "_checkpoint_for_work",
+    "_claim_session_for_analysis",
+    "_replace_session_events",
+]
