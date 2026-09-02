@@ -126,17 +126,38 @@ RULES: tuple[BoundaryRule, ...] = (
         # shared helper as ``src.application.ports`` (by-design
         # importable from every layer; not an orchestrator / use case /
         # schema).
+        #
+        # ``src.application.pipeline.commands`` carries the
+        # ``SessionBuildCommand`` / ``AnalyzeSessionCommand`` / etc.
+        # frozen DTOs the ``TaskDispatcherPort`` Protocol references
+        # by name; a service that drives a dispatch must be able to
+        # instantiate them. Pure dataclasses — no orchestrator / use
+        # case / schema logic — importable from every layer for the
+        # same reason ``ports`` are.
+        #
+        # ``src.application.outbox.contracts`` / ``src.application.outbox.enqueue``
+        # are the write-only outbox-row enqueue seam the lease-recovery
+        # policy uses to bind the ``OutboxEvent`` to the recovered
+        # ``task_log`` in the **same** transaction as the recovery's
+        # ``TIMEOUT`` CAS UPDATE — the same "audit-row helper that
+        # sits in the same transaction as the state-machine CAS"
+        # shape that justifies ``src.application.transition_log``.
         excluded_target_subprefixes=(
             "src.application.ports",
             "src.application.transition_log",
+            "src.application.pipeline.commands",
+            "src.application.outbox.contracts",
+            "src.application.outbox.enqueue",
         ),
         owner_todo="Todo 5",
         description=(
             "Services are pure business rules; they must not depend on "
             "application-layer use cases / orchestrators / schemas. "
-            "``src.application.ports.*`` Protocol definitions and "
-            "``src.application.transition_log.*`` audit-row writers "
-            "are intentionally importable from every layer."
+            "``src.application.ports.*`` Protocol definitions, "
+            "``src.application.transition_log.*`` audit-row writers, "
+            "``src.application.pipeline.commands.*`` command DTOs, and "
+            "``src.application.outbox.{contracts,enqueue}.*`` outbox-row "
+            "writers are intentionally importable from every layer."
         ),
     ),
     BoundaryRule(

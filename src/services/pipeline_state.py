@@ -186,6 +186,9 @@ def transition_session(
         return TransitionResult(applied=False)
     if task_log is not None:
         _record_transition(task_log, from_status.value, to_status.value, reason, source)
+    synced_session = db.get(VideoSession, session_id)
+    if synced_session is not None:
+        synced_session.analysis_status = to_status
     record_transition_audit(
         db,
         aggregate_type=AGGREGATE_TYPE_VIDEO_SESSION,
@@ -250,7 +253,7 @@ def transition_task_log(
     )
     if not updated:
         return TransitionResult(applied=False)
-    db.refresh(task_log)
+    task_log.status = to_status
     _record_transition(task_log, from_status.value, to_status.value, reason, source)
     record_transition_audit(
         db,
