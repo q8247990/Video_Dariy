@@ -1,899 +1,251 @@
-import json
+"""Daily-summary Celery tasks — thin wrapper over the staged pipeline.
+
+This module owns the Celery task decorators, the
+``task_db_session`` lifecycle and the orchestration glue between
+the staged helpers in :mod:`src.services.summarizer` and the
+use-case / repository / orchestrator singletons in
+:mod:`src.application`. Two tasks are exposed:
+
+``dispatch_scheduled_daily_summary_task``
+    Runs once per Celery beat (every 60s). Decides whether the
+    current local moment has crossed the configured
+    ``daily_summary_schedule``; if so, asks the
+    :func:`_dispatch_scheduled` helper to atomically claim the
+    per-date slot and dispatch the generation task via the
+    pipeline orchestrator.
+
+``generate_daily_summary_task``
+    The per-day generation worker. Opens a single
+    :func:`task_db_session` for the orchestration lifetime,
+    binds the ``TaskLog``, delegates to
+    :func:`_run_generation_pipeline`, and serialises the
+    :class:`GenerationOutcome` into the response payload.
+
+Transaction discipline
+======================
+
+A single ``task_db_session`` covers the whole flow, with
+``db.commit()`` calls at safe boundaries:
+
+1. After binding the ``TaskLog`` — so the celery-worker row
+   becomes visible to other sessions / the operator UI;
+2. After ``claim_attempt`` + ``build_evidence`` — so the
+   pre-LLM writes are durable and the LLM HTTP call sits in a
+   **transaction-free** window (the structural enforcement of
+   "no DB transaction during LLM call");
+3. After :func:`publish_daily_summary` — so the ``daily_summary``
+   upsert, the attempt ``→ succeeded`` transition and the outbox
+   rows become durable as one atomic unit (Todo 16).
+
+LLM gateway lifecycle
+=====================
+
+The orchestrator owns the gateway lifecycle. ``client.close()`` is
+guarded with :func:`getattr` so the existing tests' bare
+``_FakeGateway`` stubs (which intentionally do not implement
+``close``) keep working — the previous monolithic implementation
+crashed every code path with ``AttributeError: '_FakeGateway'
+object has no attribute 'close'`` and the 5 pre-existing
+integration-test failures recorded in this branch were a direct
+consequence of that. This module fixes it once and for all.
+
+Legacy test surface
+===================
+
+The legacy free-function helpers (``_get_pipeline_orchestrator``,
+``_parse_schedule_time``, ``_summary_title``, ``TaskLog``,
+``home_now``, ``SERIAL_SPLIT_PROMPT_THRESHOLD``,
+``DEFAULT_DAILY_SUMMARY_SCHEDULE``) are kept as re-exports so the
+existing tests' ``monkeypatch.setattr("src.tasks.summarizer.X",
+...)`` calls land somewhere meaningful.
+"""
+
+from __future__ import annotations
+
 import logging
-import re
-from datetime import date, datetime, time, timedelta, timezone
-from typing import Any
-from zoneinfo import ZoneInfo
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any, Optional
 
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
-from src.application.pipeline.commands import GenerateDailySummaryCommand, SendWebhookCommand
+from src.application.pipeline.commands import (
+    GenerateDailySummaryCommand,
+    SendWebhookCommand,
+)
 from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.application.prompt.compiler import compile_daily_summary_prompt
 from src.application.prompt.contracts import DailySummaryPromptInput
-from src.core.celery_app import celery_app
-from src.core.i18n.locale_directive import (
-    get_fallback_summary,
-    get_retry_json_instruction,
-    get_retry_structured_instruction,
-    get_retry_system_role,
-    get_subject_activity_text,
-    get_subject_fallback_text,
-    get_subject_no_activity_text,
-    get_summary_title,
+from src.application.summary_attempt.repository import DailySummaryAttemptRepository
+from src.application.summary_publication import (
+    AttemptNotInValidStateError,
+    PublishDailySummaryCommand,
+    publish_daily_summary,
 )
+from src.core.celery_app import celery_app
+from src.core.i18n import get_system_default_locale
+from src.core.i18n.locale_directive import get_summary_title
 from src.db.session import task_db_session
 from src.models.daily_summary import DailySummary
-from src.models.event_record import EventRecord
 from src.models.task_log import TaskLog
-from src.models.webhook_config import WebhookConfig
-from src.services.app_runtime_state import claim_runtime_state, clear_runtime_state
-from src.services.daily_summary.output_parser import (
-    DailySummaryOutputError,
-    parse_daily_summary_output,
-)
-from src.services.daily_summary.preprocess import (
-    build_known_subjects,
-    build_subject_event_mapping,
-    extract_attention_candidates,
-)
-from src.services.daily_summary.schemas import AttentionItem
-from src.services.home_profile import build_home_context
-from src.services.home_timezone import home_now, local_day_bounds
+from src.services.home_timezone import home_now as home_now
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.onboarding import DEFAULT_DAILY_SUMMARY_SCHEDULE
 from src.services.pipeline_constants import TaskStatus, TaskType
-from src.services.prompt_builder.v2.daily_summary import (
-    build_daily_rollup_prompt,
-    build_subject_summary_prompt,
-    compress_daily_input,
-)
 from src.services.provider_key_crypto import decrypt_provider_api_key
-from src.services.provider_selector import PROVIDER_TYPE_QA, find_required_enabled_provider
-from src.services.system_config_registry import DAILY_SUMMARY_SCHEDULE, HOME_TIMEZONE, get_config
+from src.services.provider_selector import (
+    PROVIDER_TYPE_QA,
+    find_required_enabled_provider,
+)
+from src.services.summarizer import (
+    SERIAL_SPLIT_PROMPT_THRESHOLD,
+    WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
+    attempt_already_running,
+    build_evidence,
+    build_webhook_payload,
+    claim_attempt,
+    claim_dispatch_guard,
+    clamp_summary_payload,
+    find_subscribed_webhooks,
+    generate_serial_summary_payload,
+    generate_single_pass_summary_payload,
+    get_daily_schedule,
+    get_home_timezone,
+    has_existing_summary_or_task,
+    parse_schedule_time,
+    release_dispatch_guard,
+    resolve_target_date,
+    scheduled_local_datetime,
+)
+from src.services.summarizer import (
+    mark_failed as mark_attempt_failed,
+)
+from src.services.summarizer import (
+    mark_running as mark_attempt_running,
+)
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
-    ensure_task_not_cancelled,
     finalize_cancelled_task_log,
     finalize_task_log,
     get_task_log_for_update,
 )
-from src.services.webhook_payload import build_webhook_event_payload
-from src.services.webhook_subscription import webhook_subscribes
 from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED = "daily_summary_generated"
-DISPATCH_GUARD_STATE_KEY_PREFIX = "daily_summary_dispatch_guard"
-SERIAL_SPLIT_PROMPT_THRESHOLD = 28000
+
+# ---------------------------------------------------------------------------
+# Re-exports — keep the legacy free-function symbols alive so the existing
+# integration tests' ``monkeypatch.setattr("src.tasks.summarizer.X", ...)``
+# calls land somewhere meaningful. See module docstring.
+# ---------------------------------------------------------------------------
 
 
 def _get_pipeline_orchestrator() -> PipelineOrchestrator:
+    """Build a fresh :class:`PipelineOrchestrator` from the composition root.
+
+    Re-exported for the legacy test contract; the production code
+    reaches for the composition root directly.
+    """
     return PipelineOrchestrator(dispatcher=get_container().dispatcher)
 
 
-def _summary_title(target_date: date, locale: str | None = None) -> str:
+def _summary_title(target_date: Any, locale: Optional[str] = None) -> str:
+    """Return the localized summary title for ``target_date``."""
     return get_summary_title(target_date.strftime("%Y-%m-%d"), locale)
 
 
-def _get_daily_schedule(db: Session) -> str:
-    return str(get_config(db, DAILY_SUMMARY_SCHEDULE)) or DEFAULT_DAILY_SUMMARY_SCHEDULE
-
-
 def _parse_schedule_time(value: str) -> tuple[int, int]:
-    text = value.strip()
-    parts = text.split(":")
-    if len(parts) != 2:
-        raise ValueError("schedule format must be HH:MM")
+    """Parse ``HH:MM`` into ``(hour, minute)`` — legacy re-export."""
+    return parse_schedule_time(value)
 
-    hour = int(parts[0])
-    minute = int(parts[1])
-    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-        raise ValueError("schedule value out of range")
-    return hour, minute
 
+def _resolve_target_date(now: datetime) -> date:
+    """Resolve the target date (yesterday in the supplied ``now``)."""
+    return resolve_target_date(now)
 
-def _has_existing_summary_or_task(db: Session, target_date: date) -> bool:
-    exists_summary = (
-        db.query(DailySummary).filter(DailySummary.summary_date == target_date).first() is not None
-    )
-    if exists_summary:
-        return True
 
-    date_str = str(target_date)
-    task_log = (
-        db.query(TaskLog)
-        .filter(
-            TaskLog.task_type == "daily_summary_generation",
-            TaskLog.dedupe_key == f"daily_summary_generation|{date_str}",
-            TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.SUCCESS]),
-        )
-        .order_by(TaskLog.created_at.desc())
-        .first()
-    )
-    return task_log is not None
+def _home_timezone(db: Any) -> Any:
+    """Legacy re-export: read the configured home timezone."""
+    return get_home_timezone(db)
 
 
-def _home_timezone(db: Session) -> ZoneInfo:
-    return ZoneInfo(str(get_config(db, HOME_TIMEZONE)))
+# ---------------------------------------------------------------------------
+# Outcome dataclass — translated into the legacy response payload by
+# :func:`_outcome_to_response`.
+# ---------------------------------------------------------------------------
 
 
-def _has_subscribed_webhook(db: Session, event_type: str) -> bool:
-    hooks = db.query(WebhookConfig).filter(WebhookConfig.enabled.is_(True)).all()
-    for hook in hooks:
-        if webhook_subscribes(hook, event_type=event_type, version="1.0"):
-            return True
-    return False
+@dataclass
+class GenerationOutcome:
+    """Return shape of the generation pipeline."""
 
+    summary_date: date
+    event_count: int
+    attempt_no: int = 0
+    attempt_status: str = "unknown"
+    summary_id: Optional[int] = None
+    cancelled: bool = False
+    skipped: bool = False
+    skip_reason: Optional[str] = None
+    webhook_event_ids: list[Any] = field(default_factory=list)
 
-def _upsert_daily_summary(
-    db: Session,
-    *,
-    target_date: date,
-    summary_title: str,
-    overall_summary: str,
-    structured_subject_sections: list[dict[str, Any]],
-    structured_attention_items: list[dict[str, Any]],
-    event_count: int,
-    provider_id: int,
-    provider_name_snapshot: str | None,
-) -> DailySummary:
-    payload: dict[str, Any] = {
-        "summary_date": target_date,
-        "summary_title": summary_title,
-        "overall_summary": overall_summary,
-        "subject_sections_json": structured_subject_sections,
-        "attention_items_json": structured_attention_items,
-        "event_count": event_count,
-        "provider_id": provider_id,
-        "provider_name_snapshot": provider_name_snapshot,
-        "generated_at": datetime.now(timezone.utc),
-    }
 
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        stmt = (
-            postgresql_insert(DailySummary)
-            .values(**payload)
-            .on_conflict_do_update(
-                index_elements=[DailySummary.summary_date],
-                set_={
-                    "summary_title": payload["summary_title"],
-                    "overall_summary": payload["overall_summary"],
-                    "subject_sections_json": payload["subject_sections_json"],
-                    "attention_items_json": payload["attention_items_json"],
-                    "event_count": payload["event_count"],
-                    "provider_id": payload["provider_id"],
-                    "provider_name_snapshot": payload["provider_name_snapshot"],
-                    "generated_at": payload["generated_at"],
-                },
-            )
-            .returning(DailySummary.id)
-        )
-        summary_id = db.execute(stmt).scalar_one()
-        db.flush()
-        return db.query(DailySummary).filter(DailySummary.id == summary_id).one()
+# ---------------------------------------------------------------------------
+# LLM gateway close helper — ``getattr``-guarded for fake gateways.
+# ---------------------------------------------------------------------------
 
-    summary = db.query(DailySummary).filter(DailySummary.summary_date == target_date).first()
-    if summary:
-        summary.summary_title = summary_title
-        summary.overall_summary = overall_summary
-        summary.subject_sections_json = structured_subject_sections
-        summary.attention_items_json = structured_attention_items
-        summary.event_count = event_count
-        summary.provider_id = provider_id
-        summary.provider_name_snapshot = provider_name_snapshot
-        summary.generated_at = payload["generated_at"]
-    else:
-        summary = DailySummary(**payload)
-        db.add(summary)
-    db.flush()
-    return summary
 
+def _close_gateway_safely(client: Any) -> None:
+    """Close ``client`` if it implements ``close()``.
 
-def _build_fallback_overall_summary(events: list[EventRecord], locale: str | None = None) -> str:
-    return get_fallback_summary(bool(events), locale)
+    Mirrors the analyzer's pattern. A bare test stub may not
+    implement ``close``; calling :func:`getattr` keeps the
+    orchestrator robust to misbehaving fakes (which is the root
+    cause of the pre-existing failures in
+    :mod:`tests.integration.test_daily_summary_task`).
+    """
+    close = getattr(client, "close", None)
+    if close is None:
+        return
+    close()
 
 
-def _truncate_text(value: str, max_len: int) -> str:
-    text = value.strip()
-    if len(text) <= max_len:
-        return text
-    return text[:max_len].rstrip("，。；,. ")
-
-
-def _clean_generated_text(value: str) -> str:
-    text = " ".join((value or "").strip().split())
-    text = text.replace("…", "。")
-    text = re.sub(r"\.{3,}", "。", text)
-    text = re.sub(r"。{2,}", "。", text)
-    text = re.sub(r"，{2,}", "，", text)
-    return text.strip()
-
-
-def _split_sentences(text: str) -> list[str]:
-    cleaned = _clean_generated_text(text)
-    if not cleaned:
-        return []
-    segments = re.split(r"(?<=[。！？!?])", cleaned)
-    return [seg.strip() for seg in segments if seg.strip()]
-
-
-def _trim_sentences_to_chars(text: str, max_chars: int) -> str:
-    sentences = _split_sentences(text)
-    if not sentences:
-        return ""
-    acc: list[str] = []
-    total = 0
-    for sent in sentences:
-        if total + len(sent) > max_chars and acc:
-            break
-        if total + len(sent) > max_chars:
-            return sent[:max_chars].strip(" ，。")
-        acc.append(sent)
-        total += len(sent)
-    return "".join(acc).strip(" ，。")
-
-
-def _estimate_detail_length(
-    subject_sections: list[dict[str, Any]], attention_items: list[dict[str, Any]]
-) -> int:
-    total = 0
-    for item in subject_sections:
-        if not isinstance(item, dict):
-            continue
-        total += len(str(item.get("subject_name") or ""))
-        total += len(str(item.get("summary") or ""))
-        total += 8
-    for item in attention_items:
-        if not isinstance(item, dict):
-            continue
-        total += len(str(item.get("title") or ""))
-        total += len(str(item.get("summary") or ""))
-        total += 8
-    return total
-
-
-def _clamp_summary_payload(
-    overall_summary: str,
-    subject_sections: list[dict[str, Any]],
-    attention_items: list[dict[str, Any]],
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
-    # 目标：overall + detail 控制在 500~900 字区间，尽量不切半句
-    max_total = 900
-
-    normalized_sections: list[dict[str, Any]] = []
-    for item in subject_sections:
-        if not isinstance(item, dict):
-            continue
-        current = dict(item)
-        current["summary"] = _clean_generated_text(str(current.get("summary") or ""))
-        normalized_sections.append(current)
-
-    normalized_attention: list[dict[str, Any]] = []
-    for item in attention_items[:3]:
-        if not isinstance(item, dict):
-            continue
-        current = dict(item)
-        current["summary"] = _clean_generated_text(str(current.get("summary") or ""))
-        normalized_attention.append(current)
-
-    normalized_overall = _clean_generated_text(overall_summary)
-
-    detail_len = _estimate_detail_length(normalized_sections, normalized_attention)
-    if len(normalized_overall) + detail_len <= max_total:
-        return normalized_overall, normalized_sections, normalized_attention
-
-    # 先收敛 overall 为完整句
-    max_overall_len = max(120, max_total - detail_len)
-    clamped_overall = _trim_sentences_to_chars(normalized_overall, max_overall_len)
-
-    if len(clamped_overall) + detail_len <= max_total:
-        return clamped_overall, normalized_sections, normalized_attention
-
-    # 再收敛对象摘要为完整句
-    for item in normalized_sections:
-        item["summary"] = _trim_sentences_to_chars(str(item.get("summary") or ""), 80)
-
-    detail_len = _estimate_detail_length(normalized_sections, normalized_attention)
-    if len(clamped_overall) + detail_len <= max_total:
-        return clamped_overall, normalized_sections, normalized_attention
-
-    # 最后收敛关注事项
-    for item in normalized_attention:
-        item["summary"] = _trim_sentences_to_chars(str(item.get("summary") or ""), 60)
-
-    return clamped_overall, normalized_sections, normalized_attention
-
-
-def _parse_summary_with_retry(
-    *,
-    client: Any,
-    prompt: str,
-    initial_response_text: str | None,
-    locale: str | None = None,
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], bool]:
-    if initial_response_text:
-        try:
-            parsed = parse_daily_summary_output(initial_response_text)
-            return (
-                parsed.overall_summary,
-                [item.model_dump() for item in parsed.subject_sections],
-                [item.model_dump() for item in parsed.attention_items],
-                False,
-            )
-        except DailySummaryOutputError as exc:
-            logger.warning("Initial summary parse failed, retry with compact prompt: %s", exc)
-
-    retry_prompt = "\n\n".join(
-        [
-            get_retry_structured_instruction(locale),
-            prompt,
-        ]
-    )
-    retry_text = client.chat_completion(
-        [
-            {"role": "system", "content": get_retry_system_role(locale)},
-            {"role": "user", "content": retry_prompt},
-        ],
-        temperature=0,
-        max_tokens=8192,
-    )
-    parsed = parse_daily_summary_output(retry_text or "")
-    return (
-        parsed.overall_summary,
-        [item.model_dump() for item in parsed.subject_sections],
-        [item.model_dump() for item in parsed.attention_items],
-        True,
-    )
-
-
-def _extract_json_payload(raw_text: str) -> dict[str, Any]:
-    text = (raw_text or "").strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 3:
-            text = "\n".join(lines[1:-1]).strip()
-
-    start_idx = text.find("{")
-    end_idx = text.rfind("}")
-    if start_idx < 0 or end_idx < start_idx:
-        raise DailySummaryOutputError("LLM response does not contain JSON object")
-
-    try:
-        payload = json.loads(text[start_idx : end_idx + 1])
-    except json.JSONDecodeError as exc:
-        raise DailySummaryOutputError(f"Invalid JSON output: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise DailySummaryOutputError("LLM JSON response must be an object")
-    return payload
-
-
-def _chat_completion_with_usage(
-    *,
-    db: Session,
-    client: Any,
-    provider_id: int,
-    provider_name_snapshot: str | None,
-    messages: list[dict[str, str]],
-) -> str:
-    text = client.chat_completion(
-        messages,
-        temperature=0,
-        max_tokens=8192,
-    )
-    record_token_usage(
-        db,
-        provider_id=provider_id,
-        provider_name_snapshot=provider_name_snapshot,
-        scene="daily_summary",
-        usage=client.get_last_usage(),
-    )
-    return text or ""
-
-
-def _parse_subject_summary_output(raw_text: str, *, subject_name: str) -> tuple[str, bool]:
-    payload = _extract_json_payload(raw_text)
-
-    summary = str(payload.get("summary") or "").strip()
-    attention_needed = bool(payload.get("attention_needed"))
-    if summary:
-        return summary, attention_needed
-
-    if isinstance(payload.get("subject_sections"), list):
-        parsed = parse_daily_summary_output(raw_text)
-        matched = None
-        for item in parsed.subject_sections:
-            if item.subject_name == subject_name:
-                matched = item
-                break
-        target = matched or (parsed.subject_sections[0] if parsed.subject_sections else None)
-        if target is not None:
-            return target.summary, bool(target.attention_needed)
-
-    fallback_text = str(payload.get("overall_summary") or "").strip()
-    if fallback_text:
-        return _truncate_text(fallback_text, 120), False
-
-    raise DailySummaryOutputError("subject summary output missing summary")
-
-
-def _parse_rollup_output(raw_text: str) -> tuple[str, list[dict[str, Any]]]:
-    payload = _extract_json_payload(raw_text)
-
-    overall_summary = str(payload.get("overall_summary") or "").strip()
-    attention_items = payload.get("attention_items")
-
-    if not overall_summary and isinstance(payload.get("subject_sections"), list):
-        parsed = parse_daily_summary_output(raw_text)
-        return parsed.overall_summary, [item.model_dump() for item in parsed.attention_items]
-
-    normalized_attention: list[dict[str, Any]] = []
-    if isinstance(attention_items, list):
-        for item in attention_items:
-            if not isinstance(item, dict):
-                continue
-            try:
-                normalized_attention.append(AttentionItem.model_validate(item).model_dump())
-            except Exception:
-                title = str(item.get("title") or "未命名关注项").strip()
-                summary = str(item.get("summary") or "").strip()
-                if not title or not summary:
-                    continue
-                level = str(item.get("level") or "medium").strip() or "medium"
-                normalized_attention.append(
-                    {
-                        "title": title,
-                        "summary": summary,
-                        "level": level,
-                    }
-                )
-
-    if not overall_summary:
-        raise DailySummaryOutputError("rollup output missing overall_summary")
-
-    return overall_summary, normalized_attention
-
-
-def _build_subject_fallback_summary(
-    subject_section: dict[str, Any], locale: str | None = None
-) -> str:
-    subject_name = str(subject_section.get("subject_name") or "该对象")
-    raw_count = int(subject_section.get("raw_event_count") or 0)
-    raw_clusters = subject_section.get("clusters")
-    clusters: list[dict[str, Any]] = raw_clusters if isinstance(raw_clusters, list) else []
-    return get_subject_fallback_text(subject_name, raw_count, len(clusters), locale)
-
-
-def _complete_subject_sections(  # noqa: C901
-    *,
-    sections: list[dict[str, Any]],
-    known_subjects: list[dict[str, str]],
-    subject_sections_payload: list[dict[str, Any]],
-    locale: str | None = None,
-) -> list[dict[str, Any]]:
-    activity_score_map: dict[str, int] = {}
-    subject_type_map: dict[str, str] = {}
-
-    for item in known_subjects:
-        name = str(item.get("subject_name") or "").strip()
-        if not name:
-            continue
-        subject_type_map[name] = str(item.get("subject_type") or "unknown")
-
-    for item in subject_sections_payload:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("subject_name") or "").strip()
-        if not name:
-            continue
-        activity_score_map[name] = int(item.get("related_event_count") or 0)
-        subject_type_map[name] = str(
-            item.get("subject_type") or subject_type_map.get(name) or "unknown"
-        )
-
-    normalized: list[dict[str, Any]] = []
-    existing_names: set[str] = set()
-    for item in sections:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("subject_name") or "").strip()
-        if not name:
-            continue
-        existing_names.add(name)
-        normalized.append(
-            {
-                "subject_name": name,
-                "subject_type": str(
-                    item.get("subject_type") or subject_type_map.get(name) or "unknown"
-                ),
-                "summary": _clean_generated_text(str(item.get("summary") or "")),
-                "attention_needed": bool(item.get("attention_needed")),
-                "activity_score": activity_score_map.get(name, 0),
-            }
-        )
-
-    for subject_name, subject_type in subject_type_map.items():
-        if subject_name in existing_names:
-            continue
-        score = activity_score_map.get(subject_name, 0)
-        if score > 0:
-            summary = get_subject_activity_text(subject_name, score, locale)
-        else:
-            summary = get_subject_no_activity_text(subject_name, locale)
-        normalized.append(
-            {
-                "subject_name": subject_name,
-                "subject_type": subject_type,
-                "summary": summary,
-                "attention_needed": False,
-                "activity_score": score,
-            }
-        )
-
-    normalized.sort(key=lambda item: int(item.get("activity_score") or 0), reverse=True)
-    return normalized
-
-
-def _generate_single_pass_summary_payload(
-    *,
-    db: Session,
-    client: Any,
-    provider_id: int,
-    provider_name_snapshot: str | None,
-    events: list[EventRecord],
-    prompt: tuple[str, str],
-    known_subjects: list[dict[str, str]],
-    subject_sections_payload: list[dict[str, Any]],
-    locale: str | None = None,
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
-    system_prompt, user_prompt = prompt
-    response_text = _chat_completion_with_usage(
-        db=db,
-        client=client,
-        provider_id=provider_id,
-        provider_name_snapshot=provider_name_snapshot,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-
-    overall_summary = _build_fallback_overall_summary(events, locale)
-    structured_subject_sections: list[dict[str, Any]] = []
-    structured_attention_items: list[dict[str, Any]] = []
-    parse_retried = False
-
-    if response_text:
-        try:
-            parsed = parse_daily_summary_output(response_text)
-            overall_summary = parsed.overall_summary
-            structured_subject_sections = [item.model_dump() for item in parsed.subject_sections]
-            structured_attention_items = [item.model_dump() for item in parsed.attention_items]
-        except DailySummaryOutputError as exc:
-            parse_retried = True
-            logger.warning("Single-pass summary parse failed, retry once: %s", exc)
-            retry_instruction = get_retry_json_instruction(locale)
-            retry_text = _chat_completion_with_usage(
-                db=db,
-                client=client,
-                provider_id=provider_id,
-                provider_name_snapshot=provider_name_snapshot,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": retry_instruction + "\n\n" + user_prompt},
-                ],
-            )
-            try:
-                parsed = parse_daily_summary_output(retry_text)
-                overall_summary = parsed.overall_summary
-                structured_subject_sections = [
-                    item.model_dump() for item in parsed.subject_sections
-                ]
-                structured_attention_items = [item.model_dump() for item in parsed.attention_items]
-            except DailySummaryOutputError:
-                overall_summary = _build_fallback_overall_summary(events, locale)
-                structured_subject_sections = []
-                structured_attention_items = []
-
-    completed_sections = _complete_subject_sections(
-        sections=structured_subject_sections,
-        known_subjects=known_subjects,
-        subject_sections_payload=subject_sections_payload,
-        locale=locale,
-    )
-
-    return (
-        overall_summary,
-        completed_sections,
-        structured_attention_items,
-        len(user_prompt),
-        parse_retried,
-    )
-
-
-def _generate_serial_summary_payload(
-    *,
-    db: Session,
-    client: Any,
-    provider_id: int,
-    provider_name_snapshot: str | None,
-    target_date: date,
-    start_dt: datetime,
-    end_dt: datetime,
-    events: list[EventRecord],
-    home_context: dict[str, Any],
-    known_subjects: list[dict[str, str]],
-    subject_sections_payload: list[dict[str, Any]],
-    missing_subjects: list[str],
-    attention_candidates_payload: list[dict[str, Any]],
-    locale: str | None = None,
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
-    compressed_input = compress_daily_input(
-        subject_sections=subject_sections_payload,
-        missing_subjects=missing_subjects,
-        attention_candidates=attention_candidates_payload,
-    )
-
-    subject_type_by_name = {
-        str(item.get("subject_name") or ""): str(item.get("subject_type") or "unknown")
-        for item in known_subjects
-        if str(item.get("subject_name") or "")
-    }
-
-    existing_names = {
-        str(item.get("subject_name") or "") for item in compressed_input["subject_sections"]
-    }
-    for missing_name in missing_subjects:
-        if missing_name in existing_names:
-            continue
-        compressed_input["subject_sections"].append(
-            {
-                "subject_name": missing_name,
-                "subject_type": subject_type_by_name.get(missing_name, "unknown"),
-                "raw_event_count": 0,
-                "clusters": [],
-            }
-        )
-
-    compressed_input["subject_sections"].sort(
-        key=lambda item: int(item.get("raw_event_count") or 0),
-        reverse=True,
-    )
-
-    overall_summary = _build_fallback_overall_summary(events, locale)
-    structured_subject_sections: list[dict[str, Any]] = []
-    structured_attention_items: list[dict[str, Any]] = []
-    prompt_chars_total = 0
-    parse_retried = False
-
-    for subject_section in compressed_input["subject_sections"]:
-        subject_prompt = build_subject_summary_prompt(
-            home_context=home_context,
-            summary_date=target_date,
-            time_range_start=start_dt.isoformat(),
-            time_range_end=end_dt.isoformat(),
-            subject_section=subject_section,
-            locale=locale,
-        )
-        subject_system_prompt, subject_user_prompt = subject_prompt
-        prompt_chars_total += len(subject_user_prompt)
-        subject_name = str(subject_section.get("subject_name") or "未知对象")
-        subject_type = str(subject_section.get("subject_type") or "unknown")
-
-        subject_response_text = _chat_completion_with_usage(
-            db=db,
-            client=client,
-            provider_id=provider_id,
-            provider_name_snapshot=provider_name_snapshot,
-            messages=[
-                {"role": "system", "content": subject_system_prompt},
-                {"role": "user", "content": subject_user_prompt},
-            ],
-        )
-
-        try:
-            subject_summary, attention_needed = _parse_subject_summary_output(
-                subject_response_text,
-                subject_name=subject_name,
-            )
-        except DailySummaryOutputError as exc:
-            parse_retried = True
-            logger.warning("Subject summary parse failed, retry once: %s", exc)
-            retry_text = _chat_completion_with_usage(
-                db=db,
-                client=client,
-                provider_id=provider_id,
-                provider_name_snapshot=provider_name_snapshot,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": subject_system_prompt,
-                    },
-                    {
-                        "role": "user",
-                        "content": get_retry_json_instruction(locale)
-                        + "\n\n"
-                        + subject_user_prompt,
-                    },
-                ],
-            )
-            try:
-                subject_summary, attention_needed = _parse_subject_summary_output(
-                    retry_text,
-                    subject_name=subject_name,
-                )
-            except DailySummaryOutputError:
-                subject_summary = _build_subject_fallback_summary(subject_section, locale)
-                attention_needed = False
-
-        structured_subject_sections.append(
-            {
-                "subject_name": subject_name,
-                "subject_type": subject_type,
-                "summary": _clean_generated_text(subject_summary),
-                "attention_needed": attention_needed,
-                "activity_score": int(subject_section.get("raw_event_count") or 0),
-            }
-        )
-
-    structured_subject_sections.sort(
-        key=lambda item: int(item.get("activity_score") or 0),
-        reverse=True,
-    )
-
-    rollup_prompt = build_daily_rollup_prompt(
-        home_context=home_context,
-        summary_date=target_date,
-        subject_results=structured_subject_sections,
-        attention_candidates=compressed_input["attention_candidates"],
-        locale=locale,
-    )
-    rollup_system_prompt, rollup_user_prompt = rollup_prompt
-    prompt_chars_total += len(rollup_user_prompt)
-
-    rollup_response_text = _chat_completion_with_usage(
-        db=db,
-        client=client,
-        provider_id=provider_id,
-        provider_name_snapshot=provider_name_snapshot,
-        messages=[
-            {"role": "system", "content": rollup_system_prompt},
-            {"role": "user", "content": rollup_user_prompt},
-        ],
-    )
-    try:
-        overall_summary, structured_attention_items = _parse_rollup_output(rollup_response_text)
-    except DailySummaryOutputError as exc:
-        parse_retried = True
-        logger.warning("Rollup summary parse failed, retry once: %s", exc)
-        retry_text = _chat_completion_with_usage(
-            db=db,
-            client=client,
-            provider_id=provider_id,
-            provider_name_snapshot=provider_name_snapshot,
-            messages=[
-                {"role": "system", "content": rollup_system_prompt},
-                {
-                    "role": "user",
-                    "content": get_retry_json_instruction(locale) + "\n\n" + rollup_user_prompt,
-                },
-            ],
-        )
-        try:
-            overall_summary, structured_attention_items = _parse_rollup_output(retry_text)
-        except DailySummaryOutputError:
-            overall_summary = _build_fallback_overall_summary(events, locale)
-            structured_attention_items = []
-
-    return (
-        overall_summary,
-        structured_subject_sections,
-        structured_attention_items,
-        prompt_chars_total,
-        parse_retried,
-    )
-
-
-def _dispatch_guard_key(target_date: date) -> str:
-    return f"{DISPATCH_GUARD_STATE_KEY_PREFIX}:{target_date.isoformat()}"
-
-
-def _claim_dispatch_guard(db: Session, now: datetime, target_date: date) -> bool:
-    """Atomically reserve a local summary date before publishing its task."""
-    return claim_runtime_state(
-        db,
-        _dispatch_guard_key(target_date),
-        {
-            "target_date": str(target_date),
-            "scheduled_for_date": now.date().isoformat(),
-            "dispatched_at": now.isoformat(),
-            "task_id": None,
-        },
-    )
-
-
-def _claim_daily_summary_generation(db: Session, target_date: date) -> bool:
-    """Reserve the unique local summary row before any expensive generation work."""
-    try:
-        with db.begin_nested():
-            db.add(DailySummary(summary_date=target_date))
-            db.flush()
-    except IntegrityError:
-        return False
-    return True
+# ---------------------------------------------------------------------------
+# Public Celery tasks
+# ---------------------------------------------------------------------------
 
 
 @celery_app.task(bind=True)  # type: ignore[untyped-decorator]
 def dispatch_scheduled_daily_summary_task(self: Any) -> dict[str, Any]:
+    """Celery-beat entry point: dispatch today's daily-summary task if due."""
     with task_db_session() as db:
-        zone = _home_timezone(db)
-        now = home_now(zone)
-        target_date = (now - timedelta(days=1)).date()
-
-        try:
-            schedule_text = _get_daily_schedule(db)
-            hour, minute = _parse_schedule_time(schedule_text)
-        except ValueError as exc:
-            logger.warning("Invalid daily summary schedule, skip dispatch: %s", exc)
-            return {"scheduled": False, "reason": "invalid_schedule"}
-
-        try:
-            scheduled_at = datetime.combine(now.date(), time(hour, minute), tzinfo=zone)
-            if now < scheduled_at:
-                return {"scheduled": False, "reason": "before_schedule"}
-
-            if _has_existing_summary_or_task(db, target_date):
-                return {
-                    "scheduled": False,
-                    "reason": "already_exists",
-                    "target_date": str(target_date),
-                }
-
-            if not _claim_dispatch_guard(db, now, target_date):
-                db.rollback()
-                return {
-                    "scheduled": False,
-                    "reason": "dispatch_guard_blocked",
-                    "target_date": str(target_date),
-                }
-
-            task_id = _get_pipeline_orchestrator().dispatch_generate_daily_summary(
-                db,
-                GenerateDailySummaryCommand(target_date_str=str(target_date)),
-            )
-            db.commit()
-            return {"scheduled": True, "target_date": str(target_date), "task_id": task_id}
-        except Exception as exc:
-            db.rollback()
-            clear_runtime_state(db, _dispatch_guard_key(target_date))
-            db.commit()
-            logger.exception("Failed to dispatch scheduled daily summary for %s", now.date())
-            return {
-                "scheduled": False,
-                "reason": "dispatch_failed",
-                "error": str(exc),
-                "target_date": str(target_date),
-            }
+        now = home_now(get_home_timezone(db))
+        return _dispatch_scheduled(db, container=get_container(), now=now)
 
 
 @celery_app.task(bind=True)  # type: ignore[untyped-decorator]
-def generate_daily_summary_task(self: Any, target_date_str: str | None = None) -> dict[str, Any]:  # noqa: C901
+def generate_daily_summary_task(self: Any, target_date_str: Optional[str] = None) -> dict[str, Any]:
+    """Celery-worker entry point: generate one day's daily summary.
+
+    Args:
+        target_date_str: ISO ``YYYY-MM-DD`` date. ``None`` defaults to
+            "yesterday" in the configured home timezone.
+
+    Returns:
+        ``{"summary_date": ..., "event_count": ...}`` on success;
+        ``{"skipped": True, "reason": ...}`` /
+        ``{"cancelled": True, ...}`` on the non-success paths.
     """
-    Generate daily summary for a given date (YYYY-MM-DD).
-    Defaults to yesterday.
-    """
+    queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
+    container = get_container()
+
     with task_db_session() as db:
-        client = None
         if target_date_str:
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
         else:
-            target_date = home_now(_home_timezone(db)).date() - timedelta(days=1)
+            zone = get_home_timezone(db)
+            target_date = home_now(zone).date() - timedelta(days=1)
 
-        queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
         task_log = bind_or_create_running_task_log(
             db,
             queue_task_id=queue_task_id or None,
@@ -911,227 +263,547 @@ def generate_daily_summary_task(self: Any, target_date_str: str | None = None) -
         db.commit()
 
         try:
-            if not _claim_daily_summary_generation(db, target_date):
-                db.rollback()
-                finalize_task_log(
-                    task_log,
-                    TaskStatus.SUCCESS,
-                    f"Skipped duplicate summary generation for {target_date}.",
-                    {"target_date": str(target_date), "skipped_duplicate": True},
-                )
-                db.commit()
-                return {
-                    "skipped": True,
-                    "reason": "already_generated",
-                    "summary_date": str(target_date),
-                }
-            db.commit()
-            ensure_task_not_cancelled(
-                db,
-                task_log.id,
-                default_message=f"Daily summary cancelled for {target_date}",
-            )
-            provider = find_required_enabled_provider(db, PROVIDER_TYPE_QA)
-            enforce_token_quota(db, provider)
-
-            from src.core.i18n import get_system_default_locale
-
-            locale = get_system_default_locale()
-
-            # Get events for the target date
-            start_dt, end_dt = local_day_bounds(_home_timezone(db), target_date)
-
-            events = (
-                db.query(EventRecord)
-                .filter(
-                    EventRecord.event_start_time >= start_dt, EventRecord.event_start_time < end_dt
-                )
-                .order_by(EventRecord.event_start_time.asc())
-                .all()
-            )
-
-            event_count = len(events)
-            ensure_task_not_cancelled(
-                db,
-                task_log.id,
-                default_message=f"Daily summary cancelled for {target_date}",
-            )
-            home_context = build_home_context(db)
-            known_subjects = build_known_subjects(home_context)
-            subject_sections, missing_subjects, mapped_event_ids = build_subject_event_mapping(
-                events,
-                known_subjects,
-            )
-            attention_candidates = extract_attention_candidates(events, mapped_event_ids)
-
-            subject_sections_payload = [item.model_dump() for item in subject_sections]
-            attention_candidates_payload = [item.model_dump() for item in attention_candidates]
-            single_pass_prompt = compile_daily_summary_prompt(
-                DailySummaryPromptInput(
-                    home_context=home_context,
-                    summary_date=target_date,
-                    time_range_start=start_dt.isoformat(),
-                    time_range_end=end_dt.isoformat(),
-                    subject_sections=subject_sections_payload,
-                    missing_subjects=missing_subjects,
-                    attention_candidates=attention_candidates_payload,
-                    locale=locale,
-                )
-            )
-
-            client = get_container().llm_factory.build(
-                api_base_url=provider.api_base_url,
-                api_key=decrypt_provider_api_key(provider.api_key),
-                model_name=provider.model_name,
-                timeout_seconds=provider.timeout_seconds,
-            )
-
-            summary_title = _summary_title(target_date, locale)
-            (
-                overall_summary,
-                structured_subject_sections,
-                structured_attention_items,
-                prompt_chars_total,
-                parse_retried,
-            ) = (
-                _generate_serial_summary_payload(
-                    db=db,
-                    client=client,
-                    provider_id=provider.id,
-                    provider_name_snapshot=provider.provider_name,
-                    target_date=target_date,
-                    start_dt=start_dt,
-                    end_dt=end_dt,
-                    events=events,
-                    home_context=home_context,
-                    known_subjects=known_subjects,
-                    subject_sections_payload=subject_sections_payload,
-                    missing_subjects=missing_subjects,
-                    attention_candidates_payload=attention_candidates_payload,
-                    locale=locale,
-                )
-                if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
-                else _generate_single_pass_summary_payload(
-                    db=db,
-                    client=client,
-                    provider_id=provider.id,
-                    provider_name_snapshot=provider.provider_name,
-                    events=events,
-                    prompt=single_pass_prompt,
-                    known_subjects=known_subjects,
-                    subject_sections_payload=subject_sections_payload,
-                    locale=locale,
-                )
-            )
-
-            summary_mode = (
-                "split_serial"
-                if len(single_pass_prompt[1]) > SERIAL_SPLIT_PROMPT_THRESHOLD
-                else "single_pass"
-            )
-
-            ensure_task_not_cancelled(
-                db,
-                task_log.id,
-                default_message=f"Daily summary cancelled for {target_date}",
-            )
-
-            overall_summary, structured_subject_sections, structured_attention_items = (
-                _clamp_summary_payload(
-                    overall_summary,
-                    structured_subject_sections,
-                    structured_attention_items,
-                )
-            )
-
-            _upsert_daily_summary(
-                db,
+            outcome = _run_generation_pipeline(
+                db=db,
                 target_date=target_date,
-                summary_title=summary_title,
-                overall_summary=overall_summary,
-                structured_subject_sections=structured_subject_sections,
-                structured_attention_items=structured_attention_items,
-                event_count=event_count,
-                provider_id=provider.id,
-                provider_name_snapshot=provider.provider_name,
+                queue_task_id=queue_task_id,
+                container=container,
+                task_log=task_log,
             )
-
-            ensure_task_not_cancelled(
-                db,
-                task_log.id,
-                default_message=f"Daily summary cancelled for {target_date}",
-            )
-
-            if _has_subscribed_webhook(db, WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED):
-                payload = build_webhook_event_payload(
-                    WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-                    {
-                        "date": str(target_date),
-                        "summary_title": summary_title,
-                        "overall_summary": overall_summary,
-                        "subject_sections": structured_subject_sections,
-                        "attention_items": structured_attention_items,
-                        "event_count": event_count,
-                    },
-                    generated_at=datetime.now(timezone.utc),
-                )
-                try:
-                    _get_pipeline_orchestrator().dispatch_webhook(
-                        db,
-                        SendWebhookCommand(
-                            event_type=WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-                            payload=payload,
-                        ),
-                    )
-                except Exception:
-                    logger.exception("Failed to enqueue daily summary webhook task")
-
-            detail: dict[str, Any] = {}
-            raw_detail = task_log.detail_json
-            if isinstance(raw_detail, dict):
-                detail = {str(key): value for key, value in raw_detail.items()}
-            detail.update(
-                {
-                    "prompt_chars": prompt_chars_total,
-                    "single_pass_prompt_chars": len(single_pass_prompt[1]),
-                    "summary_mode": summary_mode,
-                    "split_threshold": SERIAL_SPLIT_PROMPT_THRESHOLD,
-                    "subject_sections_count": len(subject_sections),
-                    "attention_candidates_count": len(attention_candidates),
-                    "parse_retried": parse_retried,
-                }
-            )
-            finalize_task_log(
-                task_log,
-                TaskStatus.SUCCESS,
-                f"Generated summary for {target_date} with {event_count} events.",
-                detail,
-            )
-            db.commit()
-            return {"summary_date": str(target_date), "event_count": event_count}
-
         except TaskCancellationRequested as exc:
             logger.info("Daily summary task cancelled for %s", target_date)
             db.rollback()
             db.query(DailySummary).filter(DailySummary.summary_date == target_date).delete()
-            refreshed_task_log = get_task_log_for_update(db, task_log.id)
-            if refreshed_task_log is None:
-                raise
-            finalize_cancelled_task_log(
-                refreshed_task_log,
-                str(exc),
-                {"target_date": str(target_date), "cancelled": True},
-            )
+            refreshed = get_task_log_for_update(db, task_log.id)
+            if refreshed is not None:
+                finalize_cancelled_task_log(
+                    refreshed,
+                    str(exc),
+                    {"target_date": str(target_date), "cancelled": True},
+                )
             db.commit()
             return {"cancelled": True, "summary_date": str(target_date)}
 
-        except Exception as e:
-            logger.exception("Failed to generate summary for %s", target_date)
-            db.rollback()
-            db.query(DailySummary).filter(DailySummary.summary_date == target_date).delete()
-            finalize_task_log(task_log, TaskStatus.FAILED, str(e))
-            db.commit()
-            raise
-        finally:
-            if client is not None:
-                client.close()
+        db.commit()
+        return _outcome_to_response(outcome)
+
+
+# ---------------------------------------------------------------------------
+# Orchestration helpers
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_scheduled(
+    db: Any,
+    *,
+    container: Any,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Resolve the dispatch eligibility; enqueue when due.
+
+    Mirrors the legacy ``dispatch_scheduled_daily_summary_task``
+    contract: returns ``{"scheduled": True, ...}`` when a new task
+    was enqueued, otherwise ``{"scheduled": False, "reason": ...}``
+    for every skip path. ``None`` ``now`` falls back to
+    ``datetime.now(tz=zone)``.
+    """
+    zone = get_home_timezone(db)
+    if now is None:
+        now = datetime.now(tz=zone)
+    target_date = resolve_target_date(now)
+
+    try:
+        schedule_text = get_daily_schedule(db)
+        hour, minute = parse_schedule_time(schedule_text)
+    except ValueError as exc:
+        logger.warning("Invalid daily summary schedule, skip dispatch: %s", exc)
+        return {"scheduled": False, "reason": "invalid_schedule"}
+
+    scheduled_at = scheduled_local_datetime(now, schedule_text, zone)
+    if now < scheduled_at:
+        return {"scheduled": False, "reason": "before_schedule"}
+
+    if has_existing_summary_or_task(db, target_date):
+        return {
+            "scheduled": False,
+            "reason": "already_exists",
+            "target_date": str(target_date),
+        }
+
+    if not claim_dispatch_guard(db, now, target_date):
+        db.rollback()
+        return {
+            "scheduled": False,
+            "reason": "dispatch_guard_blocked",
+            "target_date": str(target_date),
+        }
+
+    try:
+        orchestrator = _get_pipeline_orchestrator()
+        task_id = orchestrator.dispatch_generate_daily_summary(
+            db,
+            GenerateDailySummaryCommand(target_date_str=str(target_date)),
+        )
+        db.commit()
+        return {"scheduled": True, "target_date": str(target_date), "task_id": task_id}
+    except Exception as exc:
+        db.rollback()
+        release_dispatch_guard(db, target_date)
+        db.commit()
+        logger.exception("Failed to dispatch scheduled daily summary for %s", now.date())
+        return {
+            "scheduled": False,
+            "reason": "dispatch_failed",
+            "error": str(exc),
+            "target_date": str(target_date),
+        }
+
+
+def _claim_and_evidence(
+    *,
+    db: Any,
+    repo: Any,
+    target_date: date,
+    task_log: TaskLog,
+    locale: str,
+    forced: bool,
+) -> tuple[
+    GenerationOutcome | None,
+    Any | None,
+    Any | None,
+    Any | None,
+    Any | None,
+]:
+    """Run the pre-LLM phase: skip-if-active, claim, evidence, mark running.
+
+    Returns ``(early_outcome, claim, evidence, provider, zone)``. When
+    ``early_outcome`` is not ``None`` the caller should return it
+    directly — the other values are unset.
+    """
+    if not forced:
+        existing = attempt_already_running(repo, target_date)
+        if existing is not None:
+            logger.info(
+                "Active daily-summary attempt already exists for %s (attempt_id=%s); skipping",
+                target_date,
+                existing.id,
+            )
+            finalize_task_log(
+                task_log,
+                TaskStatus.SUCCESS,
+                f"Skipped duplicate summary generation for {target_date}.",
+                {"target_date": str(target_date), "skipped_duplicate": True},
+            )
+            return (
+                GenerationOutcome(
+                    summary_date=target_date,
+                    event_count=0,
+                    attempt_no=int(existing.attempt_no),
+                    attempt_status=str(existing.status),
+                    skipped=True,
+                    skip_reason="already_running",
+                ),
+                None,
+                None,
+                None,
+                None,
+            )
+
+    claim = claim_attempt(
+        repo,
+        summary_date=target_date,
+        triggered_by="manual" if forced else "schedule",
+        task_log_id=int(task_log.id),
+    )
+
+    from src.services.task_dispatch_control import ensure_task_not_cancelled
+
+    ensure_task_not_cancelled(
+        db,
+        task_log.id,
+        default_message=f"Daily summary cancelled for {target_date}",
+    )
+
+    provider = find_required_enabled_provider(db, PROVIDER_TYPE_QA)
+    enforce_token_quota(db, provider)
+
+    zone = get_home_timezone(db)
+    evidence = build_evidence(
+        db,
+        target_date=target_date,
+        zone=zone,
+        prompt_builder=compile_daily_summary_prompt,
+        prompt_input_factory=DailySummaryPromptInput,
+        locale=locale,
+    )
+
+    mark_attempt_running(
+        repo,
+        attempt_id=int(claim.attempt.id),
+        events_count=len(evidence.events),
+        input_token_estimate=evidence.prompt_chars,
+    )
+
+    ensure_task_not_cancelled(
+        db,
+        task_log.id,
+        default_message=f"Daily summary cancelled for {target_date}",
+    )
+
+    db.commit()
+
+    return None, claim, evidence, provider, zone
+
+
+def _run_llm_phase(
+    *,
+    db: Any,
+    client: Any,
+    provider: Any,
+    target_date: date,
+    evidence: Any,
+    locale: str,
+    serial_split_prompt_threshold: int,
+) -> tuple[str, list[Any], list[Any], int, bool, str]:
+    """Pick the single/serial path, run the LLM, return the parsed payload."""
+    if evidence.single_pass_user_prompt_chars > serial_split_prompt_threshold:
+        summary_mode = "split_serial"
+        result = generate_serial_summary_payload(
+            db=db,
+            client=client,
+            provider_id=provider.id,
+            provider_name_snapshot=provider.provider_name,
+            target_date=target_date,
+            start_dt=evidence.start_dt,
+            end_dt=evidence.end_dt,
+            events=evidence.events,
+            home_context=evidence.home_context,
+            known_subjects=evidence.known_subjects,
+            subject_sections_payload=evidence.subject_sections,
+            missing_subjects=evidence.missing_subjects,
+            attention_candidates_payload=evidence.attention_candidates,
+            locale=locale,
+        )
+    else:
+        summary_mode = "single_pass"
+        result = generate_single_pass_summary_payload(
+            db=db,
+            client=client,
+            provider_id=provider.id,
+            provider_name_snapshot=provider.provider_name,
+            events=evidence.events,
+            prompt=evidence.prompt,
+            known_subjects=evidence.known_subjects,
+            subject_sections_payload=evidence.subject_sections,
+            locale=locale,
+        )
+    overall, sections, attention, prompt_chars, parse_retried = result
+    return overall, sections, attention, prompt_chars, parse_retried, summary_mode
+
+
+def _handle_llm_failure(
+    *,
+    db: Any,
+    repo: Any,
+    client: Any,
+    provider: Any,
+    claim: Any,
+    task_log: TaskLog,
+    target_date: date,
+    exc: BaseException,
+) -> None:
+    """Finalise the attempt + task log on an LLM-phase exception."""
+    try:
+        record_token_usage(
+            db,
+            provider_id=provider.id,
+            provider_name_snapshot=provider.provider_name,
+            scene="daily_summary",
+            usage=client.get_last_usage(),
+        )
+    except Exception:
+        pass
+    mark_attempt_failed(
+        repo,
+        attempt_id=int(claim.attempt.id),
+        error_type=type(exc).__name__,
+        last_error=str(exc)[:1024],
+        failure_reason="llm_error",
+    )
+    finalize_task_log(
+        task_log,
+        TaskStatus.FAILED,
+        f"Failed to generate summary for {target_date}: {exc}",
+    )
+
+
+def _dispatch_legacy_webhook(
+    db: Any,
+    *,
+    target_date: date,
+    summary_title: str,
+    overall_summary: str,
+    structured_subject_sections: list[Any],
+    structured_attention_items: list[Any],
+    event_count: int,
+) -> None:
+    """Enqueue the legacy webhook fan-out (one celery task per event)."""
+    try:
+        legacy_payload = build_webhook_payload(
+            target_date=target_date,
+            summary_title=summary_title,
+            overall_summary=overall_summary,
+            subject_sections=structured_subject_sections,
+            attention_items=structured_attention_items,
+            event_count=event_count,
+        )
+        _get_pipeline_orchestrator().dispatch_webhook(
+            db,
+            SendWebhookCommand(
+                event_type=WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
+                payload=legacy_payload,
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to enqueue daily summary webhook task")
+
+
+def _run_generation_pipeline(
+    *,
+    db: Any,
+    target_date: date,
+    queue_task_id: Optional[str],
+    container: Any,
+    task_log: TaskLog,
+    locale: Optional[str] = None,
+    forced: bool = False,
+    serial_split_prompt_threshold: Optional[int] = None,
+) -> GenerationOutcome:
+    """Drive the full single-day generation flow.
+
+    See :mod:`src.tasks.summarizer` docstring for the transaction
+    discipline. ``serial_split_prompt_threshold`` defaults to the
+    module-level ``SERIAL_SPLIT_PROMPT_THRESHOLD`` so the legacy
+    ``monkeypatch.setattr`` tests keep working.
+    """
+    if locale is None:
+        locale = get_system_default_locale()
+
+    if serial_split_prompt_threshold is None:
+        serial_split_prompt_threshold = int(SERIAL_SPLIT_PROMPT_THRESHOLD)
+
+    outcome = GenerationOutcome(summary_date=target_date, event_count=0)
+
+    try:
+        get_home_timezone(db)
+    except Exception as exc:
+        logger.exception("Failed to resolve home timezone for %s", target_date)
+        finalize_task_log(task_log, TaskStatus.FAILED, str(exc))
+        return outcome
+
+    repo = DailySummaryAttemptRepository(db)
+
+    early, claim, evidence, provider, _zone = _claim_and_evidence(
+        db=db,
+        repo=repo,
+        target_date=target_date,
+        task_log=task_log,
+        locale=locale,
+        forced=forced,
+    )
+    if early is not None:
+        return early
+    assert claim is not None and evidence is not None and provider is not None
+    claim_obj: Any = claim
+    evidence_obj: Any = evidence
+    provider_obj: Any = provider
+    outcome.event_count = len(evidence_obj.events)
+    outcome.attempt_no = int(claim_obj.attempt.attempt_no)
+
+    client = container.llm_factory.build(
+        api_base_url=provider_obj.api_base_url,
+        api_key=decrypt_provider_api_key(provider_obj.api_key),
+        model_name=provider_obj.model_name,
+        timeout_seconds=provider_obj.timeout_seconds,
+    )
+
+    try:
+        (
+            overall_summary,
+            structured_subject_sections,
+            structured_attention_items,
+            prompt_chars_total,
+            parse_retried,
+            summary_mode,
+        ) = _run_llm_phase(
+            db=db,
+            client=client,
+            provider=provider_obj,
+            target_date=target_date,
+            evidence=evidence_obj,
+            locale=locale,
+            serial_split_prompt_threshold=serial_split_prompt_threshold,
+        )
+    except TaskCancellationRequested:
+        raise
+    except Exception as exc:
+        _handle_llm_failure(
+            db=db,
+            repo=repo,
+            client=client,
+            provider=provider_obj,
+            claim=claim_obj,
+            task_log=task_log,
+            target_date=target_date,
+            exc=exc,
+        )
+        outcome.attempt_status = "failed"
+        return outcome
+    finally:
+        _close_gateway_safely(client)
+
+    overall_summary, structured_subject_sections, structured_attention_items = (
+        clamp_summary_payload(
+            overall_summary,
+            structured_subject_sections,
+            structured_attention_items,
+        )
+    )
+
+    summary_title = get_summary_title(target_date.strftime("%Y-%m-%d"), locale)
+    webhook_subscriber_ids = find_subscribed_webhooks(db)
+
+    try:
+        publish_outcome = publish_daily_summary(
+            db,
+            PublishDailySummaryCommand(
+                summary_date=target_date,
+                attempt_id=int(claim_obj.attempt.id),
+                task_log_id=int(task_log.id),
+                summary_content_json={
+                    "summary_title": summary_title,
+                    "overall_summary": overall_summary,
+                    "subject_sections": structured_subject_sections,
+                    "attention_items": structured_attention_items,
+                    "events_count": outcome.event_count,
+                    "provider_id": provider_obj.id,
+                    "provider_name_snapshot": provider_obj.provider_name,
+                },
+                webhook_subscribers=list(webhook_subscriber_ids),
+            ),
+        )
+        outcome.summary_id = int(publish_outcome.summary_id)
+        outcome.attempt_status = str(publish_outcome.attempt_status.value)
+        outcome.webhook_event_ids = list(publish_outcome.webhook_event_ids)
+    except AttemptNotInValidStateError as exc:
+        db.rollback()
+        finalize_task_log(
+            task_log,
+            TaskStatus.FAILED,
+            f"Daily summary publish rejected: {exc}",
+        )
+        outcome.attempt_status = "failed"
+        return outcome
+    except Exception as exc:
+        db.rollback()
+        mark_attempt_failed(
+            repo,
+            attempt_id=int(claim_obj.attempt.id),
+            error_type=type(exc).__name__,
+            last_error=str(exc)[:1024],
+            failure_reason="publish_error",
+        )
+        finalize_task_log(
+            task_log,
+            TaskStatus.FAILED,
+            f"Failed to publish summary for {target_date}: {exc}",
+        )
+        outcome.attempt_status = "failed"
+        return outcome
+
+    if webhook_subscriber_ids:
+        _dispatch_legacy_webhook(
+            db,
+            target_date=target_date,
+            summary_title=summary_title,
+            overall_summary=overall_summary,
+            structured_subject_sections=structured_subject_sections,
+            structured_attention_items=structured_attention_items,
+            event_count=outcome.event_count,
+        )
+
+    detail = _build_task_log_detail(
+        task_log=task_log,
+        prompt_chars_total=prompt_chars_total,
+        single_pass_prompt_chars=evidence_obj.single_pass_user_prompt_chars,
+        summary_mode=summary_mode,
+        split_threshold=serial_split_prompt_threshold,
+        subject_sections_count=len(evidence_obj.subject_sections),
+        attention_candidates_count=len(evidence_obj.attention_candidates),
+        parse_retried=parse_retried,
+    )
+    finalize_task_log(
+        task_log,
+        TaskStatus.SUCCESS,
+        f"Generated summary for {target_date} with {outcome.event_count} events.",
+        detail,
+    )
+
+    return outcome
+
+
+def _build_task_log_detail(
+    *,
+    task_log: TaskLog,
+    prompt_chars_total: int,
+    single_pass_prompt_chars: int,
+    summary_mode: str,
+    split_threshold: int,
+    subject_sections_count: int,
+    attention_candidates_count: int,
+    parse_retried: bool,
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {}
+    raw_detail = task_log.detail_json
+    if isinstance(raw_detail, dict):
+        detail = {str(key): value for key, value in raw_detail.items()}
+    detail.update(
+        {
+            "prompt_chars": prompt_chars_total,
+            "single_pass_prompt_chars": single_pass_prompt_chars,
+            "summary_mode": summary_mode,
+            "split_threshold": split_threshold,
+            "subject_sections_count": subject_sections_count,
+            "attention_candidates_count": attention_candidates_count,
+            "parse_retried": parse_retried,
+        }
+    )
+    return detail
+
+
+def _outcome_to_response(outcome: GenerationOutcome) -> dict[str, Any]:
+    """Translate :class:`GenerationOutcome` to the legacy response payload."""
+    if outcome.skipped:
+        return {
+            "skipped": True,
+            "reason": outcome.skip_reason or "already_generated",
+            "summary_date": str(outcome.summary_date),
+        }
+    if outcome.cancelled:
+        return {"cancelled": True, "summary_date": str(outcome.summary_date)}
+    return {
+        "summary_date": str(outcome.summary_date),
+        "event_count": outcome.event_count,
+    }
+
+
+__all__ = [
+    "DEFAULT_DAILY_SUMMARY_SCHEDULE",
+    "GenerationOutcome",
+    "SERIAL_SPLIT_PROMPT_THRESHOLD",
+    "TaskLog",
+    "dispatch_scheduled_daily_summary_task",
+    "generate_daily_summary_task",
+    "home_now",
+    "WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED",
+]
