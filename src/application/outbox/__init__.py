@@ -40,6 +40,22 @@ Submodules
     :class:`OutboxStatus` enum, the ``ALLOWED_TRANSITIONS`` mapping
     and the :func:`transition` / :func:`can_transition` /
     :func:`is_terminal` helpers.
+
+``enqueue``
+    Thin orchestration helper :func:`enqueue_command` that wraps
+    :class:`OutboxRepository` and is the public entry point for
+    application use cases. The repository itself is exposed as
+    :class:`OutboxRepository` for the persistence tests; the use case
+    is the documented entry point for production code.
+
+``repository``
+    SQLAlchemy bridge for the ``outbox_event`` table. Owns the
+    ``enroll_with_task_log`` atomic-enqueue path, the publisher claim
+    loop (``try_claim_one`` with ``FOR UPDATE SKIP LOCKED``), the
+    state-machine updates (``mark_published`` /
+    ``mark_failed_to_retry`` / ``mark_failed_terminal``), and the
+    retention / supervision helpers. The contract layer (Todo 11) is
+    the in-memory shape; this module is the persistence bridge.
 """
 
 from __future__ import annotations
@@ -54,6 +70,7 @@ from src.application.outbox.contracts import (
     emit_event,
     new_event_id,
 )
+from src.application.outbox.enqueue import enqueue_command
 from src.application.outbox.errors import (
     OutboxContractViolation,
     OutboxError,
@@ -72,6 +89,7 @@ from src.application.outbox.registry import (
     DEFAULT_QUEUE,
     OutboxCommandRegistry,
 )
+from src.application.outbox.repository import EnrollOutcome, OutboxRepository
 from src.application.outbox.state_machine import (
     ALLOWED_TRANSITIONS,
     TERMINAL_STATES,
@@ -86,6 +104,7 @@ __all__ = [
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_MAX_PAYLOAD_DEPTH",
     "DEFAULT_QUEUE",
+    "EnrollOutcome",
     "JSONSafeValue",
     "JSON_SAFE_ATOMIC_TYPES",
     "JSON_SAFE_CONTAINER_TYPES",
@@ -96,12 +115,14 @@ __all__ = [
     "OutboxEvent",
     "OutboxPayloadError",
     "OutboxRegistryError",
+    "OutboxRepository",
     "OutboxRowDict",
     "OutboxStateError",
     "OutboxStatus",
     "TERMINAL_STATES",
     "can_transition",
     "emit_event",
+    "enqueue_command",
     "ensure_json_safe",
     "is_json_safe",
     "is_terminal",
