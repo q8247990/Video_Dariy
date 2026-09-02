@@ -188,6 +188,39 @@ irreversible (downgrade raises); `20260826_0017` also aborts if orphaned referen
 found. After any failed migration or rotation, restoring that backup is the only recovery
 path.
 
+Backup / verify / restore in one pass (`pg_dump` / `pg_restore` must match the server major
+version):
+
+```bash
+python3 -m scripts.backup_restore_db backup --database-url "$DATABASE_URL" --output /tmp/hm.dump
+python3 -m scripts.backup_restore_db verify --output /tmp/hm.dump
+python3 -m scripts.backup_restore_db restore --database-url "<temp-db-url>" --dump /tmp/hm.dump
+```
+
+### Observability and Operations (structured logs, metrics, backup/restore)
+
+- **Structured JSON logs**: `configure_logging()` at process entry installs a root handler
+  emitting one-line JSON per record (`timestamp/level/logger/correlation_id/message`) and
+  redacts at the log boundary. `redact()` scrubs known secret values, `DATABASE_URL` /
+  `REDIS_URL` connection strings, `api_key` / `token` / `password` JSON values, and file
+  paths rooted at `VIDEO_ROOT_PATH` / `PLAYBACK_CACHE_ROOT`.
+- **Correlation**: the outbox `event_id` is the correlation key. The FastAPI middleware
+  assigns an `X-Request-ID`; scheduling logs, the outbox publish log, and the Celery worker
+  log (`task_id == event_id`) carry the same `correlation_id`, so a single id retrieves the
+  whole API → outbox → worker chain.
+- **Delivery semantics**: **at-least-once**, never exactly-once. Duplicate publishes are
+  possible and the consumer-side `bind_or_create_running_task_log` idempotency short-circuit
+  is the defence.
+- **Health and metrics**: `/livez` (liveness), `/readyz` (DB + Redis + alembic head), and
+  `GET /metrics` (JSON: outbox lag/failure counts, task-recovery counters, checkpoint
+  progress for running analyses).
+- **Transactional outbox and task lifecycle**: `TaskLog` owns the business run lifecycle,
+  `OutboxEvent` owns the publish intent (1:1, committed atomically), and a standalone
+  publisher process drives the broker. `DailySummaryGenerationAttempt` records daily-summary
+  attempts (append-only); `PipelineTransitionLog` is an append-only pipeline state-machine
+  audit that survives the 7-day `TaskLog` cleanup. See ADR `docs/adr/0011-*` and
+  `docs/adr/0012-*`.
+
 ### Partial Analysis and Checkpoint Resume
 
 During analysis, progress for each sub-chunk is persisted to a durable
@@ -316,7 +349,7 @@ Python version: 3.10
 # Reset scan/session/event/task data
 docker compose exec backend python -m src.reset_pipeline_data
 
-# Backend unit tests (289)
+# Backend unit tests (661)
 python3 -m pytest tests/unit -q
 
 # Backend integration tests (requires real PostgreSQL, DATABASE_URL)
@@ -324,7 +357,7 @@ python3 -m pytest -m postgres
 
 # Migration checks
 python3 -m alembic upgrade head
-python3 -m alembic heads   # expect 20260826_0017
+python3 -m alembic heads   # expect 20260902_0021
 
 # Code checks
 ruff check .

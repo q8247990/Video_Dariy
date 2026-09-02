@@ -1,4 +1,7 @@
 # 以此项目纪念我亲爱的糖糖，愿你在喵星，也能看到家里，看到你的栗子哥哥，和永远爱你的爸爸妈妈。
+import logging
+import sys
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,9 +16,40 @@ from src.api.v1.api import api_router
 from src.core.celery_app import celery_app  # noqa: F401
 from src.core.config import settings
 from src.core.i18n import get_system_default_locale, normalize_locale
+from src.core.logging_config import configure_logging, set_correlation_id
 from src.db.init_db import get_current_alembic_revision, get_registered_table_names, init_db
+from src.db.metrics import metrics_snapshot
 from src.db.readiness import readiness_checks
+from src.db.session import engine
 from src.mcp.server import router as mcp_router
+
+if "pytest" not in sys.modules:
+    configure_logging()
+
+logger = logging.getLogger(__name__)
+
+
+class CorrelationMiddleware(BaseHTTPMiddleware):
+    """Assign / propagate a request correlation id into the structured logs.
+
+    Uses the ``X-Request-ID`` header when the caller supplies one,
+    otherwise mints a fresh UUID. The id is exposed on the response
+    ``X-Request-ID`` header and, via the :data:`CORRELATION_CONTEXT`
+    ContextVar, attached to every log line the request emits so a single
+    id retrieves the whole request -> outbox -> worker chain.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        supplied = (request.headers.get("X-Request-ID") or "").strip()
+        request_id = supplied or str(uuid.uuid4())
+        set_correlation_id(request_id)
+        request.state.request_id = request_id
+        try:
+            response = await call_next(request)
+        finally:
+            set_correlation_id(None)
+        response.headers["X-Request-ID"] = request_id
+        return response
 
 
 class LocaleMiddleware(BaseHTTPMiddleware):
@@ -46,6 +80,7 @@ app = FastAPI(
 )
 
 app.add_middleware(LocaleMiddleware)
+app.add_middleware(CorrelationMiddleware)
 app.add_middleware(ResponseStatusMiddleware)
 
 app.add_middleware(
@@ -107,6 +142,12 @@ def readiness_check() -> JSONResponse:
     if ready:
         return JSONResponse(content=payload)
     return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=payload)
+
+
+@app.get("/metrics")
+def metrics_check() -> JSONResponse:
+    """Operational metrics: outbox lag, task recovery, checkpoint progress."""
+    return JSONResponse(content=metrics_snapshot(engine))
 
 
 @app.get("/health/bootstrap")

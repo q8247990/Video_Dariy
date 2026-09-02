@@ -62,6 +62,31 @@ from src.tasks._container import (
     get_container,  # noqa: F401  (re-exported for legacy monkeypatch surface)
 )
 
+
+def _persist_heartbeat_counters(db: Any, counters: dict[str, int]) -> None:
+    """Upsert the heartbeat counters into AppRuntimeState for the /metrics surface.
+
+    The maintenance policies report deterministic per-sweep counters
+    (``timed_out`` = leases recovered, ``pending_recovered`` = unleased
+    recovered). Persisting them lets the /metrics endpoint surface the
+    recovery counters without any cross-process state. Runs inside the
+    heartbeat transaction; guarded to be a no-op when the table is not
+    present (hermetic SQLite unit-test contexts).
+    """
+    from sqlalchemy import inspect
+
+    from src.db.metrics import HEARTBEAT_COUNTERS_KEY
+    from src.models.app_runtime_state import AppRuntimeState
+
+    if db.bind is None or not inspect(db.bind).has_table(AppRuntimeState.__tablename__):
+        return
+    row = db.query(AppRuntimeState).filter_by(state_key=HEARTBEAT_COUNTERS_KEY).first()
+    if row is None:
+        db.add(AppRuntimeState(state_key=HEARTBEAT_COUNTERS_KEY, state_value=dict(counters)))
+    else:
+        row.state_value = dict(counters)
+
+
 logger = logging.getLogger(__name__)
 
 # Re-export the policy helpers under their pre-Wave-5 private names so
@@ -102,14 +127,16 @@ def heartbeat(self: Any) -> dict[str, Any]:
                 logs_deleted = cleanup_old_task_logs(db, now)
                 missing_marked = mark_missing_video_files(db)
 
-            db.commit()
-            return {
+            counters = {
                 "dispatched_hot": len(dispatched_hot),
                 "timed_out": leases_recovered,
                 "pending_recovered": pending_recovered,
                 "logs_deleted": logs_deleted,
                 "missing_marked": missing_marked,
             }
+            _persist_heartbeat_counters(db, counters)
+            db.commit()
+            return counters
         except Exception:
             db.rollback()
             logger.exception("Heartbeat failed")

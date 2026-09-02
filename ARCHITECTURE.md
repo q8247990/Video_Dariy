@@ -187,7 +187,9 @@
 职责：数据库基础设施。
 
 - `session.py`：Engine / SessionLocal / get_db
-- `init_db.py`：Alembic 升级、默认管理员初始化、数据库可用性重试
+- `init_db.py`：Alembic 升级、默认管理员初始化、数据库可用性重试、迁移咨询锁
+- `readiness.py`：`/livez` / `/readyz` 的健康检查实现
+- `metrics.py`：`/metrics` 的可观测性指标（outbox 延迟/失败、任务恢复、checkpoint 进度）
 - `base.py`：模型注册
 
 迁移约定：
@@ -429,7 +431,20 @@ DailySummary 1 --- 1 summary_date
 - `DailySummary`
   - 按天汇总的结构化结果
 - `TaskLog`
-  - 记录任务状态、目标、消息、重试、队列任务 ID
+  - 记录任务状态、目标、消息、重试、队列任务 ID（业务运行生命周期）
+- `OutboxEvent`（事务性 outbox，与 `TaskLog` 1:1）
+  - 记录发布意图：Celery 任务名、队列、payload、状态（pending/publishing/published/failed）、重试与租约
+  - 独立 publisher 进程以其 `event_id` 作为 broker `task_id`（ADR 0011）
+- `DailySummaryGenerationAttempt`
+  - 按 `summary_date` append-only 记录每次日报生成尝试（含失败/超时原因）
+- `PipelineTransitionLog`
+  - 管道状态机（`VideoSession` / `TaskLog`）的 append-only 审计，不随 `TaskLog` 7 天清理丢失
+- `SessionAnalysisCheckpoint`
+  - 分析断点续跑与进度；`/metrics` 的 checkpoint 进度来源
+- `AppRuntimeState`
+  - 运行时保护状态，另存 heartbeat 指标快照（`heartbeat_last_counters`）
+- `LLMUsageLog`
+  - LLM Token 用量归账
 
 ## 7. 部署架构
 
@@ -592,6 +607,23 @@ Session 分析状态（`analysis_status`）主要包括：
 - Celery 任务支持超时恢复
 - 分析死锁支持重试
 - 孤儿 pending 任务可被心跳任务回收
+
+### 9.8 可观测性与运维
+
+- **结构化 JSON 日志与脱敏**：`src/core/logging_config.py` 提供
+  `configure_logging()`（单行 JSON 根 handler）、`RedactingJsonFormatter` 与
+  `redact()`（擦除密钥、连接串、敏感 JSON 值、`VIDEO_ROOT_PATH` 路径）。
+- **关联 ID**：outbox `event_id` 经 FastAPI `CorrelationMiddleware`、
+  调度日志、outbox 发布日志、Celery `task_prerun` 信号串联，单 id 可检索
+  API → outbox → worker 全链路。
+- **健康探针与指标**：`/livez`、`/readyz`（DB + Redis + alembic head）、
+  `GET /metrics`（outbox 延迟/失败、任务恢复计数、checkpoint 进度）。
+- **备份/恢复**：`scripts/backup_restore_db.py` 提供 checksum 化的
+  backup / verify / restore，用于不可逆迁移前的已验证备份。
+- **迁移串行化**：`init_db` 通过 PostgreSQL 咨询锁（`pg_advisory_lock`）
+  串行化容器启动时的 Alembic 迁移。
+- **至多一次 vs 至少一次**：投递为 **至少一次（at-least-once）**，消费侧
+  幂等短路兜底；文中任何描述均不主张 exactly-once。
 
 ## 10. 测试与质量保障
 

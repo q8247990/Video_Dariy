@@ -133,6 +133,9 @@ def trigger_full_build(
         db.rollback()
         logger.exception("Failed to enqueue full build task for source_id=%s", id)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    logger.info(
+        "dispatched task task_type=%s target=%s task_id=%s", TaskType.SESSION_BUILD, id, task_id
+    )
     return BaseResponse(data={"task_id": task_id})
 
 
@@ -164,6 +167,12 @@ def trigger_analyze(
         db.rollback()
         logger.exception("Failed to enqueue analyze task for session_id=%s", session_id)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    logger.info(
+        "dispatched task task_type=%s target=%s task_id=%s",
+        TaskType.SESSION_ANALYSIS,
+        session_id,
+        task_id,
+    )
     return BaseResponse(data={"task_id": task_id})
 
 
@@ -186,4 +195,10 @@ def trigger_summarize(
         db.rollback()
         logger.exception("Failed to enqueue summarize task for target_date=%s", target_date)
         return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    logger.info(
+        "dispatched task task_type=%s target=%s task_id=%s",
+        TaskType.DAILY_SUMMARY_GENERATION,
+        target_date,
+        task_id,
+    )
     return BaseResponse(data={"task_id": task_id})

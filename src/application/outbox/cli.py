@@ -279,10 +279,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             explicit list; the docker-compose entry point passes
             ``None`` (use ``sys.argv``).
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.core.logging_config import configure_logging
+
+    configure_logging()
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 

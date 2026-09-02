@@ -181,6 +181,36 @@ python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generat
 （downgrade 抛错）；`20260826_0017` 还会在存在孤儿引用时中止。这些迁移或任何轮换操作
 失败后，唯一恢复路径是还原该备份。
 
+备份/校验/恢复一步到位（pg_dump/pg_restore 需与服务器主版本匹配）：
+
+```bash
+python3 -m scripts.backup_restore_db backup --database-url "$DATABASE_URL" --output /tmp/hm.dump
+python3 -m scripts.backup_restore_db verify --output /tmp/hm.dump
+python3 -m scripts.backup_restore_db restore --database-url "<临时库url>" --dump /tmp/hm.dump
+```
+
+### 可观测性与运维（结构化日志、指标、备份恢复）
+
+- **结构化 JSON 日志**：进程入口 `configure_logging()` 安装单行 JSON 根
+  handler（`timestamp/level/logger/correlation_id/message`），并在日志边界
+  统一执行脱敏。`redact()` 会擦除密钥、`DATABASE_URL`/`REDIS_URL` 连接串、
+  `api_key`/`token`/`password` 类值与 `VIDEO_ROOT_PATH` 下的文件路径。
+- **关联 ID 贯穿**：outbox `event_id` 即关联键。FastAPI 中间件分配
+  `X-Request-ID`；调度日志、outbox 发布日志与 Celery worker 日志（
+  `task_id == event_id`）共用同一 `correlation_id`，可用单个 id 串起
+  API → outbox → worker 全链路。
+- **投递语义**：**至少一次（at-least-once）**，不是 exactly-once；允许
+  重复发布，消费侧 `bind_or_create_running_task_log` 幂等短路兜底。
+- **健康与指标**：`/livez`（存活性）、`/readyz`（DB + Redis + alembic
+  head）、`GET /metrics`（JSON：outbox 延迟/失败数、任务恢复计数、
+  运行中分析的 checkpoint 进度）。
+- **事务性 outbox 与任务生命周期**：`TaskLog` 承担业务运行生命周期，
+  `OutboxEvent` 承担发布意图（1:1，原子落库），独立 publisher 进程负责
+  broker 投递。`DailySummaryGenerationAttempt` 按日记录日报生成尝试（
+  append-only），`PipelineTransitionLog` 记录管道状态机审计（不随
+  `TaskLog` 7 天清理丢失）。详见 ADR `docs/adr/0011-*` 与
+  `docs/adr/0012-*`。
+
 ### 部分分析与断点续跑
 
 Session 分析过程会将每个 sub-chunk 的分析进度写入持久化的
@@ -318,7 +348,7 @@ Python 版本：3.10
 # 重置扫描/Session/事件/任务数据
 docker compose exec backend python -m src.reset_pipeline_data
 
-# 后端单元测试（289 项）
+# 后端单元测试（661 项）
 python3 -m pytest tests/unit -q
 
 # 后端集成测试（需真实 PostgreSQL，DATABASE_URL）
@@ -326,7 +356,7 @@ python3 -m pytest -m postgres
 
 # 迁移检查
 python3 -m alembic upgrade head
-python3 -m alembic heads   # 期望 20260826_0017
+python3 -m alembic heads   # 期望 20260902_0021
 
 # 代码检查
 ruff check .

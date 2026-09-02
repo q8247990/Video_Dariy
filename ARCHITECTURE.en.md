@@ -181,7 +181,11 @@ Core entities:
 Responsibility: Database infrastructure.
 
 - `session.py`: Engine / SessionLocal / get_db
-- `init_db.py`: Alembic upgrade, default admin initialization, database availability retry
+- `init_db.py`: Alembic upgrade, default admin initialization, database availability retry,
+  migration advisory lock
+- `readiness.py`: health-check implementation for `/livez` / `/readyz`
+- `metrics.py`: `/metrics` observability gauges (outbox lag/failures, task recovery,
+  checkpoint progress)
 - `base.py`: Model registration
 
 Migration conventions:
@@ -424,7 +428,24 @@ Model descriptions:
 - `DailySummary`
   - Structured daily summary result
 - `TaskLog`
-  - Records task status, target, message, retries, and queue task ID
+  - Records task status, target, message, retries, and queue task ID (business run lifecycle)
+- `OutboxEvent` (transactional outbox, 1:1 with `TaskLog`)
+  - Records the publish intent: Celery task name, queue, payload, status
+    (pending/publishing/published/failed), retries and lease
+  - The standalone publisher uses its `event_id` as the broker `task_id` (ADR 0011)
+- `DailySummaryGenerationAttempt`
+  - Append-only record of each daily-summary generation attempt per `summary_date`
+    (including failure/timeout reasons)
+- `PipelineTransitionLog`
+  - Append-only audit of the pipeline state machine (`VideoSession` / `TaskLog`); survives
+    the 7-day `TaskLog` cleanup
+- `SessionAnalysisCheckpoint`
+  - Analysis checkpoint-resume and progress; source of the `/metrics` checkpoint progress
+- `AppRuntimeState`
+  - Runtime protection state; also stores heartbeat metric snapshots
+    (`heartbeat_last_counters`)
+- `LLMUsageLog`
+  - LLM token usage accounting
 
 ## 7. Deployment Architecture
 
@@ -596,6 +617,24 @@ auth state and redirecting to the login page.
 - Celery tasks support timeout recovery
 - Analysis deadlocks support retry
 - Orphaned pending tasks can be reclaimed by the heartbeat task
+
+### 9.8 Observability and Operations
+
+- **Structured JSON logging and redaction**: `src/core/logging_config.py` provides
+  `configure_logging()` (one-line JSON root handler), `RedactingJsonFormatter`, and
+  `redact()` (scrubs secrets, connection strings, sensitive JSON values, and
+  `VIDEO_ROOT_PATH` paths).
+- **Correlation**: the outbox `event_id` threads through the FastAPI middleware, scheduling
+  logs, the outbox publish log, and the Celery `task_prerun` signal, so a single id retrieves
+  the full API → outbox → worker chain.
+- **Health probes and metrics**: `/livez`, `/readyz` (DB + Redis + alembic head), and
+  `GET /metrics` (outbox lag/failures, task-recovery counters, checkpoint progress).
+- **Backup/restore**: `scripts/backup_restore_db.py` provides checksummed
+  backup / verify / restore for a verified backup before irreversible migrations.
+- **Migration serialization**: `init_db` serializes Alembic migration at container bootstrap
+  with a PostgreSQL advisory lock (`pg_advisory_lock`).
+- **At-most-once vs at-least-once**: delivery is **at-least-once**, defended by consumer-side
+  idempotency; nothing here claims exactly-once.
 
 ## 10. Testing and Quality Assurance
 
