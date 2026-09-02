@@ -310,3 +310,39 @@ def test_build_uses_noop_advisory_lock_fallback_for_sqlite(monkeypatch) -> None:
         assert lock_calls == [1]
     finally:
         db.close()
+
+
+def test_build_does_not_mark_missing_files(monkeypatch) -> None:
+    db = _new_db_session()
+    try:
+        video_file = VideoFile(
+            source_id=1,
+            file_name="gone.mp4",
+            file_path="/tmp/videos/2026031509/31M32S_gone.mp4",
+            start_time=datetime(2026, 3, 15, 9, 31, 32),
+            end_time=datetime(2026, 3, 15, 9, 32, 32),
+        )
+        db.add(video_file)
+        db.commit()
+
+        monkeypatch.setattr(
+            "src.services.session_builder.XiaomiDirectoryParser.scan_directory",
+            lambda self, min_time=None, max_time=None, cancel_check=None: [],
+        )
+
+        SessionBuilder().build(
+            db,
+            source_id=1,
+            root_path="/tmp/videos",
+            scan_mode=ScanMode.FULL,
+            scan_start=datetime(2026, 3, 15, 0, 0, 0),
+            scan_end=datetime(2026, 3, 16, 0, 0, 0),
+        )
+        db.commit()
+        db.refresh(video_file)
+
+        # The full missing-file sweep moved to the hourly maintenance heartbeat;
+        # a per-minute build must not stat/mark the whole file history.
+        assert video_file.file_missing is False
+    finally:
+        db.close()

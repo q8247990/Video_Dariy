@@ -15,7 +15,11 @@ from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.session_builder import SessionBuilder
-from src.services.task_dispatch_control import create_pending_task_log, record_deferred_hot_scan
+from src.services.task_dispatch_control import (
+    bind_or_create_running_task_log,
+    create_pending_task_log,
+    record_deferred_hot_scan,
+)
 
 pytestmark = pytest.mark.postgres
 
@@ -182,14 +186,90 @@ def test_full_and_hot_build_collision_preserves_one_file_and_relation(
     with Session(postgres_migrated_engine) as db:
         assert db.query(VideoFile).filter(VideoFile.source_id == source_id).count() == 1
         assert db.query(VideoSession).filter(VideoSession.source_id == source_id).count() == 1
-        session_id = (
-            db.query(VideoSession.id)
-            .filter(VideoSession.source_id == source_id)
-            .one()[0]
-        )
+        session_id = db.query(VideoSession.id).filter(VideoSession.source_id == source_id).one()[0]
         assert (
             db.query(VideoSessionFileRel)
             .filter(VideoSessionFileRel.session_id == session_id)
             .count()
             == 1
         )
+
+
+def test_stale_queue_message_for_timed_out_row_binds_to_none_on_postgres(
+    postgres_migrated_engine: Engine,
+) -> None:
+    local_session = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
+    with local_session() as db:
+        stale_log, created = create_pending_task_log(
+            db,
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=404,
+            detail_json={"scan_mode": "hot", "source_id": 404},
+        )
+        assert created is True
+        stale_log.queue_task_id = "queue-old"
+        db.commit()
+        stale_log_id = stale_log.id
+
+    with local_session() as db:
+        stale_row = db.query(TaskLog).filter(TaskLog.id == stale_log_id).one()
+        stale_row.status = TaskStatus.TIMEOUT
+        stale_row.finished_at = datetime.now(timezone.utc)
+        stale_row.message = "Pending task was never picked up by a worker; timed out"
+        db.commit()
+
+    with local_session() as db:
+        bound = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-old",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=404,
+            detail_json={"scan_mode": "hot", "source_id": 404},
+        )
+        db.commit()
+
+        assert bound is None
+        stale_row = db.query(TaskLog).filter(TaskLog.id == stale_log_id).one()
+        assert stale_row.status == TaskStatus.TIMEOUT
+        assert (
+            db.query(TaskLog)
+            .filter(TaskLog.task_target_id == 404, TaskLog.id != stale_log_id)
+            .count()
+            == 0
+        )
+
+
+def test_stale_message_insert_collision_returns_none_on_postgres(
+    postgres_migrated_engine: Engine,
+) -> None:
+    local_session = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
+    with local_session() as db:
+        active_log, created = create_pending_task_log(
+            db,
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=505,
+            detail_json={"scan_mode": "hot", "source_id": 505},
+        )
+        assert created is True
+        active_log.queue_task_id = "queue-active"
+        db.commit()
+        active_log_id = active_log.id
+
+    with local_session() as db:
+        active_row = db.query(TaskLog).filter(TaskLog.id == active_log_id).one()
+        active_row.status = TaskStatus.RUNNING
+        active_row.started_at = datetime.now(timezone.utc)
+        db.commit()
+
+    with local_session() as db:
+        bound = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-stale",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=505,
+            detail_json={"scan_mode": "hot", "source_id": 505},
+        )
+        db.commit()
+
+        assert bound is None
+        assert db.query(TaskLog).filter(TaskLog.queue_task_id == "queue-stale").count() == 0

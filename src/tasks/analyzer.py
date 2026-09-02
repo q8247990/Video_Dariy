@@ -452,6 +452,13 @@ def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict: 
             task_target_id=session_id,
             detail_json={"priority": priority},
         )
+        if task_log is None:
+            logger.warning(
+                "Stale analysis message %s for session %s; task log already finalized, skipping",
+                queue_task_id,
+                session_id,
+            )
+            return {"skipped": True, "reason": "stale_message"}
         db.commit()
 
         try:

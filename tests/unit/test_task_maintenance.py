@@ -13,9 +13,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
+from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
-from src.tasks.task_maintenance import _recover_orphan_pending_tasks, _recover_timed_out_tasks
+from src.tasks.task_maintenance import (
+    _mark_missing_video_files,
+    _recover_orphan_pending_tasks,
+    _recover_timed_out_tasks,
+)
 
 
 def _new_db_session_factory():
@@ -239,5 +245,85 @@ def test_exhausted_recovery_budget_records_terminal_reason(
         assert task_log.status == TaskStatus.TIMEOUT
         assert task_log.message == f"Automatic recovery limit reached for session {session.id}"
         assert dispatcher.dispatch_analyze_session.call_count == 0
+    finally:
+        db.close()
+
+
+def _source_db_session_factory():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    VideoSource.__table__.create(bind=engine)
+    VideoFile.__table__.create(bind=engine)
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+
+def _make_source_with_files(db: Session, tmp_path, paused: bool = False):
+    source = VideoSource(
+        source_name="cam",
+        camera_name="living",
+        location_name="home",
+        source_type="local_directory",
+        enabled=True,
+        source_paused=paused,
+    )
+    db.add(source)
+    db.flush()
+    (tmp_path / "2026010100").mkdir()
+    present = tmp_path / "2026010100" / "present.mp4"
+    present.write_bytes(b"video")
+    present_file = VideoFile(
+        source_id=source.id,
+        file_name="present.mp4",
+        file_path=str(present),
+        start_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        end_time=datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+    )
+    missing_file = VideoFile(
+        source_id=source.id,
+        file_name="gone.mp4",
+        file_path=str(tmp_path / "2026010100" / "gone.mp4"),
+        start_time=datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+        end_time=datetime(2026, 1, 1, 0, 2, 0, tzinfo=timezone.utc),
+    )
+    db.add_all([present_file, missing_file])
+    db.commit()
+    return source, present_file, missing_file
+
+
+def test_mark_missing_video_files_sweeps_enabled_local_sources(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
+    session_factory = _source_db_session_factory()
+    db: Session = session_factory()
+    try:
+        _, present_file, missing_file = _make_source_with_files(db, tmp_path)
+
+        marked = _mark_missing_video_files(db)
+        db.commit()
+        db.refresh(present_file)
+        db.refresh(missing_file)
+
+        assert marked == 1
+        assert present_file.file_missing is False
+        assert missing_file.file_missing is True
+    finally:
+        db.close()
+
+
+def test_mark_missing_video_files_skips_paused_sources(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
+    session_factory = _source_db_session_factory()
+    db: Session = session_factory()
+    try:
+        _, _, missing_file = _make_source_with_files(db, tmp_path, paused=True)
+
+        marked = _mark_missing_video_files(db)
+        db.commit()
+        db.refresh(missing_file)
+
+        assert marked == 0
+        assert missing_file.file_missing is False
     finally:
         db.close()

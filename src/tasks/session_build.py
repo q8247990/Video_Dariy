@@ -118,6 +118,13 @@ def hot_build_task(self, source_id: int) -> dict:
             task_target_id=source_id,
             detail_json={"scan_mode": ScanMode.HOT, "source_id": source_id},
         )
+        if task_log is None:
+            logger.warning(
+                "Stale hot build message %s for source %s; task log already finalized, skipping",
+                queue_task_id,
+                source_id,
+            )
+            return {"skipped": True, "reason": "stale_message"}
         db.commit()
 
         try:
@@ -227,6 +234,13 @@ def full_build_task(self, source_id: int) -> dict:
             task_target_id=source_id,
             detail_json={"scan_mode": ScanMode.FULL, "source_id": source_id},
         )
+        if task_log is None:
+            logger.warning(
+                "Stale full build message %s for source %s; task log already finalized, skipping",
+                queue_task_id,
+                source_id,
+            )
+            return {"skipped": True, "reason": "stale_message"}
         db.commit()
 
         try:

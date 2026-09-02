@@ -26,7 +26,6 @@ from src.services.pipeline_constants import (
     SessionAnalysisStatus,
 )
 from src.services.pipeline_state import transition_session
-from src.services.session_video import mark_missing_source_video_files
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +83,9 @@ class SessionBuilder:
         result.files_found = len(video_records)
 
         self._acquire_source_mutation_lock(db, source_id)
-        mark_missing_source_video_files(db, source_id)
+        # Missing-file sweep is deliberately not run per build (it stats every
+        # known file); it runs hourly in the maintenance heartbeat, and
+        # playback availability is verified live per request.
 
         if not video_records:
             # No new files; in hot mode check seal buffer for latest open session

@@ -6,11 +6,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.models.task_log import TaskLog
 from src.services.pipeline_constants import TaskStatus, TaskType
+
+TERMINAL_TASK_STATUSES = (
+    TaskStatus.SUCCESS,
+    TaskStatus.SKIPPED,
+    TaskStatus.FAILED,
+    TaskStatus.TIMEOUT,
+    TaskStatus.CANCELLED,
+)
 
 
 class TaskCancellationRequested(Exception):
@@ -246,7 +255,7 @@ def bind_or_create_running_task_log(  # noqa: C901
     task_type: str,
     task_target_id: Optional[int],
     detail_json: Optional[dict[str, Any]] = None,
-) -> TaskLog:
+) -> Optional[TaskLog]:
     detail_payload = ensure_dict_detail(detail_json)
     detail_payload, dedupe_key = _ensure_dedupe_key(task_type, task_target_id, detail_payload)
     now = datetime.now(timezone.utc)
@@ -297,6 +306,12 @@ def bind_or_create_running_task_log(  # noqa: C901
             .first()
         )
         if existing:
+            if existing.status in TERMINAL_TASK_STATUSES:
+                # Stale queue message (its row was finalized, e.g. marked
+                # timeout while the worker was down): never resurrect a
+                # terminal row or insert a new one — a newer active row may
+                # already hold this dedupe key.
+                return None
             bound = _apply_running_state(existing)
             _mark_superseded_pending(bound.id)
             return bound
@@ -319,19 +334,45 @@ def bind_or_create_running_task_log(  # noqa: C901
         _mark_superseded_pending(bound.id)
         return bound
 
-    task_log = TaskLog(
-        task_type=task_type,
-        task_target_id=task_target_id,
-        dedupe_key=dedupe_key,
-        queue_task_id=queue_task_id,
-        status=TaskStatus.RUNNING,
-        started_at=now,
-        lease_owner=queue_task_id or None,
-        last_heartbeat_at=now,
-        lease_expires_at=now + timedelta(seconds=settings.ANALYSIS_LEASE_SECONDS),
-        detail_json=detail_payload,
-    )
+    row_values = {
+        "task_type": task_type,
+        "task_target_id": task_target_id,
+        "dedupe_key": dedupe_key,
+        "queue_task_id": queue_task_id,
+        "status": TaskStatus.RUNNING,
+        "started_at": now,
+        "lease_owner": queue_task_id or None,
+        "last_heartbeat_at": now,
+        "lease_expires_at": now + timedelta(seconds=settings.ANALYSIS_LEASE_SECONDS),
+        "detail_json": detail_payload,
+    }
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        stmt = (
+            postgresql_insert(TaskLog)
+            .values(**row_values)
+            .on_conflict_do_nothing(
+                index_elements=[TaskLog.dedupe_key],
+                index_where=TaskLog.dedupe_key.is_not(None)
+                & TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+            )
+            .returning(TaskLog.id)
+        )
+        inserted_id = db.execute(stmt).scalar_one_or_none()
+        db.flush()
+        if inserted_id is None:
+            return None
+        return db.query(TaskLog).filter(TaskLog.id == inserted_id).one()
+
+    task_log = TaskLog(**row_values)
     db.add(task_log)
+    try:
+        db.flush()
+    except IntegrityError:
+        # A newer active row claimed the same dedupe key between the
+        # candidate scan and this insert: drop this binding instead of
+        # crashing the worker with a UniqueViolation.
+        db.rollback()
+        return None
     return task_log
 
 

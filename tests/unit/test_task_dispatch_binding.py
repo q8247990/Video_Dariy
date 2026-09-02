@@ -1,4 +1,6 @@
-from sqlalchemy import create_engine
+from datetime import datetime, timezone
+
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.models.task_log import TaskLog
@@ -110,6 +112,143 @@ def test_session_build_dedupe_key_excludes_all_scan_modes_for_one_source() -> No
         assert hot_created is False
         assert hot_log.id == full_log.id
         assert full_log.dedupe_key == "source_scan:1"
+    finally:
+        db.close()
+
+
+def test_bind_running_log_skips_stale_message_for_timed_out_row() -> None:
+    db = _new_db_session()
+    try:
+        detail = {"scan_mode": "hot", "source_id": 1}
+        dedupe_key = build_dedupe_key(TaskType.SESSION_BUILD, 1, detail)
+        detail["dedupe_key"] = dedupe_key
+        pending, created = create_pending_task_log(
+            db,
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json=detail,
+        )
+        assert created is True
+        pending.queue_task_id = "queue-stale"
+        pending.status = TaskStatus.TIMEOUT
+        pending.finished_at = datetime.now(timezone.utc)
+        pending.message = "Pending task was never picked up by a worker; timed out"
+        db.commit()
+
+        bound = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-stale",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json={"scan_mode": "hot", "source_id": 1},
+        )
+        db.commit()
+
+        assert bound is None
+        db.refresh(pending)
+        assert pending.status == TaskStatus.TIMEOUT
+        assert db.query(TaskLog).filter(TaskLog.id != pending.id).count() == 0
+    finally:
+        db.close()
+
+
+def test_bind_running_log_rebinds_still_running_row_for_redelivered_message() -> None:
+    db = _new_db_session()
+    try:
+        detail = {"scan_mode": "hot", "source_id": 1}
+        dedupe_key = build_dedupe_key(TaskType.SESSION_BUILD, 1, detail)
+        detail["dedupe_key"] = dedupe_key
+        pending, _ = create_pending_task_log(
+            db,
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json=detail,
+        )
+        pending.queue_task_id = "queue-redeliver"
+        db.commit()
+
+        first = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-redeliver",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json={"scan_mode": "hot", "source_id": 1},
+        )
+        db.commit()
+        assert first is not None
+        assert first.status == TaskStatus.RUNNING
+
+        second = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-redeliver",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json={"scan_mode": "hot", "source_id": 1},
+        )
+        db.commit()
+
+        assert second is not None
+        assert second.id == first.id
+        assert second.status == TaskStatus.RUNNING
+    finally:
+        db.close()
+
+
+def test_bind_running_log_skips_insert_when_active_row_holds_dedupe_key() -> None:
+    db = _new_db_session()
+    try:
+        db.execute(
+            text(
+                "CREATE UNIQUE INDEX ux_task_log_active_dedupe_key "
+                "ON task_log (dedupe_key) "
+                "WHERE dedupe_key IS NOT NULL AND status IN ('pending', 'running')"
+            )
+        )
+        db.commit()
+        active = TaskLog(
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            dedupe_key="source_scan:1",
+            queue_task_id="queue-other",
+            status=TaskStatus.RUNNING,
+            started_at=datetime.now(timezone.utc),
+            detail_json={"scan_mode": "hot", "source_id": 1, "dedupe_key": "source_scan:1"},
+        )
+        db.add(active)
+        db.commit()
+
+        bound = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-stale",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json={"scan_mode": "hot", "source_id": 1},
+        )
+        assert bound is None
+        db.commit()
+
+        assert db.query(TaskLog).filter(TaskLog.queue_task_id == "queue-stale").count() == 0
+    finally:
+        db.close()
+
+
+def test_bind_running_log_creates_running_row_when_nothing_active() -> None:
+    db = _new_db_session()
+    try:
+        bound = bind_or_create_running_task_log(
+            db,
+            queue_task_id="queue-fresh",
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=1,
+            detail_json={"scan_mode": "hot", "source_id": 1},
+        )
+        db.commit()
+
+        assert bound is not None
+        assert bound.status == TaskStatus.RUNNING
+        assert bound.queue_task_id == "queue-fresh"
+        assert bound.dedupe_key == "source_scan:1"
+        assert bound.started_at is not None
     finally:
         db.close()
 

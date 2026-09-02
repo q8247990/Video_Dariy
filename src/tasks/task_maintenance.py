@@ -26,10 +26,12 @@ from src.models.video_source import VideoSource
 from src.services.pipeline_constants import (
     ScanMode,
     SessionAnalysisStatus,
+    SourceType,
     TaskStatus,
     TaskType,
 )
 from src.services.pipeline_state import transition_session, transition_task_log
+from src.services.session_video import mark_missing_source_video_files
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +301,25 @@ def _recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
     return recovered
 
 
+def _mark_missing_video_files(db: Session) -> int:
+    """Sweep enabled sources for video files deleted from disk.
+
+    Runs hourly (see heartbeat): the sweep stats every known file, so it is
+    too expensive for the per-minute hot build path.
+    """
+    sources = (
+        db.query(VideoSource)
+        .filter(VideoSource.enabled.is_(True), VideoSource.source_paused.is_(False))
+        .all()
+    )
+    marked = 0
+    for source in sources:
+        if source.source_type != SourceType.LOCAL_DIRECTORY:
+            continue
+        marked += mark_missing_source_video_files(db, source.id)
+    return marked
+
+
 def _cleanup_old_task_logs(db: Session) -> int:
     """Delete task logs older than CLEANUP_DAYS."""
     threshold = datetime.now(timezone.utc) - timedelta(days=CLEANUP_DAYS)
@@ -328,10 +349,12 @@ def heartbeat(self) -> dict:
             # 3. Recover orphan pending tasks
             pending_recovered = _recover_orphan_pending_tasks(db, now)
 
-            # 4. Cleanup old logs (only run once per hour approximately)
+            # 4. Hourly maintenance: old log cleanup + missing-file sweep
             logs_deleted = 0
+            missing_marked = 0
             if now.minute == 0:
                 logs_deleted = _cleanup_old_task_logs(db)
+                missing_marked = _mark_missing_video_files(db)
 
             db.commit()
             return {
@@ -339,6 +362,7 @@ def heartbeat(self) -> dict:
                 "timed_out": timeout_count,
                 "pending_recovered": pending_recovered,
                 "logs_deleted": logs_deleted,
+                "missing_marked": missing_marked,
             }
         except Exception:
             db.rollback()

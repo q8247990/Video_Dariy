@@ -881,7 +881,7 @@ def dispatch_scheduled_daily_summary_task(self) -> dict:
 
 
 @celery_app.task(bind=True)
-def generate_daily_summary_task(self, target_date_str: str | None = None) -> dict:
+def generate_daily_summary_task(self, target_date_str: str | None = None) -> dict:  # noqa: C901
     """
     Generate daily summary for a given date (YYYY-MM-DD).
     Defaults to yesterday.
@@ -901,6 +901,13 @@ def generate_daily_summary_task(self, target_date_str: str | None = None) -> dic
             task_target_id=None,
             detail_json={"target_date": str(target_date)},
         )
+        if task_log is None:
+            logger.warning(
+                "Stale daily summary message %s for %s; task log already finalized, skipping",
+                queue_task_id,
+                target_date,
+            )
+            return {"skipped": True, "reason": "stale_message"}
         db.commit()
 
         try:

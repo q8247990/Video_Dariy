@@ -86,6 +86,13 @@ def send_webhook_task(self, event_type: str, payload: dict) -> dict:
             task_target_id=None,
             detail_json={"event_type": event_type, "payload": safe_payload},
         )
+        if task_log is None:
+            logger.warning(
+                "Stale webhook message %s for event %s; task log already finalized, skipping",
+                queue_task_id,
+                event_type,
+            )
+            return {"skipped": True, "reason": "stale_message"}
         db.commit()
         successes, failures, delivery_ids = _record_delivery_batch(
             db, event_type, safe_payload, self.request.retries + 1

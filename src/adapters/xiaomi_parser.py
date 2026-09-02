@@ -7,6 +7,10 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+# cancel_check hits the database; checking every directory entry makes a scan
+# of thousands of folders cost thousands of round trips.
+CANCEL_CHECK_INTERVAL = 100
+
 
 class XiaomiDirectoryParser:
     """
@@ -75,15 +79,16 @@ class XiaomiDirectoryParser:
 
         folder_times: list[datetime] = []
         for folder_name in os.listdir(self.root_path):
-            folder_path = os.path.join(self.root_path, folder_name)
-            if not os.path.isdir(folder_path):
-                continue
             if len(folder_name) != 10 or not folder_name.isdigit():
                 continue
             try:
-                folder_times.append(self._to_utc(datetime.strptime(folder_name, "%Y%m%d%H")))
+                folder_time = self._to_utc(datetime.strptime(folder_name, "%Y%m%d%H"))
             except ValueError:
                 continue
+            folder_path = os.path.join(self.root_path, folder_name)
+            if not os.path.isdir(folder_path):
+                continue
+            folder_times.append(folder_time)
 
         if not folder_times:
             return None, None
@@ -104,14 +109,14 @@ class XiaomiDirectoryParser:
         if not os.path.exists(self.root_path):
             return results
 
+        iterations = 0
         for folder_name in os.listdir(self.root_path):
-            if cancel_check is not None:
+            iterations += 1
+            if cancel_check is not None and iterations % CANCEL_CHECK_INTERVAL == 0:
                 cancel_check()
-            folder_path = os.path.join(self.root_path, folder_name)
-            if not os.path.isdir(folder_path):
-                continue
 
-            # Quick filter based on folder name if it matches YYYYMMDDHH
+            # Name-based pre-filter (pure CPU, no syscall) before touching
+            # the filesystem: out-of-window folders are skipped without stat.
             if len(folder_name) == 10 and folder_name.isdigit():
                 try:
                     folder_time = self._to_utc(datetime.strptime(folder_name, "%Y%m%d%H"))
@@ -124,8 +129,13 @@ class XiaomiDirectoryParser:
                 except ValueError:
                     pass
 
+            folder_path = os.path.join(self.root_path, folder_name)
+            if not os.path.isdir(folder_path):
+                continue
+
             for file_name in os.listdir(folder_path):
-                if cancel_check is not None:
+                iterations += 1
+                if cancel_check is not None and iterations % CANCEL_CHECK_INTERVAL == 0:
                     cancel_check()
                 if not file_name.endswith(".mp4"):
                     continue
