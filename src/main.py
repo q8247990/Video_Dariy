@@ -14,6 +14,7 @@ from src.core.celery_app import celery_app  # noqa: F401
 from src.core.config import settings
 from src.core.i18n import get_system_default_locale, normalize_locale
 from src.db.init_db import get_current_alembic_revision, get_registered_table_names, init_db
+from src.db.readiness import readiness_checks
 from src.mcp.server import router as mcp_router
 
 
@@ -91,6 +92,21 @@ app.include_router(mcp_router)
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/livez")
+def liveness_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readiness_check() -> JSONResponse:
+    checks = readiness_checks()
+    ready = all(checks.values())
+    payload = {"status": "ready" if ready else "not_ready", "checks": checks}
+    if ready:
+        return JSONResponse(content=payload)
+    return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=payload)
 
 
 @app.get("/health/bootstrap")

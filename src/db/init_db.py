@@ -1,9 +1,11 @@
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,15 @@ from src.db.session import SessionLocal, engine
 from src.models.admin_user import AdminUser
 
 logger = logging.getLogger(__name__)
+
+#: The Alembic revision this deployment expects to be at. Readiness gates
+#: (``/readyz``) compare the live schema against this head.
+EXPECTED_ALEMBIC_REVISION = "20260902_0021"
+
+#: Named PostgreSQL advisory-lock key used to serialize schema migration across
+#: concurrently starting backend containers. Advisory locks are scoped to a
+#: database, so every backend pointing at the same DB coordinates on this key.
+MIGRATION_ADVISORY_LOCK_KEY = 6_420_302_021
 
 
 def get_current_alembic_revision() -> str | None:
@@ -43,6 +54,29 @@ def _run_alembic_upgrade_head() -> None:
 
     config = Config(str(alembic_ini_path))
     command.upgrade(config, "head")
+
+
+def run_migration_locked(migrator: Callable[[], None], lock_engine: Engine | None = None) -> None:
+    """Run ``migrator()`` guarded by a named PostgreSQL advisory lock.
+
+    Two backend containers starting simultaneously must never migrate
+    concurrently: exactly one owns the migration while the other waits on
+    the lock, then finds the schema already at head. Advisory locks are
+    session-scoped and held on a dedicated connection until ``migrator()``
+    returns. Non-PostgreSQL dialects (e.g. SQLite unit tests) skip the lock.
+    """
+
+    target = lock_engine if lock_engine is not None else engine
+    if target.dialect.name != "postgresql":
+        migrator()
+        return
+
+    with target.connect() as lock_conn:
+        lock_conn.execute(text(f"SELECT pg_advisory_lock({MIGRATION_ADVISORY_LOCK_KEY})"))
+        try:
+            migrator()
+        finally:
+            lock_conn.execute(text(f"SELECT pg_advisory_unlock({MIGRATION_ADVISORY_LOCK_KEY})"))
 
 
 def _is_retryable_operational_error(exc: OperationalError) -> bool:
@@ -96,7 +130,7 @@ def init_db(max_retries: int | None = None, retry_interval: int | None = None) -
 
     for attempt in range(1, effective_max_retries + 1):
         try:
-            _run_alembic_upgrade_head()
+            run_migration_locked(_run_alembic_upgrade_head)
             _ensure_default_admin()
             logger.info(
                 "Database bootstrap done (mode=%s, tables=%s, alembic_revision=%s)",
