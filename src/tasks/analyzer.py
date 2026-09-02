@@ -427,8 +427,8 @@ def _completed_results(
     return results, events
 
 
-@celery_app.task(bind=True, max_retries=DEADLOCK_MAX_RETRIES)
-def analyze_session_task(self, session_id: int, priority: str = "hot") -> dict:  # noqa: C901
+@celery_app.task(bind=True, max_retries=DEADLOCK_MAX_RETRIES)  # type: ignore[untyped-decorator]
+def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> dict[str, Any]:  # noqa: C901
     """Analyze a sealed session using LLM vision.
 
     Dispatched to the analysis_hot or analysis_full queue by the caller and

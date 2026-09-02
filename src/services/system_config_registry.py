@@ -76,13 +76,13 @@ def _bool(value: Any) -> bool:
 def _positive_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise SystemConfigValidationError("configuration value must be a positive integer")
-    return value
+    return int(value)
 
 
 def _non_negative_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise SystemConfigValidationError("configuration value must be a non-negative integer")
-    return value
+    return int(value)
 
 
 REGISTRY: Final[dict[str, ConfigDefinition]] = {

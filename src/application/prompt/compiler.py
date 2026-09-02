@@ -52,6 +52,3 @@ def compile_daily_summary_prompt(input_data: DailySummaryPromptInput) -> tuple[s
         },
         locale=input_data.locale,
     )
-
-
-

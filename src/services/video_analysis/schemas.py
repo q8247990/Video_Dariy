@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from src.services.video_analysis.enums import (
     ACTIVITY_LEVELS,
@@ -69,7 +69,7 @@ class RecognizedEventDTO(BaseModel):
 
     @field_validator("offset_end_sec")
     @classmethod
-    def validate_offsets(cls, value: float, info) -> float:
+    def validate_offsets(cls, value: float, info: ValidationInfo) -> float:
         offset_start_sec = info.data.get("offset_start_sec")
         if offset_start_sec is not None and value < offset_start_sec:
             raise ValueError("offset_end_sec must be greater than or equal to offset_start_sec")

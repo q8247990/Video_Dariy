@@ -1,5 +1,8 @@
 import os
 import time
+from collections.abc import Iterator
+from datetime import datetime
+from typing import IO
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -44,7 +47,9 @@ def _parse_byte_range(range_header: str | None, file_size: int) -> tuple[int, in
     return start, end
 
 
-def send_bytes_range_requests(file_obj, start: int, end: int, chunk_size: int = 1024 * 1024):
+def send_bytes_range_requests(
+    file_obj: IO[bytes], start: int, end: int, chunk_size: int = 1024 * 1024
+) -> Iterator[bytes]:
     """Stream a byte range from ``file_obj``. Stops cleanly at EOF or end offset."""
     with file_obj as f:
         f.seek(start)
@@ -122,10 +127,10 @@ def _no_store_headers() -> dict[str, str]:
     return {"Cache-Control": "no-store"}
 
 
-@router.get("/files/{file_id}/stream")
+@router.get("/files/{file_id}/stream", response_model=None)
 def stream_video(
     file_id: int, db: DB, locale: Locale, request: Request, token: str | None = Query(default=None)
-):
+) -> FileResponse | StreamingResponse:
     capability = _verify_media_capability(token, "file", file_id)
     _verify_file_session_scope(db, file_id, capability)
     video_file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
@@ -164,7 +169,9 @@ def stream_video(
 
 
 @router.get("/sessions/{session_id}/playback", response_model=BaseResponse[dict])
-def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: CurrentUser):
+def get_session_playback(
+    session_id: int, db: DB, locale: Locale, current_user: CurrentUser
+) -> BaseResponse[dict]:
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:
         return BaseResponse(code=4002, message=t("session.not_found", locale))
@@ -200,6 +207,7 @@ def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: 
         available = is_video_file_available(vf)
         if not available:
             mark_missing_video_file(vf)
+        missing_at: datetime | None = vf.missing_at
         files_data.append(
             {
                 "file_id": vf.id,
@@ -218,7 +226,7 @@ def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: 
                 "sort_index": rel.sort_index,
                 "available": available,
                 "unavailable_reason": None if available else "physical_file_unavailable",
-                "missing_at": vf.missing_at,
+                "missing_at": missing_at.isoformat() if missing_at else None,
             }
         )
 
@@ -254,10 +262,10 @@ def get_session_playback(session_id: int, db: DB, locale: Locale, current_user: 
     )
 
 
-@router.get("/sessions/{session_id}/hls/index.m3u8")
+@router.get("/sessions/{session_id}/hls/index.m3u8", response_model=None)
 def stream_session_hls_manifest(
     session_id: int, db: DB, locale: Locale, token: str | None = Query(default=None)
-):
+) -> Response:
     _verify_media_capability(token, "session_hls", session_id)
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:
@@ -287,14 +295,14 @@ def stream_session_hls_manifest(
     )
 
 
-@router.get("/sessions/{session_id}/stream")
+@router.get("/sessions/{session_id}/stream", response_model=None)
 def stream_session_merged_video(
     session_id: int,
     db: DB,
     locale: Locale,
     request: Request,
     token: str | None = Query(default=None),
-):
+) -> FileResponse | StreamingResponse:
     _verify_media_capability(token, "session_stream", session_id)
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
     if not session:

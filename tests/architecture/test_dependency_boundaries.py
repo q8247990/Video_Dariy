@@ -228,8 +228,7 @@ KNOWN_VIOLATIONS: tuple[tuple[str, str, str, str], ...] = (
         "src/services/prompt_builder/v2/qa_answer.py",
         "src.application.qa.schemas",
         "Todo 5",
-        "qa_answer prompt builder imports application QA schemas; "
-        "moved to pure DTOs under Todo 5.",
+        "qa_answer prompt builder imports application QA schemas; moved to pure DTOs under Todo 5.",
     ),
     # ---- services → infrastructure (Todo 5 — adapter binding rule) -----
     (
@@ -299,9 +298,7 @@ def _iter_import_modules(path: Path) -> Iterator[tuple[str, int]]:
     try:
         tree = ast.parse(source, filename=str(path))
     except SyntaxError as exc:
-        raise RuntimeError(
-            f"failed to parse {path} at line {exc.lineno}: {exc.msg}"
-        ) from exc
+        raise RuntimeError(f"failed to parse {path} at line {exc.lineno}: {exc.msg}") from exc
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -358,8 +355,7 @@ def test_known_violations_have_valid_owner_todo() -> None:
     for path, module, owner, _reason in KNOWN_VIOLATIONS:
         if owner not in VALID_OWNER_TODOS:
             offenders.append(
-                f"{path}:{module} -> owner={owner!r} (must be one of "
-                f"{sorted(VALID_OWNER_TODOS)})"
+                f"{path}:{module} -> owner={owner!r} (must be one of {sorted(VALID_OWNER_TODOS)})"
             )
     assert not offenders, (
         "KNOWN_VIOLATIONS contains rows with invalid owner_todo; "
@@ -394,13 +390,11 @@ def test_known_violations_resolve_to_real_code() -> None:
             continue
         if module not in imports:
             missing.append(
-                f"{path}:{module} -> module not imported by file "
-                f"(file imports: {sorted(imports)})"
+                f"{path}:{module} -> module not imported by file (file imports: {sorted(imports)})"
             )
     assert not missing, (
         "KNOWN_VIOLATIONS references (path, module) pairs that no longer "
-        "exist in source. Remove the dead rows or fix the table:\n  - "
-        + "\n  - ".join(missing)
+        "exist in source. Remove the dead rows or fix the table:\n  - " + "\n  - ".join(missing)
     )
 
 
@@ -460,13 +454,10 @@ def test_rules_cover_all_target_layers() -> None:
         ("src/services", "src.infrastructure", "Todo 5"),
         ("src/core", "src.db.session", "Todo 8"),
     }
-    actual_layers = {
-        (r.source_root, r.target_module_prefix, r.owner_todo) for r in RULES
-    }
+    actual_layers = {(r.source_root, r.target_module_prefix, r.owner_todo) for r in RULES}
     missing = expected_layers - actual_layers
-    assert not missing, (
-        "Boundary rules missing from RULES:\n  - "
-        + "\n  - ".join(f"{a}->{b} ({c})" for a, b, c in sorted(missing))
+    assert not missing, "Boundary rules missing from RULES:\n  - " + "\n  - ".join(
+        f"{a}->{b} ({c})" for a, b, c in sorted(missing)
     )
 
 
@@ -484,7 +475,7 @@ def _inject_temp_violation(path: Path) -> Path:
 
     payload = (
         '"""Temporary fixture injected by the architecture-boundary test.\n'
-        'Do not commit this file: deleting it is part of the test.\n'
+        "Do not commit this file: deleting it is part of the test.\n"
         '"""\n'
         "\n"
         "from src.infrastructure.tasks.celery_dispatcher import (\n"
@@ -506,8 +497,7 @@ def test_violation_added_at_runtime_fails() -> None:
 
     fixture = PROJECT_ROOT / "src" / "api" / "_boundary_test_fixture.py"
     assert not fixture.exists(), (
-        "Pre-existing fixture left behind by a previous run; aborting to "
-        "avoid clobbering."
+        "Pre-existing fixture left behind by a previous run; aborting to avoid clobbering."
     )
 
     try:
@@ -515,22 +505,14 @@ def test_violation_added_at_runtime_fails() -> None:
 
         actual = _detect_violations()
         declared = _declared_pairs()
-        undeclared = [
-            (p, m, ln, o)
-            for p, m, ln, o in actual
-            if (p, m) not in declared
-        ]
+        undeclared = [(p, m, ln, o) for p, m, ln, o in actual if (p, m) not in declared]
 
         fixture_rel = str(fixture.relative_to(PROJECT_ROOT))
-        matched = [
-            entry for entry in undeclared if entry[0] == fixture_rel
-        ]
+        matched = [entry for entry in undeclared if entry[0] == fixture_rel]
         assert matched, (
             "Runtime violation fixture was injected but the detector did "
             "not flag it. Detector output:\n  - "
-            + "\n  - ".join(
-                f"{p}:{ln}: {m}" for p, m, ln, _ in undeclared
-            )
+            + "\n  - ".join(f"{p}:{ln}: {m}" for p, m, ln, _ in undeclared)
         )
         # Sanity: the matched entry must reference src.infrastructure
         for _path, module, _ln, _o in matched:
@@ -545,9 +527,7 @@ def test_violation_added_at_runtime_fails() -> None:
     actual_after = _detect_violations()
     declared_after = _declared_pairs()
     undeclared_after = [
-        (p, m, ln, o)
-        for p, m, ln, o in actual_after
-        if (p, m) not in declared_after
+        (p, m, ln, o) for p, m, ln, o in actual_after if (p, m) not in declared_after
     ]
     assert not undeclared_after, (
         "Detector still reports undeclared violations after the runtime "
@@ -571,8 +551,7 @@ def _git(*args: str, cwd: Path = PROJECT_ROOT) -> str:
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"git {' '.join(args)} failed (rc={result.returncode}): "
-            f"{result.stderr.strip()}"
+            f"git {' '.join(args)} failed (rc={result.returncode}): {result.stderr.strip()}"
         )
     return result.stdout
 
@@ -580,9 +559,7 @@ def _git(*args: str, cwd: Path = PROJECT_ROOT) -> str:
 def _modified_python_paths(ref: str) -> list[Path]:
     out = _git("diff", "--name-only", "--diff-filter=AM", ref)
     return [
-        PROJECT_ROOT / line.strip()
-        for line in out.splitlines()
-        if line.strip().endswith(".py")
+        PROJECT_ROOT / line.strip() for line in out.splitlines() if line.strip().endswith(".py")
     ]
 
 
@@ -662,16 +639,12 @@ def test_no_new_violations_introduced() -> None:
                 # table was updated first. Anything else is a real
                 # regression.
                 continue
-            new_offenders.append(
-                (str(path.relative_to(PROJECT_ROOT)), module, rule.name)
-            )
+            new_offenders.append((str(path.relative_to(PROJECT_ROOT)), module, rule.name))
 
     assert not new_offenders, (
         "Working-tree changes introduced new architecture-boundary violations "
         "that are not registered in KNOWN_VIOLATIONS:\n  - "
-        + "\n  - ".join(
-            f"{p}: {m} (rule={r})" for p, m, r in new_offenders
-        )
+        + "\n  - ".join(f"{p}: {m} (rule={r})" for p, m, r in new_offenders)
     )
 
 

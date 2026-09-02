@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -334,8 +335,8 @@ def _cleanup_old_task_logs(db: Session) -> int:
     return int(deleted or 0)
 
 
-@celery_app.task(bind=True)
-def heartbeat(self) -> dict:
+@celery_app.task(bind=True)  # type: ignore[untyped-decorator]
+def heartbeat(self: Any) -> dict[str, Any]:
     """Main heartbeat: runs every 60s via Celery Beat."""
     with task_db_session() as db:
         now = datetime.now(timezone.utc)

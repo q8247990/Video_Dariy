@@ -58,19 +58,19 @@ def _build_agent_system_prompt(
 时区: {timezone}
 
 家庭信息:
-  名称: {home_profile.get('home_name', '')}
-  关注重点: {'、'.join(home_profile.get('focus_points', [])) or '无'}
+  名称: {home_profile.get("home_name", "")}
+  关注重点: {"、".join(home_profile.get("focus_points", [])) or "无"}
   成员:
-{chr(10).join(member_lines) if member_lines else '    无'}
+{chr(10).join(member_lines) if member_lines else "    无"}
   宠物:
-{chr(10).join(pet_lines) if pet_lines else '    无'}
+{chr(10).join(pet_lines) if pet_lines else "    无"}
 
-已知主体: {', '.join(subject_names) if subject_names else '无'}
+已知主体: {", ".join(subject_names) if subject_names else "无"}
 
 系统数据范围:
-  最早事件日期: {data_availability.get('earliest_event_date') or '无数据'}
-  最晚事件日期: {data_availability.get('latest_event_date') or '无数据'}
-  总事件数: {data_availability.get('total_event_count', 0)}
+  最早事件日期: {data_availability.get("earliest_event_date") or "无数据"}
+  最晚事件日期: {data_availability.get("latest_event_date") or "无数据"}
+  总事件数: {data_availability.get("total_event_count", 0)}
 
 事件类型说明:
 {chr(10).join(event_type_lines)}

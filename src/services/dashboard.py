@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -365,5 +365,5 @@ def _build_event_title(description: str, locale: str) -> str:
     return f"{text[:18].rstrip()}..."
 
 
-def _important_condition():
+def _important_condition() -> Any:
     return EventRecord.importance_level.in_(IMPORTANT_LEVELS)

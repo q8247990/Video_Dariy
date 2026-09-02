@@ -35,10 +35,11 @@ def _load_catalog(locale: str) -> dict[str, str]:
         return {}
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception:
         logger.exception("Failed to load locale file: %s", path)
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _get_catalog(locale: str) -> dict[str, str]:

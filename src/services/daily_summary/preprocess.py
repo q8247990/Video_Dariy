@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Optional
+from typing import Literal, Optional, cast
 
 from src.models.event_record import EventRecord
 from src.services.daily_summary.schemas import (
@@ -7,6 +7,8 @@ from src.services.daily_summary.schemas import (
     SubjectEventSection,
     SubjectEventSummary,
 )
+
+SubjectType = Literal["member", "pet"]
 
 ATTENTION_EVENT_TYPES = {
     "unknown_person_appear",
@@ -37,7 +39,9 @@ def build_subject_event_mapping(
     events: list[EventRecord],
     known_subjects: list[dict[str, str]],
 ) -> tuple[list[SubjectEventSection], list[str], set[int]]:
-    known_name_to_type = {item["subject_name"]: item["subject_type"] for item in known_subjects}
+    known_name_to_type: dict[str, SubjectType] = {
+        item["subject_name"]: cast(SubjectType, item["subject_type"]) for item in known_subjects
+    }
     subject_event_map: dict[str, list[SubjectEventSummary]] = defaultdict(list)
     mapped_event_ids: set[int] = set()
 

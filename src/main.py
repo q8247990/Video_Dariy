@@ -1,4 +1,5 @@
 # 以此项目纪念我亲爱的糖糖，愿你在喵星，也能看到家里，看到你的栗子哥哥，和永远爱你的爸爸妈妈。
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -32,7 +33,7 @@ class LocaleMiddleware(BaseHTTPMiddleware):
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
     yield
 
@@ -88,12 +89,12 @@ app.include_router(mcp_router)
 
 
 @app.get("/health")
-def health_check():
+def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/health/bootstrap")
-def health_bootstrap():
+def health_bootstrap() -> dict[str, object]:
     return {
         "status": "ok",
         "schema_mode": "alembic_only",

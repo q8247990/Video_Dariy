@@ -3,7 +3,7 @@ import io
 import logging
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -226,9 +226,13 @@ async def upload_entity_image(
     try:
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         w, h = img.size
+        image_any = cast(Any, Image)
+        resampling = (
+            image_any.Resampling.LANCZOS if hasattr(Image, "Resampling") else image_any.LANCZOS
+        )
         if max(w, h) > _IMAGE_MAX_SIDE:
             ratio = _IMAGE_MAX_SIDE / max(w, h)
-            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            img = img.resize((int(w * ratio), int(h * ratio)), resampling)
 
         os.makedirs(settings.ENTITY_IMAGE_ROOT, exist_ok=True)
         save_path = _entity_image_path(entity_id)

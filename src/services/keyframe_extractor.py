@@ -354,9 +354,9 @@ def _to_small_gray(frame_bgr: np.ndarray) -> np.ndarray:
 def _phash64(small_gray: np.ndarray) -> int:
     """160x90 灰度 → 64-bit pHash（DCT-based）。"""
     resized = cv2.resize(small_gray, (_PHASH_DIM, _PHASH_DIM), interpolation=cv2.INTER_AREA)
-    resized_f = np.float32(resized)
+    resized_f: np.ndarray = np.asarray(resized, dtype=np.float64)
     dct = cv2.dct(resized_f)
-    low = dct[:8, :8].reshape(-1)
+    low = np.asarray(dct[:8, :8]).reshape(-1).astype(np.float64)
     med = float(np.median(low[1:]))
     bits = (low > med).astype(np.uint8)
     out = 0
@@ -383,7 +383,7 @@ def _score_frame(
     if prev_small is None or prev_hash is None:
         return False, 0.0, 0
     diff = cv2.absdiff(prev_small, cur_small)
-    mad = float(np.mean(diff))
+    mad = float(np.mean(diff.astype(np.float64)))
     phd = _phash_distance(prev_hash, cur_hash)
     is_change = mad > mad_threshold or phd > phash_threshold
     return is_change, mad, phd

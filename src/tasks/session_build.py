@@ -6,7 +6,9 @@ full: user-triggered, scans entire history, long timeout.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -41,7 +43,7 @@ HOT_WINDOW_HOURS = 24
 _session_builder = SessionBuilder()
 
 
-def _make_cancel_check(db: Session, task_log_id: int, source_id: int):
+def _make_cancel_check(db: Session, task_log_id: int, source_id: int) -> Callable[[], None]:
     def _cancel_check() -> None:
         ensure_task_not_cancelled(
             db,
@@ -60,9 +62,10 @@ def _get_latest_session_end_time(db: Session, source_id: int) -> datetime | None
         .order_by(VideoSession.session_end_time.desc())
         .first()
     )
-    if row is None:
+    if row is None or row[0] is None:
         return None
-    return row[0]
+    latest: datetime | None = row[0]
+    return latest
 
 
 def _compute_hot_scan_start(db: Session, source_id: int, now: datetime) -> datetime:
@@ -106,8 +109,8 @@ def _dispatch_analysis_for_sealed(
     return dispatched
 
 
-@celery_app.task(bind=True, time_limit=3600)
-def hot_build_task(self, source_id: int) -> dict:
+@celery_app.task(bind=True, time_limit=3600)  # type: ignore[untyped-decorator]
+def hot_build_task(self: Any, source_id: int) -> dict[str, Any]:
     """Hot session build: scan recent files, merge into sessions."""
     with task_db_session() as db:
         queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
@@ -222,8 +225,8 @@ def hot_build_task(self, source_id: int) -> dict:
             raise
 
 
-@celery_app.task(bind=True, time_limit=259200)  # 3 days
-def full_build_task(self, source_id: int) -> dict:
+@celery_app.task(bind=True, time_limit=259200)  # type: ignore[untyped-decorator]  # 3 days
+def full_build_task(self: Any, source_id: int) -> dict[str, Any]:
     """Full session build: scan entire history up to hot boundary."""
     with task_db_session() as db:
         queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")

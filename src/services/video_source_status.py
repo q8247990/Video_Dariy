@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, cast
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -231,7 +231,7 @@ def _query_analysis_state_map(db: Session, source_ids: list[int]) -> dict[int, s
 
     pending_ids = [source_id for source_id in source_ids if source_id not in states]
     if pending_ids:
-        running_logs = (
+        running_rows = (
             db.query(TaskLog.task_target_id)
             .filter(
                 TaskLog.task_target_id.in_(pending_ids),
@@ -240,10 +240,11 @@ def _query_analysis_state_map(db: Session, source_ids: list[int]) -> dict[int, s
             )
             .all()
         )
-        for row in running_logs:
-            if row[0] is None:
+        for row in running_rows:  # type: ignore[assignment]
+            target_id = cast(int | None, row[0])
+            if target_id is None:
                 continue
-            source_id = int(row[0])
+            source_id = int(target_id)
             states.setdefault(source_id, "analyzing")
 
     pending_ids = [source_id for source_id in source_ids if source_id not in states]

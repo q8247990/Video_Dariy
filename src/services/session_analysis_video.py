@@ -11,6 +11,7 @@ from src.services.ffmpeg_utils import run_ffmpeg_concat_to_bytes
 from src.services.session_video import get_session_video_files
 
 if TYPE_CHECKING:
+    from src.models.video_file import VideoFile
     from src.services.keyframe_extractor import KeyframeSet
 
 
@@ -260,7 +261,7 @@ def session_chunk_from_sub_chunk(sub_chunk: SubChunk, parent_chunk_index: int) -
     )
 
 
-def _resolve_file_duration_seconds(video_file) -> int:
+def _resolve_file_duration_seconds(video_file: VideoFile) -> int:
     duration_seconds = video_file.duration_seconds
     if isinstance(duration_seconds, (int, float)) and duration_seconds > 0:
         return int(duration_seconds)

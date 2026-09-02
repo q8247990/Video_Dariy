@@ -1,7 +1,9 @@
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
+from sqlalchemy.orm import Session
 
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
@@ -18,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 def _deliver_hook(
     *,
-    db,
+    db: Session,
     hook: WebhookConfig,
     event_type: str,
-    payload: dict,
+    payload: dict[str, Any],
     attempt: int,
 ) -> WebhookDeliveryLog:
     headers = dict(hook.headers_json or {})
@@ -31,6 +33,7 @@ def _deliver_hook(
     )
     db.add(delivery)
     db.flush()
+    response: httpx.Response | None = None
     try:
         validate_webhook_url(hook.url)
         with httpx.Client(timeout=10, follow_redirects=False) as client:
@@ -44,14 +47,14 @@ def _deliver_hook(
     except (WebhookUrlPolicyError, httpx.HTTPError) as error:
         delivery.status = "failed"
         delivery.error_message = str(error)[:1024]
-        response = getattr(error, "response", None)
-        delivery.status_code = response.status_code if response is not None else None
+        error_response: httpx.Response | None = getattr(error, "response", None)
+        delivery.status_code = error_response.status_code if error_response is not None else None
         logger.warning("Webhook delivery failed webhook_id=%s: %s", hook.id, error)
     return delivery
 
 
 def _record_delivery_batch(
-    db, event_type: str, payload: dict, attempt: int
+    db: Session, event_type: str, payload: dict[str, Any], attempt: int
 ) -> tuple[int, int, list[int]]:
     webhooks = db.query(WebhookConfig).filter(WebhookConfig.enabled).all()
     payload_version = str(payload.get("version") or "")
@@ -70,8 +73,8 @@ def _record_delivery_batch(
     return successes, len(deliveries) - successes, [delivery.id for delivery in deliveries]
 
 
-@celery_app.task(bind=True, max_retries=3)
-def send_webhook_task(self, event_type: str, payload: dict) -> dict:
+@celery_app.task(bind=True, max_retries=3)  # type: ignore[untyped-decorator]
+def send_webhook_task(self: Any, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     with task_db_session() as db:
         if not is_webhook_event_payload(event_type, payload):
             raise ValueError(

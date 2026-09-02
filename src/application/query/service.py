@@ -5,9 +5,9 @@
 """
 
 import logging
-from typing import Optional
+from typing import Optional, cast
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import ColumnElement, func, or_, text
 from sqlalchemy.orm import Session
 
 from src.application.query.schemas import (
@@ -219,23 +219,26 @@ class HomeQueryService:
         )
 
     @staticmethod
-    def _build_subject_filter(subjects: list[str]):
+    def _build_subject_filter(subjects: list[str]) -> ColumnElement[bool] | None:
         """构建 PostgreSQL JSON 主体过滤条件。"""
-        conditions = []
+        conditions: list[ColumnElement[bool]] = []
         for name in subjects:
             conditions.append(
-                text(
-                    "EXISTS ("
-                    "  SELECT 1 FROM jsonb_array_elements("
-                    "    related_entities_json::jsonb"
-                    "  ) AS elem"
-                    "  WHERE ("
-                    "    elem->>'matched_profile_name' = :name"
-                    "    OR elem->>'display_name' = :name"
-                    "  )"
-                    "  AND elem->>'recognition_status' IN ('confirmed', 'suspected')"
-                    ")"
-                ).bindparams(name=name)
+                cast(
+                    ColumnElement[bool],
+                    text(
+                        "EXISTS ("
+                        "  SELECT 1 FROM jsonb_array_elements("
+                        "    related_entities_json::jsonb"
+                        "  ) AS elem"
+                        "  WHERE ("
+                        "    elem->>'matched_profile_name' = :name"
+                        "    OR elem->>'display_name' = :name"
+                        "  )"
+                        "  AND elem->>'recognition_status' IN ('confirmed', 'suspected')"
+                        ")"
+                    ).bindparams(name=name),
+                )
             )
 
         if not conditions:

@@ -1,7 +1,8 @@
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.config import settings
 
@@ -14,7 +15,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def get_db():
+def get_db() -> Iterator[Session]:
     db = SessionLocal()
     try:
         yield db
@@ -23,7 +24,7 @@ def get_db():
 
 
 @contextmanager
-def task_db_session():
+def task_db_session() -> Iterator[Session]:
     """Context manager for Celery task DB sessions.
 
     Handles session creation and guaranteed cleanup.

@@ -36,7 +36,12 @@ class OpenAIClient:
     def __enter__(self) -> "OpenAIClient":
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> None:
         self.close()
 
     def _build_default_request_extras(self) -> dict[str, Any]:
@@ -112,7 +117,8 @@ class OpenAIClient:
             choices = data.get("choices")
             if not choices:
                 raise ValueError(f"OpenAI API returned no choices: {data}")
-            return choices[0]["message"]["content"]
+            content = choices[0]["message"]["content"]
+            return str(content) if content is not None else None
         except Exception:
             logger.exception(
                 "OpenAI chat completion failed (model=%s, url=%s)", self.model_name, url

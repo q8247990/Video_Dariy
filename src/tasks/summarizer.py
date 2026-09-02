@@ -143,7 +143,7 @@ def _upsert_daily_summary(
     provider_id: int,
     provider_name_snapshot: str | None,
 ) -> DailySummary:
-    payload = {
+    payload: dict[str, Any] = {
         "summary_date": target_date,
         "summary_title": summary_title,
         "overall_summary": overall_summary,
@@ -828,8 +828,8 @@ def _claim_daily_summary_generation(db: Session, target_date: date) -> bool:
     return True
 
 
-@celery_app.task(bind=True)
-def dispatch_scheduled_daily_summary_task(self) -> dict:
+@celery_app.task(bind=True)  # type: ignore[untyped-decorator]
+def dispatch_scheduled_daily_summary_task(self: Any) -> dict[str, Any]:
     with task_db_session() as db:
         zone = _home_timezone(db)
         now = home_now(zone)
@@ -880,8 +880,8 @@ def dispatch_scheduled_daily_summary_task(self) -> dict:
             }
 
 
-@celery_app.task(bind=True)
-def generate_daily_summary_task(self, target_date_str: str | None = None) -> dict:  # noqa: C901
+@celery_app.task(bind=True)  # type: ignore[untyped-decorator]
+def generate_daily_summary_task(self: Any, target_date_str: str | None = None) -> dict[str, Any]:  # noqa: C901
     """
     Generate daily summary for a given date (YYYY-MM-DD).
     Defaults to yesterday.

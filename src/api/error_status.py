@@ -1,10 +1,11 @@
 import json
 from collections.abc import Awaitable, Callable
-from typing import Final
+from typing import Any, Final, cast
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 _STATUS_BY_CODE: Final[dict[int, int]] = {
     4000: 400,
@@ -35,7 +36,9 @@ class ResponseStatusMiddleware(BaseHTTPMiddleware):
         if "application/json" not in content_type or response.status_code != 200:
             return response
 
-        body = b"".join([chunk async for chunk in response.body_iterator])
+        starlette_response = cast(StarletteResponse, response)
+        body_iterator: Any = cast(Any, starlette_response).body_iterator
+        body = b"".join([chunk async for chunk in body_iterator])
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:

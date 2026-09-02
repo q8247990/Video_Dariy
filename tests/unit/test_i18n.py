@@ -88,9 +88,9 @@ def test_t_both_locales_have_same_keys():
     en = _get_catalog("en-US")
     zh_keys = set(zh.keys())
     en_keys = set(en.keys())
-    assert (
-        zh_keys == en_keys
-    ), f"Missing in en-US: {zh_keys - en_keys}, Missing in zh-CN: {en_keys - zh_keys}"
+    assert zh_keys == en_keys, (
+        f"Missing in en-US: {zh_keys - en_keys}, Missing in zh-CN: {en_keys - zh_keys}"
+    )
 
 
 def test_t_en_us_fallback_to_zh_cn_for_missing_key():
