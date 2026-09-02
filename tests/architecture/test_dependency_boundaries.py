@@ -1,10 +1,10 @@
-"""Architecture dependency boundary tests (Todo 2 — Wave 0 gate).
+"""Architecture dependency boundary tests (Todo 2 — Wave 0 gate, locked at Todo 8).
 
 This test module is the AST-driven, version-locked characterization of the
 target layered architecture described in ``.omo/plans/architecture-consolidation.md``
 (Wave 0, Todo 2). It exists **before** any structural cleanup and must stay
 green at every commit; it is the only guard that prevents new
-adapter-binding regressions from sneaking in.
+adapter-binding regressions from running code in.
 
 Layer rules enforced here:
 
@@ -15,12 +15,14 @@ Source layer                Forbidden target module    Owner (per plan)
 ``src/mcp/**``              ``src.infrastructure.*``   Todo 6 (API/MCP use cases)
 ``src/tasks/**``            ``src.infrastructure.*``   Todo 7 (Celery task DI)
 ``src/services/**``         ``src.application.*``      Todo 5 (composition root)
+``src/services/**``         ``src.infrastructure.*``   Todo 5 (composition root)
 ``src/core/**``             ``src.db.session``         Todo 8 (boundary enforcement)
 ==========================  ========================  =================================
 
-Anything not in ``KNOWN_VIOLATIONS`` is a regression and fails the build. New
-violations must be added to the table **together with** the Todo that owns the
-removal; the table is the contract for Todo 8 to land with zero rows.
+Todo 8 cleared the remaining ``KNOWN_VIOLATIONS`` rows; the table now
+acts as a guardrail — any new row requires the same justification a
+Wave 1 todo would, and ``test_no_remaining_violations`` asserts that
+the AST-detected violation set is the empty set.
 
 Detection is AST-only (no grep/text matching) to dodge comment/docstring
 false positives, and walks every ``Import``/``ImportFrom`` node in the file —
@@ -56,6 +58,11 @@ class BoundaryRule:
             (matched as ``str(path).replace(os.sep, '.')``).
         target_module_prefix: Dotted prefix that is **forbidden** in imports
             from files in the source layer.
+        excluded_target_subprefixes: Optional iterable of dotted prefixes
+            that are **allowed** even though they sit under
+            ``target_module_prefix``. Used to carve out shared types (the
+            ``src.application.ports.*`` Protocol definitions are
+            intentionally importable from any layer).
         owner_todo: Which Wave 1 todo is responsible for clearing violations
             of this rule. Required, non-empty, must be one of ``Todo 5`` /
             ``Todo 6`` / ``Todo 7`` / ``Todo 8``.
@@ -66,8 +73,9 @@ class BoundaryRule:
     source_root: str
     source_module_prefix: str
     target_module_prefix: str
-    owner_todo: str
-    description: str
+    excluded_target_subprefixes: tuple[str, ...] = ()
+    owner_todo: str = ""
+    description: str = ""
 
 
 RULES: tuple[BoundaryRule, ...] = (
@@ -110,10 +118,16 @@ RULES: tuple[BoundaryRule, ...] = (
         source_root="src/services",
         source_module_prefix="src.services",
         target_module_prefix="src.application",
+        # Port Protocols are shared types by design: every layer may
+        # import them. Only use cases / orchestrators / schemas /
+        # bootstrap glue are off-limits for ``src.services``.
+        excluded_target_subprefixes=("src.application.ports",),
         owner_todo="Todo 5",
         description=(
             "Services are pure business rules; they must not depend on "
-            "application-layer use cases / orchestrators / schemas."
+            "application-layer use cases / orchestrators / schemas. "
+            "``src.application.ports.*`` Protocol definitions are "
+            "intentionally importable from every layer."
         ),
     ),
     BoundaryRule(
@@ -147,45 +161,17 @@ VALID_OWNER_TODOS = frozenset({"Todo 5", "Todo 6", "Todo 7", "Todo 8"})
 # ---------------------------------------------------------------------------
 # Known violations — explicit, time-bounded exceptions.
 #
-# Each row is (source_path, target_module, owner_todo, reason). Every entry
-# MUST be backed by a real, currently-existing import (see
-# ``test_known_violations_resolve_to_real_code``). New rows are forbidden
-# outside this baseline contract: see ``test_no_undeclared_violations`` and
-# ``test_known_violations_have_valid_owner_todo``.
+# Cleared under Todo 8 (architecture consolidation, Wave 1 close-out). The
+# table is kept as an **empty contract** so the load-bearing tests below
+# still fail loudly if a future contributor reintroduces a forbidden
+# import without registering it. New rows are forbidden; if a layer
+# boundary genuinely needs an exception, the table grows back **with**
+# the justification that the matching Wave 1 todo (5/6/7/8) would have
+# required.
 # ---------------------------------------------------------------------------
 
 
-KNOWN_VIOLATIONS: tuple[tuple[str, str, str, str], ...] = (
-    # ---- api → infrastructure (Todo 6) ----------------------------------
-    # Cleared under Todo 6.
-    # ---- mcp → infrastructure (Todo 6) ----------------------------------
-    # Cleared under Todo 6.
-    # ---- tasks → infrastructure (Todo 7) --------------------------------
-    # Cleared under Todo 7: task modules read ports from src/tasks/_container.py.
-    # ---- services → application (Todo 5) -------------------------------
-    (
-        "src/services/prompt_builder/v2/qa_answer.py",
-        "src.application.qa.schemas",
-        "Todo 5",
-        "qa_answer prompt builder imports application QA schemas; moved to pure DTOs under Todo 5.",
-    ),
-    # ---- services → infrastructure (Todo 5 — adapter binding rule) -----
-    (
-        "src/services/llm_provider_tester.py",
-        "src.infrastructure.llm.openai_gateway",
-        "Todo 5",
-        "llm_provider_tester instantiates OpenAICompatGatewayFactory directly; "
-        "binding moved into composition root under Todo 5.",
-    ),
-    # ---- core → db.session (Todo 8) ------------------------------------
-    (
-        "src/core/i18n/__init__.py",
-        "src.db.session",
-        "Todo 8",
-        "i18n.get_system_default_locale lazily opens a SQLAlchemy Session; "
-        "DB lookup moves to an application/system-config provider under Todo 8.",
-    ),
-)
+KNOWN_VIOLATIONS: tuple[tuple[str, str, str, str], ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +237,19 @@ def _iter_import_modules(path: Path) -> Iterator[tuple[str, int]]:
             yield node.module, node.lineno
 
 
+def _is_excluded(imported: str, rule: BoundaryRule) -> bool:
+    """Return True if ``imported`` falls under a rule's exclusion list.
+
+    The exclusion list lets a rule carve out shared types — e.g.
+    ``src.application.ports.*`` Protocols are importable from any layer.
+    """
+
+    return any(
+        imported == prefix or imported.startswith(f"{prefix}.")
+        for prefix in rule.excluded_target_subprefixes
+    )
+
+
 def _detect_violations() -> list[tuple[str, str, int, str]]:
     """Return all (source_path, target_module, lineno, owner_todo) tuples.
 
@@ -271,9 +270,12 @@ def _detect_violations() -> list[tuple[str, str, int, str]]:
                 # stays composable if extended in the future.
                 continue
             for imported, lineno in _iter_import_modules(path):
-                if imported.startswith(rule.target_module_prefix):
-                    rel = str(path.relative_to(PROJECT_ROOT))
-                    out.append((rel, imported, lineno, rule.owner_todo))
+                if not imported.startswith(rule.target_module_prefix):
+                    continue
+                if _is_excluded(imported, rule):
+                    continue
+                rel = str(path.relative_to(PROJECT_ROOT))
+                out.append((rel, imported, lineno, rule.owner_todo))
     out.sort()
     return out
 
@@ -397,6 +399,38 @@ def test_rules_cover_all_target_layers() -> None:
     missing = expected_layers - actual_layers
     assert not missing, "Boundary rules missing from RULES:\n  - " + "\n  - ".join(
         f"{a}->{b} ({c})" for a, b, c in sorted(missing)
+    )
+
+
+def test_no_remaining_violations() -> None:
+    """Empty-set invariant: every AST-detected violation must be in ``KNOWN_VIOLATIONS``.
+
+    After Todo 8 the ``KNOWN_VIOLATIONS`` table is the empty tuple, so
+    this test asserts that ``_detect_violations()`` returns an empty
+    list **and** that the test suite has no declared exceptions left.
+    If a future contributor reintroduces a forbidden import without
+    registering it, this test (and ``test_no_undeclared_violations``)
+    will fail loudly.
+
+    Run a second time across each ``RULES`` entry to make the failure
+    message actionable: the report names every owner todo that still
+    has work to do.
+    """
+
+    actual = _detect_violations()
+    declared = _declared_pairs()
+    assert not actual, (
+        "Architecture boundary violations are present in the working "
+        "tree but KNOWN_VIOLATIONS is empty (Todo 8 cleared the "
+        "baseline). Reintroducing an exception requires adding it back "
+        "to KNOWN_VIOLATIONS with the matching owner todo:\n  - "
+        + "\n  - ".join(f"{p}:{ln}: {m} (would belong to {o})" for p, m, ln, o in actual)
+    )
+    assert not declared, (
+        "KNOWN_VIOLATIONS contains rows but the AST detector found no "
+        "matching import. Either delete the dead rows or the file at "
+        "the listed path re-introduced the import:\n  - "
+        + "\n  - ".join(f"{p}: {m}" for p, m in sorted(declared))
     )
 
 
@@ -571,6 +605,11 @@ def test_no_new_violations_introduced() -> None:
             continue
         for module in sorted(new_imports):
             if not module.startswith(rule.target_module_prefix):
+                continue
+            if _is_excluded(module, rule):
+                # Imports that fall under the rule's carve-out (e.g.
+                # ``src.application.ports.*`` Protocols) are not
+                # violations.
                 continue
             if (str(path.relative_to(PROJECT_ROOT)), module) in declared:
                 # New violation in a tracked file, but already declared as

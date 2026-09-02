@@ -1,6 +1,5 @@
 from datetime import datetime
 
-from src.application.qa.schemas import CompressedEvidence
 from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
 from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
 
@@ -53,25 +52,20 @@ def test_build_qa_intent_prompt_empty_home() -> None:
 
 
 # ---------------------------------------------------------------------------
-# qa_answer prompt builder
+# qa_answer prompt builder (Todo 8: services-free of application imports)
 # ---------------------------------------------------------------------------
 
 
 def test_build_qa_answer_prompt_with_evidence() -> None:
-    evidence = CompressedEvidence(
+    system_prompt, user_prompt = build_qa_answer_prompt(
+        question="昨天爸爸做了什么？",
+        now_iso="2026-03-21T12:00:00",
+        timezone="Asia/Shanghai",
         home_context_text="家庭: 温馨之家\n成员: 爸爸",
         query_plan_text="模式=overview | 主体=爸爸",
         daily_summary_text="D 2026-03-20 | event_count=5 | overall=整体平稳",
         session_text="S1 | 03-20 09:00~09:12 | activity=medium",
         event_text="E1 | 03-20 09:03 | medium | member_appear | subject=爸爸 | summary=爸爸出现",
-    )
-
-    system_prompt, user_prompt = build_qa_answer_prompt(
-        question="昨天爸爸做了什么？",
-        now_iso="2026-03-21T12:00:00",
-        timezone="Asia/Shanghai",
-        home_context_text=evidence.home_context_text,
-        evidence=evidence,
     )
 
     assert "证据" in system_prompt
@@ -83,16 +77,15 @@ def test_build_qa_answer_prompt_with_evidence() -> None:
 
 
 def test_build_qa_answer_prompt_no_evidence() -> None:
-    evidence = CompressedEvidence(
-        home_context_text="家庭: 测试",
-    )
-
     system_prompt, user_prompt = build_qa_answer_prompt(
         question="今天有没有陌生人？",
         now_iso="2026-03-21T12:00:00",
         timezone="Asia/Shanghai",
-        home_context_text=evidence.home_context_text,
-        evidence=evidence,
+        home_context_text="家庭: 测试",
+        query_plan_text="",
+        daily_summary_text="",
+        session_text="",
+        event_text="",
     )
 
     assert "未检索到相关记录" in user_prompt

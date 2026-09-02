@@ -454,6 +454,41 @@ def test_bootstrap_production_does_not_require_redis_to_construct() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Locale provider binding (Todo 8)
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_production_installs_db_backed_locale_provider() -> None:
+    """``bootstrap_production`` wires ``SystemConfigLocaleProvider`` into core.i18n."""
+
+    from src.application.system_config import SystemConfigLocaleProvider
+    from src.core import i18n
+
+    saved = i18n.get_locale_provider()
+    try:
+        bootstrap_production()
+        assert isinstance(i18n.get_locale_provider(), SystemConfigLocaleProvider)
+    finally:
+        i18n.set_locale_provider(saved)
+
+
+def test_bootstrap_for_tests_installs_static_locale_provider() -> None:
+    """``bootstrap_for_tests`` swaps the i18n provider for an in-memory default."""
+
+    from src.application.system_config import StaticLocaleProvider
+    from src.core import i18n
+
+    saved = i18n.get_locale_provider()
+    try:
+        bootstrap_for_tests()
+        assert isinstance(i18n.get_locale_provider(), StaticLocaleProvider)
+        # The installed provider must still expose the default locale.
+        assert i18n.get_system_default_locale() == "zh-CN"
+    finally:
+        i18n.set_locale_provider(saved)
+
+
+# ---------------------------------------------------------------------------
 # Helpers — command builders
 # ---------------------------------------------------------------------------
 

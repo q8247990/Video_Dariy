@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from sqlalchemy.exc import IntegrityError
 
 from src.api.common import reset_other_default_providers
-from src.api.deps import DB, CurrentUser, Locale
+from src.api.deps import DB, ContainerDep, CurrentUser, Locale
 from src.core.i18n import t
 from src.models.llm_provider import LLMProvider
 from src.schemas.llm_provider import (
@@ -288,12 +288,22 @@ def set_default_qa_provider(db: DB, current_user: CurrentUser, locale: Locale, i
 
 
 @router.post("/{id}/test", response_model=BaseResponse[dict])
-def test_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
+def test_provider(
+    db: DB,
+    current_user: CurrentUser,
+    locale: Locale,
+    id: int,
+    container: ContainerDep,
+) -> Any:
     provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
     if not provider:
         return BaseResponse(code=4002, message=t("provider.not_found", locale))
 
-    result = check_provider_connectivity(provider, locale=locale)
+    result = check_provider_connectivity(
+        provider,
+        locale=locale,
+        llm_factory=container.llm_factory,
+    )
 
     provider.supports_vision = result.supports_vision
     provider.supports_tool_calling = result.supports_tool_calling

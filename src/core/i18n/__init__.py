@@ -1,10 +1,25 @@
-"""轻量 i18n 基座: t(key, locale, **params) + locale 资源文件加载。"""
+"""轻量 i18n 基座: t(key, locale, **params) + locale 资源文件加载。
+
+The system-default locale is resolved through an application-layer
+:class:`~src.application.system_config.LocaleProvider` (production:
+:class:`~src.application.system_config.SystemConfigLocaleProvider`,
+which reads ``system_config.default_locale``). ``src.core`` never opens
+a SQLAlchemy ``Session`` itself — that responsibility moved out under
+Todo 8 of ``architecture-consolidation``.
+
+Composition-root wiring lives in :mod:`src.application.bootstrap`. Tests
+that need a deterministic default locale should call
+:func:`set_locale_provider` (or rely on the
+:class:`~src.application.system_config.StaticLocaleProvider` default
+when no provider has been bound yet).
+"""
 
 import json
 import logging
-import time
 from pathlib import Path
 from typing import Optional
+
+from src.application.system_config import LocaleProvider, StaticLocaleProvider
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +35,56 @@ _LOCALE_FILE_MAP = {
 
 _catalogs: dict[str, dict[str, str]] = {}
 
-_system_default_locale: Optional[str] = None
-_system_default_locale_ts: float = 0.0
-_SYSTEM_LOCALE_TTL = 60.0
+# ---------------------------------------------------------------------------
+# Active LocaleProvider
+# ---------------------------------------------------------------------------
+#
+# The active provider is the single source of truth for "what locale does
+# the system fall back to when no ``Accept-Language`` / ``X-Locale`` is
+# supplied?". Production binds ``SystemConfigLocaleProvider`` from
+# ``src.application.bootstrap``; tests may inject their own. If no
+# provider has been bound yet (e.g. during interpreter startup before
+# ``src.application.bootstrap`` runs) the ``StaticLocaleProvider`` keeps
+# the i18n module importable and returns ``DEFAULT_LOCALE`` so callers
+# never have to special-case the unbound state.
+#
+_active_provider: LocaleProvider = StaticLocaleProvider(DEFAULT_LOCALE)
+
+
+def get_locale_provider() -> LocaleProvider:
+    """Return the currently active :class:`LocaleProvider`."""
+
+    return _active_provider
+
+
+def set_locale_provider(provider: LocaleProvider) -> None:
+    """Bind a new :class:`LocaleProvider`.
+
+    The composition root (``src.application.bootstrap``) calls this with
+    a :class:`SystemConfigLocaleProvider` at boot; tests use it to swap
+    in :class:`StaticLocaleProvider` /
+    :class:`CallableLocaleProvider` fakes. The provider handle is the
+    *only* mutable piece of state inside this module — there is no
+    separate DB-backed cache here.
+    """
+
+    global _active_provider
+    _active_provider = provider
+
+
+def reset_locale_provider() -> None:
+    """Restore the default :class:`StaticLocaleProvider`.
+
+    Used by tests that explicitly bind a fake provider and need to
+    return to a known baseline before the next test runs.
+    """
+
+    set_locale_provider(StaticLocaleProvider(DEFAULT_LOCALE))
+
+
+# ---------------------------------------------------------------------------
+# Catalog loading
+# ---------------------------------------------------------------------------
 
 
 def _load_catalog(locale: str) -> dict[str, str]:
@@ -46,6 +108,11 @@ def _get_catalog(locale: str) -> dict[str, str]:
     if locale not in _catalogs:
         _catalogs[locale] = _load_catalog(locale)
     return _catalogs[locale]
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 def t(key: str, locale: Optional[str] = None, **params: object) -> str:
@@ -88,34 +155,44 @@ def normalize_locale(raw: Optional[str]) -> str:
 
 
 def get_system_default_locale() -> str:
-    global _system_default_locale, _system_default_locale_ts
-    now = time.monotonic()
-    if (
-        _system_default_locale is not None
-        and (now - _system_default_locale_ts) < _SYSTEM_LOCALE_TTL
-    ):
-        return _system_default_locale
-    try:
-        from src.db.session import SessionLocal
-        from src.models.system_config import SystemConfig
+    """Resolve the system-wide default locale via the active provider.
 
-        db = SessionLocal()
-        try:
-            row = db.query(SystemConfig).filter(SystemConfig.config_key == "default_locale").first()
-            if row and row.config_value:
-                _system_default_locale = normalize_locale(str(row.config_value))
-            else:
-                _system_default_locale = DEFAULT_LOCALE
-        finally:
-            db.close()
-    except Exception:
-        _system_default_locale = DEFAULT_LOCALE
-    _system_default_locale_ts = now
-    return _system_default_locale
+    The actual database lookup is performed inside the bound
+    :class:`~src.application.system_config.LocaleProvider`
+    implementation. ``src.core.i18n`` only caches for the lifetime of
+    one call (the provider itself owns any TTL cache), which keeps the
+    contract simple and lets the composition root control invalidation.
+    """
+
+    return _active_provider.get_default_locale()
 
 
 def reload_catalogs() -> None:
-    global _system_default_locale, _system_default_locale_ts
+    """Clear cached catalogs and any cached system default locale.
+
+    Called by test setup / teardown hooks and after admin-driven
+    configuration updates that should take effect on the next request.
+    """
+
     _catalogs.clear()
-    _system_default_locale = None
-    _system_default_locale_ts = 0.0
+    # Best-effort: the active provider may not expose ``invalidate`` when
+    # callers bind a Protocol-typed stub; guard so reload never raises.
+    invalidate = getattr(_active_provider, "invalidate", None)
+    if callable(invalidate):
+        try:
+            invalidate()
+        except Exception:
+            logger.exception("LocaleProvider.invalidate() raised; ignoring")
+
+
+__all__ = [
+    "DEFAULT_LOCALE",
+    "SUPPORTED_LOCALES",
+    "get_locale_provider",
+    "get_system_default_locale",
+    "normalize_locale",
+    "reload_catalogs",
+    "reset_locale_provider",
+    "set_locale_provider",
+    "t",
+]

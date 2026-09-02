@@ -25,6 +25,11 @@ Why a dedicated module:
 * Tests build ``Container`` instances without monkeypatching
   ``src.infrastructure`` or any global Celery state.
 
+The composition root also binds the
+:class:`~src.application.system_config.LocaleProvider` that
+``src.core.i18n.get_system_default_locale`` delegates to — under Todo 8
+the i18n module no longer touches ``src.db.session`` directly.
+
 Architectural rules (enforced by ``tests/architecture/test_dependency_boundaries.py``):
 
 * Only this module is allowed to ``import src.infrastructure.*``.
@@ -184,6 +189,8 @@ def bootstrap_production() -> Container:
     from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
     from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 
+    _install_production_locale_provider()
+
     return Container(
         dispatcher=CeleryTaskDispatcher(),
         llm_factory=OpenAICompatGatewayFactory(),
@@ -251,6 +258,8 @@ def bootstrap_for_tests(
         binding="task_control",
     )
 
+    install_test_locale_provider()
+
     return Container(
         dispatcher=resolved_dispatcher,
         llm_factory=resolved_llm_factory,
@@ -258,6 +267,48 @@ def bootstrap_for_tests(
         id_gen=resolved_id_gen,
         task_control=resolved_task_control,
     )
+
+
+# ---------------------------------------------------------------------------
+# Locale provider binding
+# ---------------------------------------------------------------------------
+
+
+def _install_production_locale_provider() -> None:
+    """Install the DB-backed :class:`SystemConfigLocaleProvider`.
+
+    Called from :func:`bootstrap_production`. The binding is global
+    (module-level state inside ``src.core.i18n``) because the i18n
+    helper deliberately has no injected handle to keep its call sites
+    simple — the composition root is the only place that flips it from
+    the static default to a real DB-backed provider.
+    """
+
+    from src.application.system_config import SystemConfigLocaleProvider
+    from src.core.i18n import set_locale_provider
+
+    set_locale_provider(SystemConfigLocaleProvider())
+
+
+def install_test_locale_provider(provider: Any = None) -> None:
+    """Install a :class:`LocaleProvider` for tests / callers.
+
+    Tests that need a deterministic default locale call this with a
+    :class:`~src.application.system_config.StaticLocaleProvider` (or
+    leave ``provider=None`` to install one that returns
+    :data:`src.core.i18n.DEFAULT_LOCALE`). Also re-exported as a public
+    helper so pytest fixtures can call it directly without invoking the
+    full composition root.
+
+    Type is written as ``Any`` to avoid importing the Protocol class at
+    module scope — that keeps the composition root's import graph
+    identical to the pre-Todo-8 shape.
+    """
+
+    from src.application.system_config import StaticLocaleProvider
+    from src.core.i18n import set_locale_provider
+
+    set_locale_provider(provider if provider is not None else StaticLocaleProvider())
 
 
 # ---------------------------------------------------------------------------
@@ -293,4 +344,5 @@ __all__ = [
     "Container",
     "bootstrap_for_tests",
     "bootstrap_production",
+    "install_test_locale_provider",
 ]

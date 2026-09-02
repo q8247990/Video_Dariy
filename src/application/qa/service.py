@@ -252,7 +252,10 @@ class QAService:
             now_iso=now.isoformat(),
             timezone=timezone,
             home_context_text=home_context_text,
-            evidence=evidence,
+            query_plan_text=evidence.query_plan_text,
+            daily_summary_text=evidence.daily_summary_text,
+            session_text=evidence.session_text,
+            event_text=evidence.event_text,
             locale=locale,
         )
 
