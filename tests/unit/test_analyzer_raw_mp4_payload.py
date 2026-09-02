@@ -194,11 +194,12 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(monkeypatch) -> None:
     assert extra_body["media_io_kwargs"]["video"]["num_frames"] == 120
 
 
-def test_schema_rejects_keyframe_preprocess_mode() -> None:
-    """Provider schema is locked to raw_mp4 only; the keyframe value is rejected
-    at the validation boundary before it can reach the analyzer."""
-
-    from pydantic import ValidationError
+def test_schema_silently_ignores_legacy_keyframe_fields() -> None:
+    """Tod 10 retired ``video_preprocess_mode`` (and friends) from the
+    schema/model/columns. Legacy clients that still POST these fields
+    must be silently ignored — the schema must NOT raise, and the
+    serialized payload must NOT carry the value forward (so it cannot
+    reactivate the disabled capability)."""
 
     from src.schemas.llm_provider import LLMProviderBase
 
@@ -210,12 +211,16 @@ def test_schema_rejects_keyframe_preprocess_mode() -> None:
         "supports_vision": True,
     }
 
-    try:
-        LLMProviderBase(**base_kwargs, video_preprocess_mode="keyframe")
-    except ValidationError as exc:
-        assert "keyframe" in str(exc)
-        return
-    raise AssertionError("LLMProviderBase accepted video_preprocess_mode='keyframe'")
+    obj = LLMProviderBase(
+        **base_kwargs,
+        video_preprocess_mode="keyframe",
+        video_keyframe_target_n=128,
+        video_keyframe_jpeg_quality=95,
+    )
+    dumped = obj.model_dump()
+    assert "video_preprocess_mode" not in dumped
+    assert "video_keyframe_target_n" not in dumped
+    assert "video_keyframe_jpeg_quality" not in dumped
 
 
 def test_analyzer_module_does_not_export_keyframe_symbols() -> None:

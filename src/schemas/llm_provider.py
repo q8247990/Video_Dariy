@@ -5,17 +5,18 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from src.services.provider_key_crypto import mask_provider_api_key
 
-# The keyframe preprocessing mode is disabled as a product decision: the code
-# path is kept in the repository, but it must not be activatable through any
-# configuration surface. The API therefore only accepts "raw_mp4".
-_VIDEO_PREPROCESS_MODES = {"raw_mp4"}
-_KEYFRAME_TARGET_N_MIN = 16
-_KEYFRAME_TARGET_N_MAX = 256
-_KEYFRAME_JPEG_QUALITY_MIN = 50
-_KEYFRAME_JPEG_QUALITY_MAX = 100
-
 
 class LLMProviderBase(BaseModel):
+    # The keyframe preprocessing mode was removed as a product decision
+    # (ADR ``0009-remove-keyframe-pipeline.md``); the column-level
+    # configuration surface (video_preprocess_mode /
+    # video_keyframe_target_n / video_keyframe_jpeg_quality) was retired
+    # by migration ``20260902_0018``. Legacy payloads that still carry
+    # those keys are silently ignored (``extra='ignore'``) so existing
+    # clients do not start failing after the upgrade, but the capability
+    # can never be reactivated through this surface.
+    model_config = ConfigDict(extra="ignore")
+
     provider_name: str
     api_base_url: str
     model_name: str
@@ -28,41 +29,6 @@ class LLMProviderBase(BaseModel):
     supports_tool_calling: bool = False
     is_default_vision: bool = False
     is_default_qa: bool = False
-    video_preprocess_mode: str = "raw_mp4"
-    video_keyframe_target_n: int = 120
-    video_keyframe_jpeg_quality: int = 88
-
-    @field_validator("video_preprocess_mode")
-    @classmethod
-    def _validate_video_preprocess_mode(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in _VIDEO_PREPROCESS_MODES:
-            raise ValueError(
-                "video_preprocess_mode only accepts 'raw_mp4'; the 'keyframe' "
-                f"mode is disabled, got {value!r}"
-            )
-        return normalized
-
-    @field_validator("video_keyframe_target_n")
-    @classmethod
-    def _validate_video_keyframe_target_n(cls, value: int) -> int:
-        if not (_KEYFRAME_TARGET_N_MIN <= value <= _KEYFRAME_TARGET_N_MAX):
-            raise ValueError(
-                f"video_keyframe_target_n must be in "
-                f"[{_KEYFRAME_TARGET_N_MIN}, {_KEYFRAME_TARGET_N_MAX}], got {value}"
-            )
-        return value
-
-    @field_validator("video_keyframe_jpeg_quality")
-    @classmethod
-    def _validate_video_keyframe_jpeg_quality(cls, value: int) -> int:
-        if not (_KEYFRAME_JPEG_QUALITY_MIN <= value <= _KEYFRAME_JPEG_QUALITY_MAX):
-            raise ValueError(
-                f"video_keyframe_jpeg_quality must be in "
-                f"[{_KEYFRAME_JPEG_QUALITY_MIN}, {_KEYFRAME_JPEG_QUALITY_MAX}], "
-                f"got {value}"
-            )
-        return value
 
 
 class LLMProviderCreate(LLMProviderBase):

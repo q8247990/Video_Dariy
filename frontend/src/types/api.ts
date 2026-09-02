@@ -78,10 +78,6 @@ export type Provider = {
   supports_tool_calling: boolean
   is_default_vision: boolean
   is_default_qa: boolean
-  // 与后端 LLMProviderResponse 对齐；raw_mp4-only 为产品决策，仅作响应类型，不参与提交载荷、不提供关键帧 UI。
-  video_preprocess_mode?: string | null
-  video_keyframe_target_n?: number | null
-  video_keyframe_jpeg_quality?: number | null
   availability_status: 'available' | 'degraded' | 'unavailable' | 'unknown' | string
   availability_message: string
   last_test_status: string | null

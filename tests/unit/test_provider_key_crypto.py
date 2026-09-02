@@ -46,9 +46,6 @@ def test_provider_model_encrypts_api_key_and_response_masks_it() -> None:
         supports_tool_calling=False,
         is_default_vision=False,
         is_default_qa=False,
-        video_preprocess_mode="raw_mp4",
-        video_keyframe_target_n=120,
-        video_keyframe_jpeg_quality=88,
         created_at=datetime(2026, 8, 25, 12, 0, 0),
         updated_at=datetime(2026, 8, 25, 12, 0, 0),
     )
@@ -76,9 +73,6 @@ def test_provider_response_keeps_keyless_provider_empty() -> None:
         supports_tool_calling=False,
         is_default_vision=False,
         is_default_qa=False,
-        video_preprocess_mode="raw_mp4",
-        video_keyframe_target_n=120,
-        video_keyframe_jpeg_quality=88,
         created_at=datetime(2026, 8, 25, 12, 0, 0),
         updated_at=datetime(2026, 8, 25, 12, 0, 0),
     )
