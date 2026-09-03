@@ -133,7 +133,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x.split()[0] and 'worker' in x for x in ps) else 1)\"",
+          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x and 'worker' in x for x in ps) else 1)\"",
         ]
       interval: 15s
       timeout: 5s
@@ -188,7 +188,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x.split()[0] and 'worker' in x for x in ps) else 1)\"",
+          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x and 'worker' in x for x in ps) else 1)\"",
         ]
       interval: 15s
       timeout: 5s
@@ -243,7 +243,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x.split()[0] and 'beat' in x for x in ps) else 1)\"",
+          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x and 'beat' in x for x in ps) else 1)\"",
         ]
       interval: 15s
       timeout: 5s
