@@ -2,6 +2,7 @@ import pytest
 
 from src.services.video_analysis.output_parser import (
     RecognitionOutputFormatError,
+    RecognitionOutputValidationError,
     parse_video_recognition_output,
 )
 
@@ -121,4 +122,73 @@ def test_parse_output_rejects_truncated_top_level_json_even_if_nested_object_is_
     """
 
     with pytest.raises(RecognitionOutputFormatError, match="complete top-level JSON object"):
+        parse_video_recognition_output(raw)
+
+
+def test_parse_output_invalid_event_type_falls_back_to_other() -> None:
+    """未识别的 event_type 宽容回退为 ``other`` 而非中断解析。"""
+
+    raw = """
+    {
+      "session_summary": {
+        "summary_text": "无",
+        "activity_level": "low",
+        "main_subjects": [],
+        "has_important_event": false
+      },
+      "events": [
+        {
+          "offset_start_sec": 0,
+          "offset_end_sec": 1,
+          "event_type": "invalid_type",
+          "title": "test",
+          "summary": "test",
+          "detail": "test detail",
+          "related_entities": [],
+          "observed_actions": [],
+          "interpreted_state": [],
+          "confidence": 0.8,
+          "importance_level": "low"
+        }
+      ],
+      "analysis_notes": []
+    }
+    """
+
+    result = parse_video_recognition_output(raw)
+
+    assert result.events[0].event_type == "other"
+
+
+def test_parse_output_invalid_importance_level_still_fails() -> None:
+    """非法 importance_level 是严格校验，抛出 ValidationError 而非回退。"""
+
+    raw = """
+    {
+      "session_summary": {
+        "summary_text": "无",
+        "activity_level": "low",
+        "main_subjects": [],
+        "has_important_event": false
+      },
+      "events": [
+        {
+          "offset_start_sec": 0,
+          "offset_end_sec": 1,
+          "event_type": "pet_activity",
+          "title": "test",
+          "summary": "test",
+          "detail": "test detail",
+          "related_entities": [],
+          "observed_actions": [],
+          "interpreted_state": [],
+          "confidence": 0.8,
+          "importance_level": "urgent"
+        }
+      ],
+      "analysis_notes": []
+    }
+    """
+
+    with pytest.raises(RecognitionOutputValidationError, match="importance_level"):
         parse_video_recognition_output(raw)

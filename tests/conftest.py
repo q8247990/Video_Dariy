@@ -144,3 +144,62 @@ def postgres_session(postgres_engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# 全 PG 统一测试基建
+#
+# 项目统一用真实 PostgreSQL 做测试（不再用 SQLite）。以下 fixture 供
+# tests/unit/ 与 tests/integration/ 的测试共用：
+#
+#   * ``pg_engine``         —— 已执行 alembic upgrade head 的一次性 schema engine
+#   * ``pg_db``             —— 函数级 Session，外层事务回滚（替代旧 SQLite session）
+#   * ``pg_db_factory``     —— 返回一个函数，调用一次得到一个独立 Session
+#
+# 所有使用这些 fixture 的测试会自动带上 postgres 标记（见
+# ``pytest_collection_modifyitems`` 下方的标记逻辑），从而仅在
+# ``pytest -m postgres`` 且设置 DATABASE_URL 时运行。
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def pg_engine(postgres_migrated_engine: Engine) -> Engine:
+    """已跑过 alembic upgrade head 的一次性 schema engine（别名，语义清晰）。"""
+
+    return postgres_migrated_engine
+
+
+@pytest.fixture()
+def pg_db(pg_engine: Engine) -> Iterator[Session]:
+    """函数级 PG Session：在迁移后的 schema 上，外层事务结束即回滚。"""
+
+    connection = pg_engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection)
+    try:
+        yield session
+    finally:
+        session.close()
+        transaction.rollback()
+        connection.close()
+
+
+@pytest.fixture()
+def pg_db_factory(pg_engine: Engine):
+    """返回一个工厂：调用一次得到一个新的独立 PG Session（事务回滚）。"""
+
+    def _factory() -> Session:
+        connection = pg_engine.connect()
+        transaction = connection.begin()
+
+        class _RollbackSession(Session):
+            def close(self) -> None:  # type: ignore[override]
+                try:
+                    transaction.rollback()
+                finally:
+                    super().close()
+                    connection.close()
+
+        return _RollbackSession(bind=connection)
+
+    return _factory
