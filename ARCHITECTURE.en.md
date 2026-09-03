@@ -646,7 +646,7 @@ Common commands:
 python3 -m pytest tests/unit -q         # unit tests (289)
 python3 -m pytest -m postgres           # integration tests; requires real PostgreSQL (DATABASE_URL)
 python3 -m alembic upgrade head
-python3 -m alembic heads                # expect 20260826_0017
+python3 -m alembic heads                # expect 20260902_0021
 ruff check .
 ruff format --check src tests
 # Known exceptions: ruff format --check has 4 pre-existing out-of-scope failures in

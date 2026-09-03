@@ -635,7 +635,7 @@ Session 分析状态（`analysis_status`）主要包括：
 python3 -m pytest tests/unit -q         # 单元测试（289 项）
 python3 -m pytest -m postgres           # 集成测试，需真实 PostgreSQL（DATABASE_URL）
 python3 -m alembic upgrade head
-python3 -m alembic heads                # 期望 20260826_0017
+python3 -m alembic heads                # 期望 20260902_0021
 ruff check .
 ruff format --check src tests
 # 已知例外：ruff format --check 在
