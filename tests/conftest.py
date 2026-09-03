@@ -42,7 +42,29 @@ def _database_url() -> str | None:
     return url or None
 
 
+#: 使用这些 fixture 的测试会被自动视为 PostgreSQL 集成测试（打上 postgres 标记），
+#: 无需逐个写 ``@pytest.mark.postgres``。
+PG_MARKED_FIXTURES = frozenset(
+    {
+        "postgres_engine",
+        "postgres_migrated_engine",
+        "postgres_session",
+        "postgres_real_engine",
+        "pg_engine",
+        "pg_db",
+        "pg_db_factory",
+    }
+)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    # 依赖 PG fixture 的测试自动打上 postgres 标记，保证 skip/选跑语义与显式标记一致。
+    for item in items:
+        if item.get_closest_marker("postgres"):
+            continue
+        if PG_MARKED_FIXTURES.intersection(getattr(item, "fixturenames", ())):
+            item.add_marker(pytest.mark.postgres)
+
     postgres_items = [item for item in items if item.get_closest_marker("postgres")]
     if not postgres_items:
         return
@@ -133,7 +155,13 @@ def postgres_migrated_engine(
 
 @pytest.fixture()
 def postgres_session(postgres_engine: Engine) -> Iterator[Session]:
-    """函数级 Session：外层事务在测试结束后回滚，保证行级隔离。"""
+    """函数级 Session：外层事务在测试结束后回滚，保证行级隔离。
+
+    Session 默认 ``join_transaction_mode="conditional_savepoint"`` 在
+    连接已带活跃外层事务时退化为 ``rollback_only`` —— 测试代码的
+    ``session.commit()`` 不真正提交（数据仍在将被 fixture 回滚的外层事务
+    中），``session.rollback()`` 直接回滚外层事务，从而清空测试内所有写入。
+    """
 
     connection = postgres_engine.connect()
     transaction = connection.begin()
@@ -142,7 +170,8 @@ def postgres_session(postgres_engine: Engine) -> Iterator[Session]:
         yield session
     finally:
         session.close()
-        transaction.rollback()
+        if transaction.is_active:
+            transaction.rollback()
         connection.close()
 
 
@@ -163,15 +192,94 @@ def postgres_session(postgres_engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture(scope="session")
-def pg_engine(postgres_migrated_engine: Engine) -> Engine:
-    """已跑过 alembic upgrade head 的一次性 schema engine（别名，语义清晰）。"""
+def postgres_real_schema() -> str:
+    """独立的一次性 schema，专供 ``pg_db_factory``（真提交可见）测试使用。
 
-    return postgres_migrated_engine
+    与主 ``postgres_schema``（回滚隔离）物理隔离，避免真提交的数据
+    污染 ``pg_db``/``pg_engine`` 测试。
+    """
+
+    return f"vd_real_{uuid.uuid4().hex[:12]}"
+
+
+@pytest.fixture(scope="session")
+def postgres_real_engine(
+    postgres_database_url: str, postgres_real_schema: str
+) -> Iterator[Engine]:
+    """已跑过 alembic upgrade head 的一次性 schema engine，专供真提交测试。
+
+    与 ``postgres_engine`` 复用相同创建/清理逻辑，但落在独立的
+    ``postgres_real_schema`` 上，使 ``pg_db_factory`` 的 ``commit()``
+    真正持久化到独立的 schema，跨连接可见且不污染回滚侧。
+    """
+
+    admin_engine = create_engine(postgres_database_url)
+    with admin_engine.connect() as conn:
+        conn.execute(text(f'CREATE SCHEMA "{postgres_real_schema}"'))
+        conn.commit()
+
+    engine = create_engine(
+        postgres_database_url,
+        connect_args={"options": f"-csearch_path={postgres_real_schema}"},
+    )
+    run_alembic_upgrade_head(postgres_database_url, postgres_real_schema)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin_engine.connect() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{postgres_real_schema}" CASCADE'))
+            conn.commit()
+        admin_engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def pg_schema() -> str:
+    """``pg_engine`` 专用的一次性 schema，与 ``postgres_schema`` 物理隔离。"""
+
+    return f"vd_pg_{uuid.uuid4().hex[:12]}"
+
+
+@pytest.fixture(scope="session")
+def pg_engine(postgres_database_url: str, pg_schema: str) -> Iterator[Engine]:
+    """独立一次性 schema engine，已执行 alembic upgrade head。
+
+    与 ``postgres_migrated_engine`` 物理隔离：直接通过
+    ``postgres_migrated_engine`` 提交的数据无法污染 ``pg_db`` 测试。
+    schema 生命周期与 ``postgres_real_engine`` 一致：建立 → alembic
+    upgrade head → DROP SCHEMA CASCADE。
+    """
+
+    admin_engine = create_engine(postgres_database_url)
+    with admin_engine.connect() as conn:
+        conn.execute(text(f'CREATE SCHEMA "{pg_schema}"'))
+        conn.commit()
+
+    engine = create_engine(
+        postgres_database_url,
+        connect_args={"options": f"-csearch_path={pg_schema}"},
+    )
+    run_alembic_upgrade_head(postgres_database_url, pg_schema)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin_engine.connect() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{pg_schema}" CASCADE'))
+            conn.commit()
+        admin_engine.dispose()
 
 
 @pytest.fixture()
 def pg_db(pg_engine: Engine) -> Iterator[Session]:
-    """函数级 PG Session：在迁移后的 schema 上，外层事务结束即回滚。"""
+    """函数级 PG Session：在独立迁移 schema 上，外层事务在 teardown 时回滚。
+
+    Session 默认 ``join_transaction_mode="conditional_savepoint"`` 在
+    连接已带活跃外层事务时退化为 ``rollback_only`` —— 测试代码的
+    ``session.commit()`` 不真正提交（数据仍在将被 fixture 回滚的外层事务
+    中），``session.rollback()`` 直接回滚外层事务，从而清空测试内所有写入，
+    同测试外的 schema 完全不污染。
+    """
 
     connection = pg_engine.connect()
     transaction = connection.begin()
@@ -180,26 +288,41 @@ def pg_db(pg_engine: Engine) -> Iterator[Session]:
         yield session
     finally:
         session.close()
-        transaction.rollback()
+        if transaction.is_active:
+            transaction.rollback()
         connection.close()
 
 
 @pytest.fixture()
-def pg_db_factory(pg_engine: Engine):
-    """返回一个工厂：调用一次得到一个新的独立 PG Session（事务回滚）。"""
+def pg_db_factory(postgres_real_engine: Engine):
+    """返回一个工厂：调用一次得到一个独立、真实提交的 PG Session。
+
+    与 ``pg_db``（外层事务回滚、数据对外不可见）不同，本工厂的 session
+    不做外层事务包裹：``commit()`` 真正持久化，另一连接的 ``fresh``
+    能立即看到。这服务于需要断言“提交后跨连接可见”的测试
+    （如 outbox 事务性发布）。
+
+    所有 session 都落在独立的 ``postgres_real_schema`` 上；fixture
+    teardown 时将该 schema 内的业务表 TRUNCATE，清理真提交残留，
+    既保证跨连接可见性，又避免污染下一次测试。
+    """
 
     def _factory() -> Session:
-        connection = pg_engine.connect()
-        transaction = connection.begin()
+        return Session(bind=postgres_real_engine)
 
-        class _RollbackSession(Session):
-            def close(self) -> None:  # type: ignore[override]
-                try:
-                    transaction.rollback()
-                finally:
-                    super().close()
-                    connection.close()
+    yield _factory
 
-        return _RollbackSession(bind=connection)
+    _truncate_schema(postgres_real_engine)
 
-    return _factory
+
+def _truncate_schema(engine: Engine) -> None:
+    """清空 schema 内所有业务表，清理真提交测试留下的残留数据。"""
+
+    from src.db.base_class import Base  # local import 避免收集顺序问题
+
+    table_names = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+    if not table_names:
+        return
+    with engine.connect() as conn:
+        conn.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
+        conn.commit()
