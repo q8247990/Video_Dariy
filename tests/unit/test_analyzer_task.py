@@ -1,13 +1,13 @@
+import logging
+from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from src.models.event_record import EventRecord
-from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
@@ -21,16 +21,7 @@ from src.services.video_analysis.schemas import (
 )
 from src.tasks.analyzer import _checkpoint_for_work, analyze_session_task
 
-
-def _new_session_factory():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    VideoSource.__table__.create(bind=engine)
-    VideoSession.__table__.create(bind=engine)
-    EventRecord.__table__.create(bind=engine)
-    SessionAnalysisCheckpoint.__table__.create(bind=engine)
-    TaskLog.__table__.create(bind=engine)
-    PipelineTransitionLog.__table__.create(bind=engine)
-    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionFactory = Callable[[], Session]
 
 
 def _seed_source_and_session(db: Session) -> tuple[int, int]:
@@ -210,8 +201,10 @@ def _mock_three_sub_chunks(monkeypatch, session_factory, responses: list[str]) -
     return calls
 
 
-def test_analyze_session_partial_failure_preserves_completed_sub_chunks(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_partial_failure_preserves_completed_sub_chunks(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         _, session_id = _seed_source_and_session(db)
@@ -247,8 +240,9 @@ def test_analyze_session_partial_failure_preserves_completed_sub_chunks(monkeypa
 
 def test_analyze_session_retry_resumes_from_first_non_success_without_recharging(
     monkeypatch,
+    pg_db_factory: SessionFactory,
 ) -> None:
-    session_factory = _new_session_factory()
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         _, session_id = _seed_source_and_session(db)
@@ -280,8 +274,10 @@ def test_analyze_session_retry_resumes_from_first_non_success_without_recharging
         verify_db.close()
 
 
-def test_analyze_session_duplicate_retry_does_not_duplicate_events_or_usage(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_duplicate_retry_does_not_duplicate_events_or_usage(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         _, session_id = _seed_source_and_session(db)
@@ -305,8 +301,10 @@ def test_analyze_session_duplicate_retry_does_not_duplicate_events_or_usage(monk
         verify_db.close()
 
 
-def test_analyze_session_changed_input_invalidates_stale_checkpoints() -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_changed_input_invalidates_stale_checkpoints(
+    pg_db_factory: SessionFactory,
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         _, session_id = _seed_source_and_session(db)
@@ -339,8 +337,10 @@ def test_analyze_session_changed_input_invalidates_stale_checkpoints() -> None:
         db.close()
 
 
-def test_analyze_session_cancelled_mid_run_partial_not_served(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_cancelled_mid_run_partial_not_served(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         _, session_id = _seed_source_and_session(db)
@@ -373,8 +373,8 @@ def test_analyze_session_cancelled_mid_run_partial_not_served(monkeypatch) -> No
         verify_db.close()
 
 
-def test_analyze_session_replaces_old_events(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_replaces_old_events(monkeypatch, pg_db_factory: SessionFactory) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)
@@ -425,8 +425,10 @@ def test_analyze_session_replaces_old_events(monkeypatch) -> None:
         verify_db.close()
 
 
-def test_analyze_session_empty_result_clears_old_events(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_empty_result_clears_old_events(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)
@@ -464,8 +466,10 @@ def test_analyze_session_empty_result_clears_old_events(monkeypatch) -> None:
         verify_db.close()
 
 
-def test_analyze_session_failure_keeps_old_events(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_failure_keeps_old_events(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)
@@ -495,8 +499,11 @@ def test_analyze_session_failure_keeps_old_events(monkeypatch) -> None:
         verify_db.close()
 
 
-def test_analyze_session_failure_logs_prompt_and_raw_response(monkeypatch, caplog) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_failure_logs_prompt_and_raw_response(
+    monkeypatch, caplog, pg_db_factory: SessionFactory
+) -> None:
+    caplog.set_level(logging.ERROR, logger="src.tasks._analyzer_orchestration")
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)
@@ -521,8 +528,10 @@ def test_analyze_session_failure_logs_prompt_and_raw_response(monkeypatch, caplo
     assert '"reasoning":"debug"' in caplog.text
 
 
-def test_analyze_session_deadlock_retries_with_exponential_backoff(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_deadlock_retries_with_exponential_backoff(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)
@@ -605,8 +614,10 @@ def test_analyze_session_deadlock_retries_with_exponential_backoff(monkeypatch) 
         verify_db.close()
 
 
-def test_analyze_session_skips_when_already_analyzing(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_skips_when_already_analyzing(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)
@@ -639,8 +650,10 @@ def test_analyze_session_skips_when_already_analyzing(monkeypatch) -> None:
         verify_db.close()
 
 
-def test_analyze_session_honors_cancel_requested(monkeypatch) -> None:
-    session_factory = _new_session_factory()
+def test_analyze_session_honors_cancel_requested(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         source_id, session_id = _seed_source_and_session(db)

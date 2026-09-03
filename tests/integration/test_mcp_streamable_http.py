@@ -4,15 +4,11 @@ from typing import Generator
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
 import src.api.deps as api_deps
-import src.db.base  # noqa: F401
 import src.db.session as db_session_module
 from src.core.config import settings
-from src.db.base_class import Base
 from src.mcp.server import router as mcp_router
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
@@ -36,28 +32,12 @@ def mcp_token_fixture() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def db() -> Generator[Session, None, None]:
-    engine = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    db_session = local_session()
-    try:
-        yield db_session
-    finally:
-        db_session.close()
-
-
-@pytest.fixture
-def client(db: Session) -> Generator[TestClient, None, None]:
+def client(pg_db: Session) -> Generator[TestClient, None, None]:
     app = FastAPI()
     app.include_router(mcp_router)
 
     def _override_get_db():
-        yield db
+        yield pg_db
 
     app.dependency_overrides[api_deps.get_db] = _override_get_db
     app.dependency_overrides[db_session_module.get_db] = _override_get_db
@@ -66,7 +46,7 @@ def client(db: Session) -> Generator[TestClient, None, None]:
         yield test_client
 
 
-def _seed_event_data(db: Session) -> tuple[int, int, int]:
+def _seed_event_data(pg_db: Session) -> tuple[int, int, int]:
     source = VideoSource(
         source_name="source-http",
         camera_name="门口摄像头",
@@ -74,8 +54,8 @@ def _seed_event_data(db: Session) -> tuple[int, int, int]:
         source_type="local_directory",
         enabled=True,
     )
-    db.add(source)
-    db.flush()
+    pg_db.add(source)
+    pg_db.flush()
 
     session = VideoSession(
         source_id=source.id,
@@ -84,8 +64,8 @@ def _seed_event_data(db: Session) -> tuple[int, int, int]:
         total_duration_seconds=600,
         analysis_status="success",
     )
-    db.add(session)
-    db.flush()
+    pg_db.add(session)
+    pg_db.flush()
 
     event = EventRecord(
         source_id=source.id,
@@ -97,8 +77,8 @@ def _seed_event_data(db: Session) -> tuple[int, int, int]:
         description="一名人员在门口短暂停留。",
         summary="门口短暂停留",
     )
-    db.add(event)
-    db.commit()
+    pg_db.add(event)
+    pg_db.commit()
     return source.id, session.id, event.id
 
 
@@ -179,8 +159,8 @@ def test_mcp_initialize_negotiates_newer_client_protocol_version(client: TestCli
     assert response.headers.get("MCP-Protocol-Version") == "2025-06-18"
 
 
-def test_mcp_tools_list_and_get_daily_summary(client: TestClient, db: Session) -> None:
-    db.add(
+def test_mcp_tools_list_and_get_daily_summary(client: TestClient, pg_db: Session) -> None:
+    pg_db.add(
         DailySummary(
             summary_date=date(2026, 2, 26),
             summary_title="2026-02-26 家庭日报",
@@ -191,7 +171,7 @@ def test_mcp_tools_list_and_get_daily_summary(client: TestClient, db: Session) -
             generated_at=datetime(2026, 2, 27, 8, 0, 0),
         )
     )
-    db.commit()
+    pg_db.commit()
 
     session_id = _initialize(client)
     list_response = client.post(
@@ -227,13 +207,13 @@ def test_mcp_tools_list_and_get_daily_summary(client: TestClient, db: Session) -
     assert tool_result["structuredContent"]["summaries"][0]["date"] == "2026-02-26"
 
 
-def test_mcp_search_and_media_calls(client: TestClient, db: Session) -> None:
-    _, _, event_id = _seed_event_data(db)
+def test_mcp_search_and_media_calls(client: TestClient, pg_db: Session) -> None:
+    _, _, event_id = _seed_event_data(pg_db)
     tag = TagDefinition(tag_name="门口停留", tag_type="custom", enabled=True)
-    db.add(tag)
-    db.flush()
-    db.add(EventTagRel(event_id=event_id, tag_id=tag.id))
-    db.commit()
+    pg_db.add(tag)
+    pg_db.flush()
+    pg_db.add(EventTagRel(event_id=event_id, tag_id=tag.id))
+    pg_db.commit()
 
     session_id = _initialize(client)
 
@@ -262,8 +242,8 @@ def test_mcp_search_and_media_calls(client: TestClient, db: Session) -> None:
     assert search_response.json()["result"]["structuredContent"]["events"][0]["id"] == event_id
 
 
-def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
-    db.add(
+def test_mcp_errors_and_logs(client: TestClient, pg_db: Session) -> None:
+    pg_db.add(
         DailySummary(
             summary_date=date(2026, 2, 26),
             summary_title="2026-02-26 家庭日报",
@@ -274,7 +254,7 @@ def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
             generated_at=datetime(2026, 2, 27, 8, 0, 0),
         )
     )
-    db.commit()
+    pg_db.commit()
     session_id = _initialize(client)
 
     invalid_response = client.post(
@@ -308,16 +288,16 @@ def test_mcp_errors_and_logs(client: TestClient, db: Session) -> None:
     assert no_session_response.status_code == 200
     assert len(no_session_response.json()["result"]["tools"]) == 5
 
-    row = db.query(McpCallLog).filter(McpCallLog.tool_name == "get_daily_summary").one()
+    row = pg_db.query(McpCallLog).filter(McpCallLog.tool_name == "get_daily_summary").one()
     assert row.status == "failed"
     assert row.request_json is not None
     assert row.request_json["_meta"]["source"] == "log-checker"
     assert row.request_json["_meta"]["user_agent"] == "pytest-agent"
 
 
-def test_mcp_disabled_and_db_token_override(client: TestClient, db: Session) -> None:
-    db.add(SystemConfig(config_key="mcp_enabled", config_value=False))
-    db.commit()
+def test_mcp_disabled_and_db_token_override(client: TestClient, pg_db: Session) -> None:
+    pg_db.add(SystemConfig(config_key="mcp_enabled", config_value=False))
+    pg_db.commit()
 
     disabled_response = client.post(
         "/mcp",
@@ -327,9 +307,9 @@ def test_mcp_disabled_and_db_token_override(client: TestClient, db: Session) -> 
     assert disabled_response.status_code == 401
     assert disabled_response.json()["error"]["message"] == "mcp service is disabled"
 
-    db.query(SystemConfig).delete()
-    db.add(SystemConfig(config_key="mcp_token", config_value="db-token-override"))
-    db.commit()
+    pg_db.query(SystemConfig).delete()
+    pg_db.add(SystemConfig(config_key="mcp_token", config_value="db-token-override"))
+    pg_db.commit()
 
     old_token_response = client.post(
         "/mcp",
@@ -351,9 +331,9 @@ def test_mcp_disabled_and_db_token_override(client: TestClient, db: Session) -> 
     assert new_token_response.status_code == 200
 
 
-def test_mcp_ask_home_monitor(client: TestClient, db: Session, monkeypatch) -> None:
-    _seed_event_data(db)
-    db.add(
+def test_mcp_ask_home_monitor(client: TestClient, pg_db: Session, monkeypatch) -> None:
+    _seed_event_data(pg_db)
+    pg_db.add(
         DailySummary(
             summary_date=date(2026, 2, 26),
             summary_title="2026-02-26 家庭日报",
@@ -364,7 +344,7 @@ def test_mcp_ask_home_monitor(client: TestClient, db: Session, monkeypatch) -> N
             generated_at=datetime(2026, 2, 27, 8, 0, 0),
         )
     )
-    db.add(
+    pg_db.add(
         LLMProvider(
             provider_name="qa-http",
             provider_type="qa_provider",
@@ -380,7 +360,7 @@ def test_mcp_ask_home_monitor(client: TestClient, db: Session, monkeypatch) -> N
             is_default_vision=False,
         )
     )
-    db.commit()
+    pg_db.commit()
 
     def _mock_chat_completion(
         self,
@@ -388,7 +368,9 @@ def test_mcp_ask_home_monitor(client: TestClient, db: Session, monkeypatch) -> N
         temperature=0.2,
         max_tokens=None,
         response_format=None,
+        extra_body=None,
     ):
+        del self, messages, temperature, max_tokens, response_format, extra_body
         return "昨天下午门口有短暂停留。"
 
     monkeypatch.setattr(
@@ -421,8 +403,8 @@ def test_mcp_ask_home_monitor(client: TestClient, db: Session, monkeypatch) -> N
     assert body["structuredContent"]["answer_text"] == "昨天下午门口有短暂停留。"
 
 
-def test_mcp_ask_home_monitor_without_provider(client: TestClient, db: Session) -> None:
-    _seed_event_data(db)
+def test_mcp_ask_home_monitor_without_provider(client: TestClient, pg_db: Session) -> None:
+    _seed_event_data(pg_db)
     session_id = _initialize(client)
     response = client.post(
         "/mcp",

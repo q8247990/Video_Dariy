@@ -4,42 +4,23 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
 import src.api.deps as api_deps
 import src.db.session as db_session_module
 from src.api.v1.endpoints import daily_summaries
-from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 from src.services.pipeline_constants import SessionAnalysisStatus
 
 
 @pytest.fixture
-def db() -> Session:
-    engine = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    VideoSession.__table__.create(bind=engine)
-    TaskLog.__table__.create(bind=engine)
-    local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    db_session = local_session()
-    try:
-        yield db_session
-    finally:
-        db_session.close()
-
-
-@pytest.fixture
-def client(db: Session) -> TestClient:
+def client(pg_db: Session) -> TestClient:
     app = FastAPI()
     app.include_router(daily_summaries.router, prefix="/api/v1/daily-summaries")
 
     def _override_get_db():
-        yield db
+        yield pg_db
 
     def _override_get_current_user() -> SimpleNamespace:
         return SimpleNamespace(id=1, username="admin")
@@ -53,18 +34,27 @@ def client(db: Session) -> TestClient:
 
 
 def test_generate_all_daily_summaries_route_hits_post_handler(
-    client: TestClient, db: Session, monkeypatch
+    client: TestClient, pg_db: Session, monkeypatch
 ) -> None:
-    db.add(
+    source = VideoSource(
+        source_name="test-source",
+        camera_name="test-camera",
+        location_name="home",
+        source_type="local_directory",
+        enabled=True,
+    )
+    pg_db.add(source)
+    pg_db.flush()
+    pg_db.add(
         VideoSession(
-            source_id=1,
+            source_id=source.id,
             session_start_time=datetime(2026, 3, 10, 8, 0, 0),
             session_end_time=datetime(2026, 3, 10, 8, 30, 0),
             total_duration_seconds=1800,
             analysis_status=SessionAnalysisStatus.SUCCESS,
         )
     )
-    db.commit()
+    pg_db.commit()
 
     monkeypatch.setattr(
         "src.api.v1.endpoints.daily_summaries._pipeline_orchestrator.dispatch_generate_daily_summary",

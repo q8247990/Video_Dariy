@@ -4,16 +4,15 @@ These tests are simplified since the old reconcile_pipeline_tasks has been
 replaced by the heartbeat task with different responsibilities.
 """
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
-from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
@@ -26,14 +25,7 @@ from src.tasks.task_maintenance import (
     _recover_timed_out_tasks,
 )
 
-
-def _new_db_session_factory():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    VideoSession.__table__.create(bind=engine)
-    TaskLog.__table__.create(bind=engine)
-    SessionAnalysisCheckpoint.__table__.create(bind=engine)
-    PipelineTransitionLog.__table__.create(bind=engine)
-    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionFactory = Callable[[], Session]
 
 
 def _bind_fake_dispatcher(monkeypatch: pytest.MonkeyPatch) -> FakeTaskDispatcher:
@@ -45,12 +37,22 @@ def _bind_fake_dispatcher(monkeypatch: pytest.MonkeyPatch) -> FakeTaskDispatcher
 
 def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
+    pg_db_factory: SessionFactory,
 ) -> None:
-    session_factory = _new_db_session_factory()
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
         session = VideoSession(
-            source_id=1,
+            source_id=source.id,
             session_start_time=datetime(2026, 3, 10, 8, 0, 0, tzinfo=timezone.utc),
             session_end_time=datetime(2026, 3, 10, 8, 5, 0, tzinfo=timezone.utc),
             total_duration_seconds=300,
@@ -101,8 +103,10 @@ def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
         db.close()
 
 
-def test_healthy_queued_pending_task_is_not_falsely_timed_out() -> None:
-    session_factory = _new_db_session_factory()
+def test_healthy_queued_pending_task_is_not_falsely_timed_out(
+    pg_db_factory: SessionFactory,
+) -> None:
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
         pending = TaskLog(
@@ -128,8 +132,9 @@ def test_healthy_queued_pending_task_is_not_falsely_timed_out() -> None:
 
 def test_unleased_stale_build_task_times_out_and_revokes(
     monkeypatch: pytest.MonkeyPatch,
+    pg_db_factory: SessionFactory,
 ) -> None:
-    session_factory = _new_db_session_factory()
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
         pending = TaskLog(
@@ -161,8 +166,10 @@ def test_unleased_stale_build_task_times_out_and_revokes(
         db.close()
 
 
-def test_unleased_stale_analysis_task_is_not_touched() -> None:
-    session_factory = _new_db_session_factory()
+def test_unleased_stale_analysis_task_is_not_touched(
+    pg_db_factory: SessionFactory,
+) -> None:
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
         pending = TaskLog(
@@ -189,12 +196,22 @@ def test_unleased_stale_analysis_task_is_not_touched() -> None:
 
 def test_cancelled_analysis_is_not_auto_resumed(
     monkeypatch: pytest.MonkeyPatch,
+    pg_db_factory: SessionFactory,
 ) -> None:
-    session_factory = _new_db_session_factory()
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
         session = VideoSession(
-            source_id=1,
+            source_id=source.id,
             session_start_time=datetime.now(timezone.utc),
             session_end_time=datetime.now(timezone.utc),
             analysis_status=SessionAnalysisStatus.ANALYZING,
@@ -222,12 +239,22 @@ def test_cancelled_analysis_is_not_auto_resumed(
 
 def test_exhausted_recovery_budget_records_terminal_reason(
     monkeypatch: pytest.MonkeyPatch,
+    pg_db_factory: SessionFactory,
 ) -> None:
-    session_factory = _new_db_session_factory()
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
         session = VideoSession(
-            source_id=1,
+            source_id=source.id,
             session_start_time=datetime.now(timezone.utc),
             session_end_time=datetime.now(timezone.utc),
             analysis_status=SessionAnalysisStatus.ANALYZING,
@@ -255,13 +282,6 @@ def test_exhausted_recovery_budget_records_terminal_reason(
         assert len(dispatcher.dispatched_analyze_session) == 0
     finally:
         db.close()
-
-
-def _source_db_session_factory():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    VideoSource.__table__.create(bind=engine)
-    VideoFile.__table__.create(bind=engine)
-    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def _make_source_with_files(db: Session, tmp_path, paused: bool = False):
@@ -298,10 +318,10 @@ def _make_source_with_files(db: Session, tmp_path, paused: bool = False):
 
 
 def test_mark_missing_video_files_sweeps_enabled_local_sources(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, pg_db_factory: SessionFactory
 ) -> None:
     monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
-    session_factory = _source_db_session_factory()
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
         _, present_file, missing_file = _make_source_with_files(db, tmp_path)
@@ -319,10 +339,10 @@ def test_mark_missing_video_files_sweeps_enabled_local_sources(
 
 
 def test_mark_missing_video_files_skips_paused_sources(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, pg_db_factory: SessionFactory
 ) -> None:
     monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
-    session_factory = _source_db_session_factory()
+    session_factory = pg_db_factory
     db: Session = session_factory()
     try:
         _, _, missing_file = _make_source_with_files(db, tmp_path, paused=True)

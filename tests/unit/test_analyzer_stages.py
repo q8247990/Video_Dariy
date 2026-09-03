@@ -1,14 +1,17 @@
 """Unit tests for the analysis-stage modules split out in Wave 5 (Todo 18).
 
 These tests exercise the public API of
-:mod:`src.services.analysis` end-to-end against an in-memory SQLite
-engine. They cover the contracts that the slim Celery task and the
-final aggregator / finalize stages depend on, but that the legacy
-``test_analyzer_task`` suite did not pin explicitly:
+:mod:`src.services.analysis` end-to-end against the PG test schema
+(``tests/conftest.py`` ``pg_db`` fixture) — every model is already
+created by ``alembic upgrade head``, so each test only seeds the
+rows it actually exercises.
+
+They cover the contracts that the slim Celery task and the
+final aggregator / finalize stages depend on:
 
 * :func:`chunk_plan.build_chunk_plan` — the deterministic
   ``analysis_run_id`` / per-sub-chunk fingerprint contract.
-* :func:`sub_chunk_runner.build_sub_chunk_video_url` /
+* :func:`sub_chunk_runner.build_sub_chunk_video_url`` /
   :func:`sub_chunk_runner.build_sub_chunk_extra_body` — the
   raw_mp4-only payload contract and the
   ``media_io_kwargs.video.num_frames`` setting.
@@ -35,14 +38,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401 — registers every model on Base.metadata
-from src.db.base_class import Base
 from src.models.event_record import EventRecord
 from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
@@ -76,27 +75,8 @@ from src.services.video_analysis.schemas import (
 )
 
 # ---------------------------------------------------------------------------
-# SQLite session / data fixtures
+# Data helpers
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db_session() -> Session:
-    """Fresh in-memory SQLite session with the full schema registered.
-
-    ``Base.metadata.create_all`` stands up every table the analysis
-    stages touch, so the tests run against the same shape contract as
-    production — just without the PG-specific concurrency semantics.
-    """
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = factory()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
 
 
 def _seed_source_with_video_files(
@@ -237,7 +217,7 @@ def _build_guards(task_log: TaskLog) -> ClaimGuards:
 # ---------------------------------------------------------------------------
 
 
-def test_chunk_plan_computes_expected_offsets_and_fingerprints(db_session: Session) -> None:
+def test_chunk_plan_computes_expected_offsets_and_fingerprints(pg_db: Session) -> None:
     """``build_chunk_plan`` produces the deterministic offsets / per-sub-chunk
     ``analysis_run_id`` / ``input_fingerprint`` contract that the
     checkpoint writer relies on.
@@ -248,17 +228,17 @@ def test_chunk_plan_computes_expected_offsets_and_fingerprints(db_session: Sessi
     must change when the input changes.
     """
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
 
     plan_first = build_chunk_plan(
-        db_session,
+        pg_db,
         session_id=session_id,
         chunk_seconds=600,
         sub_chunk_seconds=60,
     )
     plan_second = build_chunk_plan(
-        db_session,
+        pg_db,
         session_id=session_id,
         chunk_seconds=600,
         sub_chunk_seconds=60,
@@ -386,15 +366,15 @@ def test_single_sub_chunk_parses_llm_output_into_dto() -> None:
 
 
 def test_checkpoint_write_requires_matching_run_id_and_generation(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A checkpoint write with matching ``analysis_run_id`` +
     ``generation`` + ``lease_owner`` succeeds and persists the
     success row."""
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
-    task_log = _bind_running_task_log(db_session, session_id=session_id, queue_task_id="q-1")
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-1")
     guards = _build_guards(task_log)
 
     sub_chunk = SubChunkPlan(
@@ -405,7 +385,7 @@ def test_checkpoint_write_requires_matching_run_id_and_generation(
         file_paths=("/tmp/fake/clip-0000.mp4",),
     )
     checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunk,
@@ -414,10 +394,10 @@ def test_checkpoint_write_requires_matching_run_id_and_generation(
         video_data_url="data:video/mp4;base64,AAA",
     )
     assert checkpoint.state == "pending"
-    db_session.commit()
+    pg_db.commit()
 
     write_sub_chunk_checkpoint(
-        db_session,
+        pg_db,
         claim=guards,
         checkpoint=checkpoint,
         recognition_result=_recognition_result(0),
@@ -425,10 +405,10 @@ def test_checkpoint_write_requires_matching_run_id_and_generation(
         completion_tokens=5,
         total_tokens=15,
     )
-    db_session.commit()
+    pg_db.commit()
 
     refreshed = (
-        db_session.query(SessionAnalysisCheckpoint)
+        pg_db.query(SessionAnalysisCheckpoint)
         .filter(SessionAnalysisCheckpoint.id == checkpoint.id)
         .one()
     )
@@ -440,7 +420,7 @@ def test_checkpoint_write_requires_matching_run_id_and_generation(
 
 
 def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """When a recovery worker bumps ``TaskLog.detail_json[generation]`` the
     stale worker's claim no longer matches and ``enforce_fencing``
@@ -453,9 +433,9 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
     must be rejected so it cannot write.
     """
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
-    task_log = _bind_running_task_log(db_session, session_id=session_id, queue_task_id="q-stale")
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-stale")
 
     stale_guards = _build_guards(task_log)
 
@@ -467,7 +447,7 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
         file_paths=("/tmp/fake/clip-0000.mp4",),
     )
     checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=stale_guards,
         sub_chunk=sub_chunk,
@@ -475,31 +455,35 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
         user_prompt="user",
         video_data_url="data:video/mp4;base64,AAA",
     )
-    db_session.commit()
+    pg_db.commit()
 
-    # Simulate the recovery take-over: a new worker has the lease; the
-    # TaskLog row's generation was bumped and the lease_owner is now a
-    # different value.
+    # Simulate the recovery take-over: bump generation + lease_owner
+    # so the stale claim no longer matches. Wrap in a SAVEPOINT so the
+    # rollback after the fencing raise only discards the bump and any
+    # in-flight write; setup rows in the outer transaction survive.
     detail = task_log.detail_json if isinstance(task_log.detail_json, dict) else {}
     detail["generation"] = stale_guards.generation + 1
     task_log.detail_json = detail
     task_log.lease_owner = "q-recovery"
-    db_session.commit()
+    pg_db.commit()
 
-    with pytest.raises(LateWorkerFencingError):
-        write_sub_chunk_checkpoint(
-            db_session,
-            claim=stale_guards,
-            checkpoint=checkpoint,
-            recognition_result=_recognition_result(0),
-            prompt_tokens=10,
-            completion_tokens=5,
-            total_tokens=15,
-        )
-    db_session.rollback()
+    sp = pg_db.connection().begin_nested()
+    try:
+        with pytest.raises(LateWorkerFencingError):
+            write_sub_chunk_checkpoint(
+                pg_db,
+                claim=stale_guards,
+                checkpoint=checkpoint,
+                recognition_result=_recognition_result(0),
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+            )
+    finally:
+        sp.rollback()
 
     refreshed = (
-        db_session.query(SessionAnalysisCheckpoint)
+        pg_db.query(SessionAnalysisCheckpoint)
         .filter(SessionAnalysisCheckpoint.id == checkpoint.id)
         .one()
     )
@@ -513,7 +497,7 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
 
 
 def test_late_worker_cannot_write_checkpoint_or_event(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """After a recovery take-over the old worker's write is rejected and
     no :class:`EventRecord` lands — the production fencing guarantee.
@@ -525,9 +509,9 @@ def test_late_worker_cannot_write_checkpoint_or_event(
     the canonical finalize path).
     """
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
-    task_log = _bind_running_task_log(db_session, session_id=session_id, queue_task_id="q-old")
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-old")
     stale_guards = _build_guards(task_log)
 
     sub_chunk = SubChunkPlan(
@@ -538,7 +522,7 @@ def test_late_worker_cannot_write_checkpoint_or_event(
         file_paths=("/tmp/fake/clip-0000.mp4",),
     )
     checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=stale_guards,
         sub_chunk=sub_chunk,
@@ -546,29 +530,32 @@ def test_late_worker_cannot_write_checkpoint_or_event(
         user_prompt="user",
         video_data_url="data:video/mp4;base64,AAA",
     )
-    db_session.commit()
+    pg_db.commit()
 
     detail = task_log.detail_json if isinstance(task_log.detail_json, dict) else {}
     detail["generation"] = stale_guards.generation + 1
     task_log.detail_json = detail
     task_log.lease_owner = "q-new"
-    db_session.commit()
+    pg_db.commit()
 
-    with pytest.raises(LateWorkerFencingError):
-        write_sub_chunk_checkpoint(
-            db_session,
-            claim=stale_guards,
-            checkpoint=checkpoint,
-            recognition_result=_recognition_result(0),
-            prompt_tokens=10,
-            completion_tokens=5,
-            total_tokens=15,
-        )
-    db_session.rollback()
+    sp = pg_db.connection().begin_nested()
+    try:
+        with pytest.raises(LateWorkerFencingError):
+            write_sub_chunk_checkpoint(
+                pg_db,
+                claim=stale_guards,
+                checkpoint=checkpoint,
+                recognition_result=_recognition_result(0),
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+            )
+    finally:
+        sp.rollback()
 
-    assert db_session.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 0
+    assert pg_db.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 0
     refreshed = (
-        db_session.query(SessionAnalysisCheckpoint)
+        pg_db.query(SessionAnalysisCheckpoint)
         .filter(SessionAnalysisCheckpoint.id == checkpoint.id)
         .one()
     )
@@ -576,15 +563,15 @@ def test_late_worker_cannot_write_checkpoint_or_event(
 
 
 def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A LLM / parse exception leaves the checkpoint in ``state=error`` and
     finalises the TaskLog as ``FAILED`` so the orchestrator can decide
     between PARTIAL (resume) and FAILED (give up)."""
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
-    task_log = _bind_running_task_log(db_session, session_id=session_id, queue_task_id="q-fail")
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-fail")
     guards = _build_guards(task_log)
 
     sub_chunk = SubChunkPlan(
@@ -595,7 +582,7 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
         file_paths=("/tmp/fake/clip-0000.mp4",),
     )
     checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunk,
@@ -603,12 +590,12 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
         user_prompt="user",
         video_data_url="data:video/mp4;base64,AAA",
     )
-    db_session.commit()
+    pg_db.commit()
 
     exc = RuntimeError("provider failed")
-    mark_checkpoint_error(db_session, claim=guards, checkpoint=checkpoint, error=exc)
+    mark_checkpoint_error(pg_db, claim=guards, checkpoint=checkpoint, error=exc)
     record_recovery_failure(
-        db_session,
+        pg_db,
         claim=guards,
         task_log=task_log,
         error=exc,
@@ -621,10 +608,10 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
         session_id=session_id,
     )
     finalize_task_log(task_log, TaskStatus.FAILED, "provider failed", {"session_id": session_id})
-    db_session.commit()
+    pg_db.commit()
 
     refreshed = (
-        db_session.query(SessionAnalysisCheckpoint)
+        pg_db.query(SessionAnalysisCheckpoint)
         .filter(SessionAnalysisCheckpoint.id == checkpoint.id)
         .one()
     )
@@ -632,14 +619,14 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
     assert refreshed.last_error == "provider failed"
     assert refreshed.error_type == "RuntimeError"
 
-    refreshed_task_log = db_session.query(TaskLog).filter(TaskLog.id == task_log.id).one()
+    refreshed_task_log = pg_db.query(TaskLog).filter(TaskLog.id == task_log.id).one()
     assert refreshed_task_log.status == TaskStatus.FAILED
     assert refreshed_task_log.detail_json["failed_chunk_index"] == 0
     assert refreshed_task_log.detail_json["failed_sub_chunk_index"] == 0
     assert refreshed_task_log.detail_json["error_type"] == "RuntimeError"
 
     assert (
-        db_session.query(PipelineTransitionLog)
+        pg_db.query(PipelineTransitionLog)
         .filter(
             PipelineTransitionLog.aggregate_id == session_id,
             PipelineTransitionLog.aggregate_type == "VideoSession",
@@ -654,7 +641,7 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
 # ---------------------------------------------------------------------------
 
 
-def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None:
+def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
     """When a resumed run calls ``get_or_create_checkpoint`` on a sub-chunk
     that the previous run already wrote ``state=success`` the function
     returns the row untouched so the orchestrator can skip the LLM
@@ -663,9 +650,9 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
     can flip it back to ``processing`` (via ``RESUMABLE_STATES``) and
     retry only the failed sub-chunks."""
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
-    task_log = _bind_running_task_log(db_session, session_id=session_id, queue_task_id="q-resume")
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-resume")
     guards = _build_guards(task_log)
 
     sub_chunks = [
@@ -681,7 +668,7 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
 
     # First pass: sub-chunk 0 succeeds, sub-chunk 1 fails.
     success_checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunks[0],
@@ -689,9 +676,9 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
         user_prompt="user",
         video_data_url="data:video/mp4;base64,AAA",
     )
-    db_session.commit()
+    pg_db.commit()
     write_sub_chunk_checkpoint(
-        db_session,
+        pg_db,
         claim=guards,
         checkpoint=success_checkpoint,
         recognition_result=_recognition_result(0),
@@ -699,10 +686,10 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
         completion_tokens=5,
         total_tokens=15,
     )
-    db_session.commit()
+    pg_db.commit()
 
     failed_checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunks[1],
@@ -710,21 +697,21 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
         user_prompt="user",
         video_data_url="data:video/mp4;base64,BBB",
     )
-    db_session.commit()
+    pg_db.commit()
     mark_checkpoint_error(
-        db_session,
+        pg_db,
         claim=guards,
         checkpoint=failed_checkpoint,
         error=RuntimeError("provider failed"),
     )
-    db_session.commit()
+    pg_db.commit()
 
     # Resumed run: the success row is returned untouched so the caller
     # skips the LLM call. The failed row stays in ``state=error`` — the
     # orchestrator checks ``state != 'success'`` to decide whether to
     # call the LLM. A brand-new sub-chunk comes back in ``pending``.
     resumed_success = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunks[0],
@@ -733,7 +720,7 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
         video_data_url="data:video/mp4;base64,AAA",
     )
     resumed_failed = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunks[1],
@@ -742,7 +729,7 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
         video_data_url="data:video/mp4;base64,BBB",
     )
     fresh = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunks[2],
@@ -768,13 +755,13 @@ def test_partial_resume_skips_successful_sub_chunks(db_session: Session) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_write_token_usage_persists_llm_usage_log(db_session: Session, monkeypatch) -> None:
+def test_write_token_usage_persists_llm_usage_log(pg_db: Session, monkeypatch) -> None:
     """The checkpoint writer can persist the LLMUsageLog row bound to the
     checkpoint via the existing ``record_token_usage`` helper."""
     _, session_id = _seed_source_with_video_files(
-        db_session, file_count=3, file_duration_seconds=60
+        pg_db, file_count=3, file_duration_seconds=60
     )
-    task_log = _bind_running_task_log(db_session, session_id=session_id, queue_task_id="q-tok")
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-tok")
     guards = _build_guards(task_log)
 
     sub_chunk = SubChunkPlan(
@@ -785,7 +772,7 @@ def test_write_token_usage_persists_llm_usage_log(db_session: Session, monkeypat
         file_paths=("/tmp/fake/clip-0000.mp4",),
     )
     checkpoint = get_or_create_checkpoint(
-        db_session,
+        pg_db,
         session_id=session_id,
         claim=guards,
         sub_chunk=sub_chunk,
@@ -793,9 +780,9 @@ def test_write_token_usage_persists_llm_usage_log(db_session: Session, monkeypat
         user_prompt="user",
         video_data_url="data:video/mp4;base64,AAA",
     )
-    db_session.commit()
+    pg_db.commit()
 
-    captured: dict[str, Any] = {}
+    captured: dict[str, object] = {}
 
     def _fake_record_token_usage(
         db: Session,
@@ -819,7 +806,7 @@ def test_write_token_usage_persists_llm_usage_log(db_session: Session, monkeypat
     provider = SimpleNamespace(id=42, provider_name="local")
 
     write_token_usage(
-        db_session,
+        pg_db,
         provider=provider,
         checkpoint=checkpoint,
         session_id=session_id,

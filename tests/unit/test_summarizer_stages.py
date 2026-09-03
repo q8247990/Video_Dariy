@@ -1,32 +1,9 @@
-"""SQLite unit tests for the daily-summary pipeline stage decomposition (Todo 19).
+"""PostgreSQL unit tests for the daily-summary pipeline stage decomposition (Todo 19).
 
 These tests exercise the public API of :mod:`src.services.summarizer`
-end-to-end against an in-memory SQLite engine. They cover the
-contracts the slim Celery task in :mod:`src.tasks.summarizer`
-depends on, but that the legacy ``tests/integration/test_daily_summary_task.py``
-suite did not pin explicitly:
-
-* :func:`src.services.summarizer.normalization.clamp_summary_payload`
-  — the 500-900 char budget + 3-item attention cap contract.
-* :func:`src.services.summarizer.parsing.parse_summary_with_retry`
-  / :func:`parse_subject_summary_output` /
-  :func:`parse_rollup_output` — the three LLM output shapes.
-* :func:`src.services.summarizer.generation.generate_single_pass_summary_payload`
-  / :func:`generate_serial_summary_payload` — the LLM-facing
-  stage; covered with stub gateways that record the call shape.
-* :func:`src.services.summarizer.evidence.build_evidence` — the
-  half-open event range, home-context and subject-section assembly.
-* :func:`src.services.summarizer.schedule.parse_schedule_time` /
-  :func:`scheduled_local_datetime` / :func:`resolve_target_date` /
-  :func:`has_existing_summary_or_task` / :func:`claim_dispatch_guard`
-  — the dispatch-time guard stage.
-* :func:`src.services.summarizer.lifecycle.claim_attempt` /
-  :func:`mark_running` / :func:`mark_failed` / :func:`mark_cancelled`
-  — the attempt lifecycle transitions through the
-  :class:`DailySummaryAttemptRepository`.
-* :func:`src.services.summarizer.finalize.find_subscribed_webhooks`
-  / :func:`build_webhook_payload` — the webhook discovery + legacy
-  envelope builder.
+end-to-end against the PG test schema (``tests/conftest.py`` ``pg_db``
+fixture) — every model is already created by ``alembic upgrade head``,
+so each test only seeds the rows it actually exercises.
 
 The five previously-failing integration scenarios (the
 ``_FakeGateway`` ones — see :mod:`tests.integration.test_daily_summary_task`)
@@ -44,24 +21,23 @@ indexes, transactional outbox visibility) lives in
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401  (registers every model on Base.metadata)
 from src.application.summary_attempt.repository import DailySummaryAttemptRepository
 from src.application.summary_attempt.state_machine import DailySummaryAttemptStatus
-from src.db.base_class import Base
 from src.models.daily_summary import DailySummary
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
 from src.models.event_record import EventRecord
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.system_config import SystemConfig
 from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 from src.models.webhook_config import WebhookConfig
 from src.services.summarizer import (
     SERIAL_SPLIT_PROMPT_THRESHOLD,
@@ -88,25 +64,6 @@ from src.services.summarizer import (
     scheduled_local_datetime,
 )
 from src.services.summarizer.evidence import Evidence
-
-# ---------------------------------------------------------------------------
-# SQLite session fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db_session() -> Session:
-    """Fresh in-memory SQLite session with the full schema registered."""
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = factory()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
-
 
 # ---------------------------------------------------------------------------
 # Stubs / helpers
@@ -177,6 +134,32 @@ def _seed_home_member(db: Session, *, name: str = "爸爸") -> None:
     db.commit()
 
 
+def _seed_source_and_session(db: Session) -> tuple[VideoSource, VideoSession]:
+    """Seed a minimal VideoSource + VideoSession pair so EventRecord FKs resolve."""
+    source = VideoSource(
+        source_name="客厅",
+        camera_name="cam-1",
+        location_name="客厅",
+        source_type="local_directory",
+        enabled=True,
+    )
+    db.add(source)
+    db.flush()
+
+    now = datetime.utcnow()
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=now - timedelta(hours=2),
+        session_end_time=now,
+    )
+    db.add(session)
+    db.flush()
+    db.commit()
+    db.refresh(source)
+    db.refresh(session)
+    return source, session
+
+
 def _add_event(
     db: Session,
     *,
@@ -186,10 +169,11 @@ def _add_event(
     event_type: str = "member_appear",
     importance: str = "medium",
 ) -> None:
+    source, session = _seed_source_and_session(db)
     db.add(
         EventRecord(
-            source_id=1,
-            session_id=1,
+            source_id=source.id,
+            session_id=session.id,
             event_start_time=datetime(
                 target_date.year, target_date.month, target_date.day, hour, 0, 0
             ),
@@ -242,7 +226,7 @@ def _seed_running_attempt(
 # ---------------------------------------------------------------------------
 
 
-def test_clamp_summary_payload_keeps_under_budget(db_session: Session) -> None:
+def test_clamp_summary_payload_keeps_under_budget(pg_db: Session) -> None:
     """Small payload returns unchanged."""
     overall, sections, attention = clamp_summary_payload(
         "今天整体平稳。",
@@ -262,7 +246,7 @@ def test_clamp_summary_payload_keeps_under_budget(db_session: Session) -> None:
 
 
 def test_clamp_summary_payload_truncates_overall_when_long(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """Long overall is clamped sentence-by-sentence."""
     long_overall = "今天整体平稳。" + ("详细描述。" * 60)
@@ -272,7 +256,7 @@ def test_clamp_summary_payload_truncates_overall_when_long(
 
 
 def test_clamp_summary_payload_caps_attention_at_three(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """Attention items are capped at 3 entries."""
     attention = [{"title": f"item-{i}", "summary": f"detail-{i}", "level": "low"} for i in range(6)]
@@ -285,17 +269,17 @@ def test_clamp_summary_payload_caps_attention_at_three(
 # ---------------------------------------------------------------------------
 
 
-def test_extract_json_payload_strips_code_fences(db_session: Session) -> None:
+def test_extract_json_payload_strips_code_fences(pg_db: Session) -> None:
     payload = extract_json_payload('```json\n{"a": 1}\n```')
     assert payload == {"a": 1}
 
 
-def test_extract_json_payload_rejects_non_object(db_session: Session) -> None:
+def test_extract_json_payload_rejects_non_object(pg_db: Session) -> None:
     with pytest.raises(ValueError):
         extract_json_payload("[1, 2, 3]")
 
 
-def test_parse_summary_with_retry_succeeds_on_first_try(db_session: Session) -> None:
+def test_parse_summary_with_retry_succeeds_on_first_try(pg_db: Session) -> None:
     raw = json.dumps(
         {
             "overall_summary": "整体平稳。",
@@ -317,7 +301,7 @@ def test_parse_summary_with_retry_succeeds_on_first_try(db_session: Session) -> 
     assert retry_calls == []
 
 
-def test_parse_summary_with_retry_retries_on_parse_failure(db_session: Session) -> None:
+def test_parse_summary_with_retry_retries_on_parse_failure(pg_db: Session) -> None:
     retry_client = _RecordingClient(
         [
             json.dumps(
@@ -339,7 +323,7 @@ def test_parse_summary_with_retry_retries_on_parse_failure(db_session: Session) 
     assert retried is True
 
 
-def test_parse_subject_summary_output_extracts_summary(db_session: Session) -> None:
+def test_parse_subject_summary_output_extracts_summary(pg_db: Session) -> None:
     summary, attention_needed = parse_subject_summary_output(
         json.dumps({"summary": "在客厅活动。", "attention_needed": True}, ensure_ascii=False),
         subject_name="爸爸",
@@ -348,7 +332,7 @@ def test_parse_subject_summary_output_extracts_summary(db_session: Session) -> N
     assert attention_needed is True
 
 
-def test_parse_rollup_output_extracts_overall_and_attention(db_session: Session) -> None:
+def test_parse_rollup_output_extracts_overall_and_attention(pg_db: Session) -> None:
     overall, attention = parse_rollup_output(
         json.dumps(
             {
@@ -369,22 +353,22 @@ def test_parse_rollup_output_extracts_overall_and_attention(db_session: Session)
 # ---------------------------------------------------------------------------
 
 
-def test_parse_schedule_time_accepts_valid_hh_mm(db_session: Session) -> None:
+def test_parse_schedule_time_accepts_valid_hh_mm(pg_db: Session) -> None:
     assert parse_schedule_time("08:30") == (8, 30)
 
 
 @pytest.mark.parametrize("bad", ["", "25:00", "12:60", "12", "abc"])
-def test_parse_schedule_time_rejects_invalid_input(bad: str, db_session: Session) -> None:
+def test_parse_schedule_time_rejects_invalid_input(bad: str, pg_db: Session) -> None:
     with pytest.raises(ValueError):
         parse_schedule_time(bad)
 
 
-def test_resolve_target_date_returns_yesterday(db_session: Session) -> None:
+def test_resolve_target_date_returns_yesterday(pg_db: Session) -> None:
     now = datetime(2026, 3, 14, 0, 30, tzinfo=ZoneInfo("UTC"))
     assert resolve_target_date(now) == date(2026, 3, 13)
 
 
-def test_scheduled_local_datetime_composes_correct_instant(db_session: Session) -> None:
+def test_scheduled_local_datetime_composes_correct_instant(pg_db: Session) -> None:
     zone = ZoneInfo("UTC")
     scheduled = scheduled_local_datetime(
         datetime(2026, 3, 14, 1, 0, tzinfo=zone),
@@ -395,29 +379,29 @@ def test_scheduled_local_datetime_composes_correct_instant(db_session: Session) 
 
 
 def test_has_existing_summary_or_task_returns_true_on_summary(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     target = date(2026, 3, 13)
-    db_session.add(DailySummary(summary_date=target, summary_title="t", overall_summary="o"))
-    db_session.commit()
-    assert has_existing_summary_or_task(db_session, target) is True
+    pg_db.add(DailySummary(summary_date=target, summary_title="t", overall_summary="o"))
+    pg_db.commit()
+    assert has_existing_summary_or_task(pg_db, target) is True
 
 
 def test_has_existing_summary_or_task_returns_false_when_empty(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
-    assert has_existing_summary_or_task(db_session, date(2026, 3, 13)) is False
+    assert has_existing_summary_or_task(pg_db, date(2026, 3, 13)) is False
 
 
-def test_claim_dispatch_guard_round_trip(db_session: Session) -> None:
+def test_claim_dispatch_guard_round_trip(pg_db: Session) -> None:
     target = date(2026, 3, 13)
     now = datetime(2026, 3, 14, 0, 31, tzinfo=ZoneInfo("UTC"))
-    assert claim_dispatch_guard(db_session, now, target) is True
+    assert claim_dispatch_guard(pg_db, now, target) is True
     # Second claim fails — guard is held.
-    assert claim_dispatch_guard(db_session, now, target) is False
-    release_dispatch_guard(db_session, target)
-    db_session.commit()
-    assert claim_dispatch_guard(db_session, now, target) is True
+    assert claim_dispatch_guard(pg_db, now, target) is False
+    release_dispatch_guard(pg_db, target)
+    pg_db.commit()
+    assert claim_dispatch_guard(pg_db, now, target) is True
 
 
 # ---------------------------------------------------------------------------
@@ -425,9 +409,9 @@ def test_claim_dispatch_guard_round_trip(db_session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_claim_attempt_returns_active_row(db_session: Session) -> None:
-    repo = DailySummaryAttemptRepository(db_session)
-    task_log = _seed_task_log(db_session)
+def test_claim_attempt_returns_active_row(pg_db: Session) -> None:
+    repo = DailySummaryAttemptRepository(pg_db)
+    task_log = _seed_task_log(pg_db)
     outcome = claim_attempt(
         repo,
         summary_date=date(2026, 3, 13),
@@ -439,9 +423,9 @@ def test_claim_attempt_returns_active_row(db_session: Session) -> None:
     assert outcome.attempt.status == DailySummaryAttemptStatus.CLAIMED.value
 
 
-def test_claim_attempt_returns_existing_on_second_call(db_session: Session) -> None:
-    repo = DailySummaryAttemptRepository(db_session)
-    task_log = _seed_task_log(db_session)
+def test_claim_attempt_returns_existing_on_second_call(pg_db: Session) -> None:
+    repo = DailySummaryAttemptRepository(pg_db)
+    task_log = _seed_task_log(pg_db)
     first = claim_attempt(
         repo,
         summary_date=date(2026, 3, 13),
@@ -460,23 +444,23 @@ def test_claim_attempt_returns_existing_on_second_call(db_session: Session) -> N
 
 
 def test_mark_running_then_failed_preserves_prior_summary(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """Failure terminal transition does NOT touch ``daily_summary``."""
-    repo = DailySummaryAttemptRepository(db_session)
-    task_log = _seed_task_log(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
+    task_log = _seed_task_log(pg_db)
     attempt = _seed_running_attempt(
-        db_session, task_log_id=int(task_log.id), target=date(2026, 3, 13)
+        pg_db, task_log_id=int(task_log.id), target=date(2026, 3, 13)
     )
 
-    db_session.add(
+    pg_db.add(
         DailySummary(
             summary_date=date(2026, 3, 13),
             summary_title="previous",
             overall_summary="prior good summary",
         )
     )
-    db_session.commit()
+    pg_db.commit()
 
     failed = mark_failed(
         repo,
@@ -485,37 +469,37 @@ def test_mark_running_then_failed_preserves_prior_summary(
         last_error="boom",
         failure_reason="llm_error",
     )
-    db_session.commit()
+    pg_db.commit()
     assert failed is not None
     assert failed.status == DailySummaryAttemptStatus.FAILED.value
 
-    rows = db_session.query(DailySummary).all()
+    rows = pg_db.query(DailySummary).all()
     assert len(rows) == 1
     assert rows[0].overall_summary == "prior good summary"
 
 
-def test_mark_cancelled_preserves_prior_summary(db_session: Session) -> None:
-    repo = DailySummaryAttemptRepository(db_session)
-    task_log = _seed_task_log(db_session)
+def test_mark_cancelled_preserves_prior_summary(pg_db: Session) -> None:
+    repo = DailySummaryAttemptRepository(pg_db)
+    task_log = _seed_task_log(pg_db)
     attempt = _seed_running_attempt(
-        db_session, task_log_id=int(task_log.id), target=date(2026, 3, 13)
+        pg_db, task_log_id=int(task_log.id), target=date(2026, 3, 13)
     )
 
-    db_session.add(
+    pg_db.add(
         DailySummary(
             summary_date=date(2026, 3, 13),
             summary_title="prior",
             overall_summary="prior good summary",
         )
     )
-    db_session.commit()
+    pg_db.commit()
 
     cancelled = mark_cancelled(repo, attempt_id=int(attempt.id), last_error="user cancelled")
-    db_session.commit()
+    pg_db.commit()
     assert cancelled is not None
     assert cancelled.status == DailySummaryAttemptStatus.CANCELLED.value
 
-    rows = db_session.query(DailySummary).all()
+    rows = pg_db.query(DailySummary).all()
     assert len(rows) == 1
     assert rows[0].overall_summary == "prior good summary"
 
@@ -526,9 +510,9 @@ def test_mark_cancelled_preserves_prior_summary(db_session: Session) -> None:
 
 
 def test_find_subscribed_webhooks_returns_only_matching_enabled(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
-    db_session.add(
+    pg_db.add(
         WebhookConfig(
             name="matching",
             url="https://example.com/hook",
@@ -537,7 +521,7 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
             enabled=True,
         )
     )
-    db_session.add(
+    pg_db.add(
         WebhookConfig(
             name="non-matching",
             url="https://example.com/other",
@@ -546,7 +530,7 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
             enabled=True,
         )
     )
-    db_session.add(
+    pg_db.add(
         WebhookConfig(
             name="disabled",
             url="https://example.com/disabled",
@@ -555,11 +539,11 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
             enabled=False,
         )
     )
-    db_session.commit()
-    assert find_subscribed_webhooks(db_session) == [1]
+    pg_db.commit()
+    assert find_subscribed_webhooks(pg_db) == [1]
 
 
-def test_build_webhook_payload_shape(db_session: Session) -> None:
+def test_build_webhook_payload_shape(pg_db: Session) -> None:
     payload = build_webhook_payload(
         target_date=date(2026, 3, 13),
         summary_title="2026-03-13 家庭日报",
@@ -581,26 +565,27 @@ def test_build_webhook_payload_shape(db_session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_evidence_returns_half_open_event_range(db_session: Session) -> None:
-    db_session.add(SystemConfig(config_key="home_timezone", config_value="Asia/Shanghai"))
-    _seed_qa_provider(db_session)
-    _seed_home_member(db_session, name="爸爸")
+def test_build_evidence_returns_half_open_event_range(pg_db: Session) -> None:
+    pg_db.add(SystemConfig(config_key="home_timezone", config_value="Asia/Shanghai"))
+    _seed_qa_provider(pg_db)
+    _seed_home_member(pg_db, name="爸爸")
     target = date(2026, 3, 13)
-    _add_event(db_session, target_date=target, hour=9)
+    _add_event(pg_db, target_date=target, hour=9)
 
     # Add an event OUTSIDE the Shanghai local day for 2026-03-13.
-    db_session.add(
+    source, session = _seed_source_and_session(pg_db)
+    pg_db.add(
         EventRecord(
-            source_id=1,
-            session_id=1,
+            source_id=source.id,
+            session_id=session.id,
             event_start_time=datetime(2026, 3, 13, 16, 0, 0, tzinfo=timezone.utc),
             description="next local day",
         )
     )
-    db_session.commit()
+    pg_db.commit()
 
     evidence = build_evidence(
-        db_session,
+        pg_db,
         target_date=target,
         zone=ZoneInfo("Asia/Shanghai"),
         prompt_builder=lambda payload: ("SYSTEM", "USER"),
@@ -614,15 +599,15 @@ def test_build_evidence_returns_half_open_event_range(db_session: Session) -> No
 
 
 def test_build_evidence_trims_prompt_when_input_is_large(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
-    db_session.add(SystemConfig(config_key="home_timezone", config_value="UTC"))
-    _seed_qa_provider(db_session)
-    _seed_home_member(db_session, name="爸爸")
+    pg_db.add(SystemConfig(config_key="home_timezone", config_value="UTC"))
+    _seed_qa_provider(pg_db)
+    _seed_home_member(pg_db, name="爸爸")
     target = date(2026, 3, 13)
     for hour in range(24):
-        _add_event(db_session, target_date=target, hour=hour)
-    db_session.commit()
+        _add_event(pg_db, target_date=target, hour=hour)
+    pg_db.commit()
 
     captured: dict[str, Any] = {}
 
@@ -633,7 +618,7 @@ def test_build_evidence_trims_prompt_when_input_is_large(
         return ("SYSTEM", "X" * 50000)
 
     evidence = build_evidence(
-        db_session,
+        pg_db,
         target_date=target,
         zone=ZoneInfo("UTC"),
         prompt_builder=_capture,
@@ -650,15 +635,15 @@ def test_build_evidence_trims_prompt_when_input_is_large(
 
 
 def test_generate_single_pass_summary_payload_uses_known_subjects(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """Single-pass path fills in missing subjects even when the LLM omits one."""
-    _seed_qa_provider(db_session)
-    _seed_home_member(db_session, name="爸爸")
-    _seed_home_member(db_session, name="妈妈")
+    _seed_qa_provider(pg_db)
+    _seed_home_member(pg_db, name="爸爸")
+    _seed_home_member(pg_db, name="妈妈")
     target = date(2026, 3, 13)
     _add_event(
-        db_session,
+        pg_db,
         target_date=target,
         hour=9,
         related_entities=[
@@ -691,7 +676,7 @@ def test_generate_single_pass_summary_payload_uses_known_subjects(
         ]
     )
     evidence = build_evidence(
-        db_session,
+        pg_db,
         target_date=target,
         zone=ZoneInfo("UTC"),
         prompt_builder=lambda payload: ("SYS", "USR"),
@@ -699,7 +684,7 @@ def test_generate_single_pass_summary_payload_uses_known_subjects(
     )
     overall, sections, attention, prompt_chars, parse_retried = (
         generate_single_pass_summary_payload(
-            db=db_session,
+            db=pg_db,
             client=stub,
             provider_id=1,
             provider_name_snapshot="qa-default",
@@ -716,14 +701,14 @@ def test_generate_single_pass_summary_payload_uses_known_subjects(
 
 
 def test_generate_serial_summary_payload_uses_rollup(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """Serial path calls the LLM per-subject + once for the rollup."""
-    _seed_qa_provider(db_session)
-    _seed_home_member(db_session, name="爸爸")
+    _seed_qa_provider(pg_db)
+    _seed_home_member(pg_db, name="爸爸")
     target = date(2026, 3, 13)
     _add_event(
-        db_session,
+        pg_db,
         target_date=target,
         hour=9,
         related_entities=[
@@ -746,14 +731,14 @@ def test_generate_serial_summary_payload_uses_rollup(
     )
     stub = _StubGateway([subject_reply, rollup_reply])
     evidence = build_evidence(
-        db_session,
+        pg_db,
         target_date=target,
         zone=ZoneInfo("UTC"),
         prompt_builder=lambda payload: ("SYS", "USR"),
         prompt_input_factory=lambda **kwargs: kwargs,
     )
     overall, sections, attention, prompt_chars, parse_retried = generate_serial_summary_payload(
-        db=db_session,
+        db=pg_db,
         client=stub,
         provider_id=1,
         provider_name_snapshot="qa-default",
@@ -776,14 +761,14 @@ def test_generate_serial_summary_payload_uses_rollup(
 
 
 def test_generate_serial_summary_payload_recovers_from_subject_parse_failure(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """Subject-level parse failure → fallback text in the section, no retry-failure overall."""
-    _seed_qa_provider(db_session)
-    _seed_home_member(db_session, name="爸爸")
+    _seed_qa_provider(pg_db)
+    _seed_home_member(pg_db, name="爸爸")
     target = date(2026, 3, 13)
     _add_event(
-        db_session,
+        pg_db,
         target_date=target,
         hour=9,
         related_entities=[
@@ -807,14 +792,14 @@ def test_generate_serial_summary_payload_recovers_from_subject_parse_failure(
     )
     stub = _StubGateway([subject_reply, retry_reply, rollup_reply])
     evidence = build_evidence(
-        db_session,
+        pg_db,
         target_date=target,
         zone=ZoneInfo("UTC"),
         prompt_builder=lambda payload: ("SYS", "USR"),
         prompt_input_factory=lambda **kwargs: kwargs,
     )
     overall, sections, _attention, _chars, parse_retried = generate_serial_summary_payload(
-        db=db_session,
+        db=pg_db,
         client=stub,
         provider_id=1,
         provider_name_snapshot="qa-default",
@@ -839,7 +824,7 @@ def test_generate_serial_summary_payload_recovers_from_subject_parse_failure(
 # ---------------------------------------------------------------------------
 
 
-def test_complete_subject_sections_fills_missing(db_session: Session) -> None:
+def test_complete_subject_sections_fills_missing(pg_db: Session) -> None:
     """`complete_subject_sections` adds missing-subject stubs."""
     sections = complete_subject_sections(
         sections=[

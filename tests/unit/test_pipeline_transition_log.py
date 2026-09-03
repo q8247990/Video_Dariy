@@ -1,6 +1,8 @@
-"""SQLite unit tests for the append-only pipeline transition audit.
+"""PostgreSQL unit tests for the append-only pipeline transition audit.
 
-These tests stand up an in-memory SQLite engine and exercise the
+These tests run against the project-wide ``pg_db`` fixture (a
+function-scoped PG session on a one-shot ``alembic upgrade head``
+schema rolled back after every test). They exercise the
 :func:`src.application.transition_log.record` writer plus the two
 :func:`src.services.pipeline_state.transition_session` /
 :func:`transition_task_log` CAS helpers that now persist the audit
@@ -16,20 +18,23 @@ row in the same transaction as the business UPDATE. They cover:
   NULLs the audit row's ``task_log_id`` but keeps the row itself
   (the append-only history outlives the cleanup, just as
   ``llm_usage_log`` and ``daily_summary_generation_attempt`` do).
+  This single test uses ``pg_db_factory`` instead of ``pg_db`` so
+  the ``DELETE`` is committed and the cross-session verification
+  can observe the FK ``ON DELETE SET NULL`` outcome.
 
 PostgreSQL-specific behaviour (CHECK constraint, partial unique,
 concurrent INSERT, FK ``ON DELETE SET NULL`` against a real PG
-schema) lives in
+schema with FK semantics) lives in
 ``tests/integration/test_pipeline_transition_log_postgres.py``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 import src.db.base  # noqa: F401  (registers PipelineTransitionLog on Base.metadata)
 from src.application.transition_log import (
@@ -39,7 +44,6 @@ from src.application.transition_log import (
 from src.application.transition_log import (
     record as record_transition_audit,
 )
-from src.db.base_class import Base
 from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
@@ -51,30 +55,11 @@ from src.services.pipeline_state import (
     transition_task_log,
 )
 
+SessionFactory = Callable[[], Session]
+
 # ---------------------------------------------------------------------------
-# Fixtures
+# Helpers
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db_session() -> Session:
-    """Return a function-scoped SQLite session bound to an in-memory engine.
-
-    ``Base.metadata.create_all`` stands up the full schema (including the
-    new ``pipeline_transition_log`` table with its CHECK constraint
-    and indexes) so the unit tests exercise the same column / constraint
-    contract as production — just against an in-memory SQLite engine
-    rather than PostgreSQL.
-    """
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = factory()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
 
 
 def _commit(db: Session) -> None:
@@ -126,11 +111,11 @@ def _seed_task_log(db: Session, status: TaskStatus = TaskStatus.PENDING) -> Task
 # ---------------------------------------------------------------------------
 
 
-def test_record_inserts_exactly_one_audit_row(db_session: Session) -> None:
+def test_record_inserts_exactly_one_audit_row(pg_db: Session) -> None:
     """A single ``record(...)`` call adds one row to the session;
     the caller owns the commit."""
     record_transition_audit(
-        db_session,
+        pg_db,
         aggregate_type=AGGREGATE_TYPE_VIDEO_SESSION,
         aggregate_id=42,
         from_status="open",
@@ -139,9 +124,9 @@ def test_record_inserts_exactly_one_audit_row(db_session: Session) -> None:
         source="unit_test",
         task_log_id=None,
     )
-    _commit(db_session)
+    _commit(pg_db)
 
-    rows = db_session.query(PipelineTransitionLog).all()
+    rows = pg_db.query(PipelineTransitionLog).all()
     assert len(rows) == 1
     row = rows[0]
     assert row.aggregate_type == "VideoSession"
@@ -151,19 +136,18 @@ def test_record_inserts_exactly_one_audit_row(db_session: Session) -> None:
     assert row.reason == "scan_completed"
     assert row.source == "unit_test"
     assert row.task_log_id is None
-    # ``occurred_at`` defaulted server-side; SQLite stores naive
-    # datetimes for ``DateTime(timezone=True)`` columns, so the
-    # ``occurred_at`` value will not carry a tz — only round-trip
-    # presence is asserted here.
+    # ``occurred_at`` defaulted server-side; PostgreSQL stores
+    # ``TIMESTAMPTZ`` and returns the value tz-aware — only
+    # round-trip presence is asserted here.
     assert row.occurred_at is not None
 
 
-def test_record_rejects_unknown_aggregate_type(db_session: Session) -> None:
+def test_record_rejects_unknown_aggregate_type(pg_db: Session) -> None:
     """A typo'd ``aggregate_type`` literal raises ``ValueError``
     *before* the INSERT so the failure mode is loud."""
     with pytest.raises(ValueError, match="aggregate_type"):
         record_transition_audit(
-            db_session,
+            pg_db,
             aggregate_type="OutboxEvent",
             aggregate_id=1,
             from_status="pending",
@@ -171,16 +155,16 @@ def test_record_rejects_unknown_aggregate_type(db_session: Session) -> None:
             reason=None,
             source="unit_test",
         )
-    assert db_session.query(PipelineTransitionLog).count() == 0
+    assert pg_db.query(PipelineTransitionLog).count() == 0
 
 
-def test_record_rejects_empty_source(db_session: Session) -> None:
+def test_record_rejects_empty_source(pg_db: Session) -> None:
     """``source`` is a required non-empty string; an empty value
     raises ``ValueError`` (the CHECK constraint in the migration does
     not enforce it, so the application writer owns it)."""
     with pytest.raises(ValueError, match="source"):
         record_transition_audit(
-            db_session,
+            pg_db,
             aggregate_type=AGGREGATE_TYPE_TASK_LOG,
             aggregate_id=1,
             from_status="pending",
@@ -188,7 +172,7 @@ def test_record_rejects_empty_source(db_session: Session) -> None:
             reason="start",
             source="",
         )
-    assert db_session.query(PipelineTransitionLog).count() == 0
+    assert pg_db.query(PipelineTransitionLog).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -197,17 +181,17 @@ def test_record_rejects_empty_source(db_session: Session) -> None:
 
 
 def test_transition_session_writes_exactly_one_audit_row_on_success(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A successful ``transition_session`` CAS writes exactly one
     ``PipelineTransitionLog`` row in the same transaction; the inline
     ``task_log.detail_json["transition"]`` embed is also updated."""
-    source = _seed_source(db_session)
-    session = _seed_session(db_session, source, SessionAnalysisStatus.OPEN)
-    task_log = _seed_task_log(db_session)
+    source = _seed_source(pg_db)
+    session = _seed_session(pg_db, source, SessionAnalysisStatus.OPEN)
+    task_log = _seed_task_log(pg_db)
 
     result = transition_session(
-        db_session,
+        pg_db,
         session.id,
         SessionAnalysisStatus.OPEN,
         SessionAnalysisStatus.SEALED,
@@ -215,10 +199,10 @@ def test_transition_session_writes_exactly_one_audit_row_on_success(
         source="seal_all_open",
         task_log=task_log,
     )
-    _commit(db_session)
+    _commit(pg_db)
 
     assert result.applied is True
-    rows = db_session.query(PipelineTransitionLog).all()
+    rows = pg_db.query(PipelineTransitionLog).all()
     assert len(rows) == 1, "exactly one audit row per successful CAS"
     row = rows[0]
     assert row.aggregate_type == AGGREGATE_TYPE_VIDEO_SESSION
@@ -230,7 +214,7 @@ def test_transition_session_writes_exactly_one_audit_row_on_success(
     assert row.task_log_id == task_log.id
 
     # Backward-compat: the inline detail_json embed is still updated.
-    db_session.refresh(task_log)
+    pg_db.refresh(task_log)
     assert task_log.detail_json["transition"] == {
         "from": "open",
         "to": "sealed",
@@ -240,23 +224,23 @@ def test_transition_session_writes_exactly_one_audit_row_on_success(
 
 
 def test_transition_session_lost_race_writes_no_audit_row(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A CAS that does not match the ``from_status`` writes **no**
     audit row (lost race). The ``from_status`` filter in the UPDATE
     is the gate; the audit write is gated on the same condition."""
-    source = _seed_source(db_session)
-    session = _seed_session(db_session, source, SessionAnalysisStatus.OPEN)
-    task_log = _seed_task_log(db_session)
+    source = _seed_source(pg_db)
+    session = _seed_session(pg_db, source, SessionAnalysisStatus.OPEN)
+    task_log = _seed_task_log(pg_db)
 
     # Drive the session into ``sealed`` behind the helper's back, then
     # ask the helper to do ``open -> sealed``: the ``from_status``
     # filter does not match and the CAS UPDATE matches zero rows.
     session.analysis_status = SessionAnalysisStatus.SEALED
-    db_session.flush()
+    pg_db.flush()
 
     result = transition_session(
-        db_session,
+        pg_db,
         session.id,
         SessionAnalysisStatus.OPEN,
         SessionAnalysisStatus.SEALED,
@@ -264,10 +248,10 @@ def test_transition_session_lost_race_writes_no_audit_row(
         source="unit_test",
         task_log=task_log,
     )
-    _commit(db_session)
+    _commit(pg_db)
 
     assert result.applied is False
-    assert db_session.query(PipelineTransitionLog).count() == 0
+    assert pg_db.query(PipelineTransitionLog).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -276,24 +260,24 @@ def test_transition_session_lost_race_writes_no_audit_row(
 
 
 def test_transition_task_log_writes_audit_row_on_success(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A successful ``transition_task_log`` CAS writes exactly one
     audit row correlated with the ``TaskLog`` that just transitioned."""
-    task_log = _seed_task_log(db_session, status=TaskStatus.PENDING)
+    task_log = _seed_task_log(pg_db, status=TaskStatus.PENDING)
 
     result = transition_task_log(
-        db_session,
+        pg_db,
         task_log.id,
         TaskStatus.PENDING,
         TaskStatus.RUNNING,
         reason="start",
         source="unit_test",
     )
-    _commit(db_session)
+    _commit(pg_db)
 
     assert result.applied is True
-    rows = db_session.query(PipelineTransitionLog).all()
+    rows = pg_db.query(PipelineTransitionLog).all()
     assert len(rows) == 1
     row = rows[0]
     assert row.aggregate_type == AGGREGATE_TYPE_TASK_LOG
@@ -306,29 +290,29 @@ def test_transition_task_log_writes_audit_row_on_success(
 
 
 def test_transition_task_log_lost_race_writes_no_audit_row(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A ``transition_task_log`` whose ``from_status`` filter does
     not match (or the row is already in another state / missing)
     writes no audit row."""
-    task_log = _seed_task_log(db_session, status=TaskStatus.RUNNING)
+    task_log = _seed_task_log(pg_db, status=TaskStatus.RUNNING)
     # Drive the row into ``success`` behind the helper's back; the
     # CAS filter ``status == 'running'`` then matches zero rows.
     task_log.status = TaskStatus.SUCCESS
-    db_session.flush()
+    pg_db.flush()
 
     result = transition_task_log(
-        db_session,
+        pg_db,
         task_log.id,
         TaskStatus.RUNNING,
         TaskStatus.SUCCESS,
         reason="stale_retry",
         source="unit_test",
     )
-    _commit(db_session)
+    _commit(pg_db)
 
     assert result.applied is False
-    assert db_session.query(PipelineTransitionLog).count() == 0
+    assert pg_db.query(PipelineTransitionLog).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -337,52 +321,52 @@ def test_transition_task_log_lost_race_writes_no_audit_row(
 
 
 def test_illegal_session_transition_raises_and_writes_no_audit(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """An illegal ``VideoSession`` transition raises
     :class:`PipelineTransitionConflict` before any database work
     happens — no audit row is written, no ``VideoSession`` row is
     updated."""
-    source = _seed_source(db_session)
-    session = _seed_session(db_session, source, SessionAnalysisStatus.OPEN)
+    source = _seed_source(pg_db)
+    session = _seed_session(pg_db, source, SessionAnalysisStatus.OPEN)
 
     with pytest.raises(PipelineTransitionConflict):
         transition_session(
-            db_session,
+            pg_db,
             session.id,
             SessionAnalysisStatus.OPEN,
             SessionAnalysisStatus.ANALYZING,
             reason="illegal",
             source="unit_test",
         )
-    _commit(db_session)
+    _commit(pg_db)
 
-    assert db_session.query(PipelineTransitionLog).count() == 0
-    db_session.refresh(session)
+    assert pg_db.query(PipelineTransitionLog).count() == 0
+    pg_db.refresh(session)
     # Underlying row is untouched.
     assert session.analysis_status == SessionAnalysisStatus.OPEN
 
 
 def test_illegal_task_transition_raises_and_writes_no_audit(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """An illegal ``TaskLog`` transition raises
     :class:`PipelineTransitionConflict` before any database work."""
-    task_log = _seed_task_log(db_session, status=TaskStatus.SUCCESS)
+    task_log = _seed_task_log(pg_db, status=TaskStatus.SUCCESS)
 
     with pytest.raises(PipelineTransitionConflict):
         transition_task_log(
-            db_session,
+            pg_db,
             task_log.id,
             TaskStatus.SUCCESS,
             TaskStatus.PENDING,
             reason="illegal",
             source="unit_test",
         )
-    _commit(db_session)
+    _commit(pg_db)
 
-    assert db_session.query(PipelineTransitionLog).count() == 0
-    db_session.refresh(task_log)
+    assert pg_db.query(PipelineTransitionLog).count() == 0
+    pg_db.refresh(task_log)
     assert task_log.status == TaskStatus.SUCCESS
 
 
@@ -391,20 +375,20 @@ def test_illegal_task_transition_raises_and_writes_no_audit(
 # ---------------------------------------------------------------------------
 
 
-def test_transition_audit_has_all_fields_populated(db_session: Session) -> None:
+def test_transition_audit_has_all_fields_populated(pg_db: Session) -> None:
     """Every required field of the audit row is populated after a
     successful CAS, and the optionals (``reason``,
     ``task_log_id``) reflect the call-site values; the row's
     ``id`` is server-assigned (not None) and ``occurred_at`` is
     populated by the ``NOW()`` default."""
-    source = _seed_source(db_session)
-    session = _seed_session(db_session, source, SessionAnalysisStatus.OPEN)
+    source = _seed_source(pg_db)
+    session = _seed_session(pg_db, source, SessionAnalysisStatus.OPEN)
 
     # ``task_log=None`` exercises the no-driving-TaskLog branch on
     # ``transition_session``: the audit row records ``task_log_id``
     # as NULL but everything else is populated.
     result = transition_session(
-        db_session,
+        pg_db,
         session.id,
         SessionAnalysisStatus.OPEN,
         SessionAnalysisStatus.SEALED,
@@ -412,10 +396,10 @@ def test_transition_audit_has_all_fields_populated(db_session: Session) -> None:
         source="seal_all_open",
         task_log=None,
     )
-    _commit(db_session)
+    _commit(pg_db)
 
     assert result.applied is True
-    row = db_session.query(PipelineTransitionLog).one()
+    row = pg_db.query(PipelineTransitionLog).one()
     assert row.id is not None
     assert row.aggregate_type == AGGREGATE_TYPE_VIDEO_SESSION
     assert row.aggregate_id == session.id
@@ -433,36 +417,32 @@ def test_transition_audit_has_all_fields_populated(db_session: Session) -> None:
 
 
 def test_cleanup_task_log_nullifies_fk_but_keeps_transition_audit(
-    db_session: Session,
+    pg_db_factory: SessionFactory,
 ) -> None:
-    """The 7-day ``task_log`` cleanup surrogate (a plain ``DELETE``
-    on an in-memory SQLite stand-in) must NOT delete the audit row.
-    The FK is ``ON DELETE SET NULL`` so the row's ``task_log_id``
-    goes to ``NULL`` and the audit history survives.
+    """The 7-day ``task_log`` cleanup surrogate (a direct ``DELETE``
+    on a real PG schema) must NOT delete the audit row. The FK is
+    ``ON DELETE SET NULL`` so the row's ``task_log_id`` goes to
+    ``NULL`` and the audit history survives.
 
-    SQLite requires the FK constraint to be explicitly enabled via
-    the connection's ``PRAGMA foreign_keys = ON``; the SQLAlchemy
-    SQLite dialect sets the pragma on every connection from
-    3.6.19 onwards, but we set it again here so the test does not
-    silently regress if the engine-level default changes.
+    Uses ``pg_db_factory`` exclusively — three independent, real-commit
+    sessions — because the ``DELETE`` and the post-delete verification
+    each need their own connection to observe the committed state
+    (the project-wide ``pg_db`` fixture wraps everything in a
+    rolled-back outer transaction, which would mask the FK
+    ``SET NULL`` outcome).
     """
-    from sqlalchemy import event
+    session_factory = pg_db_factory
 
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    # Belt-and-braces: enable foreign keys at the connection level.
-    event.listen(engine, "connect", _enable_sqlite_foreign_keys)
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    db = factory()
+    seed_db = session_factory()
     try:
-        source = _seed_source(db)
-        session = _seed_session(db, source, SessionAnalysisStatus.OPEN)
-        task_log = _seed_task_log(db)
+        source = _seed_source(seed_db)
+        session = _seed_session(seed_db, source, SessionAnalysisStatus.OPEN)
+        task_log = _seed_task_log(seed_db)
 
         # Drive a transition that records an audit row correlated
         # with the ``TaskLog``.
         applied = transition_session(
-            db,
+            seed_db,
             session.id,
             SessionAnalysisStatus.OPEN,
             SessionAnalysisStatus.SEALED,
@@ -471,34 +451,30 @@ def test_cleanup_task_log_nullifies_fk_but_keeps_transition_audit(
             task_log=task_log,
         )
         assert applied.applied is True
-        _commit(db)
+        _commit(seed_db)
 
-        # Surrogate for the 7-day ``task_log`` cleanup: delete the
-        # TaskLog row directly. The migration declares the FK as
-        # ``ON DELETE SET NULL``.
-        db.query(TaskLog).filter(TaskLog.id == task_log.id).delete(synchronize_session=False)
-        _commit(db)
+        task_log_id = task_log.id
+        session_id = session.id
+    finally:
+        seed_db.close()
 
-        # Audit row must survive with ``task_log_id`` NULL.
-        rows = db.query(PipelineTransitionLog).all()
+    # Surrogate for the 7-day ``task_log`` cleanup: delete the
+    # TaskLog row directly. The migration declares the FK as
+    # ``ON DELETE SET NULL``.
+    delete_db = session_factory()
+    try:
+        delete_db.query(TaskLog).filter(TaskLog.id == task_log_id).delete(synchronize_session=False)
+        _commit(delete_db)
+    finally:
+        delete_db.close()
+
+    # Audit row must survive with ``task_log_id`` NULL.
+    verify_db = session_factory()
+    try:
+        rows = verify_db.query(PipelineTransitionLog).all()
         assert len(rows) == 1, "audit row must outlive the TaskLog cleanup"
         assert rows[0].id is not None
-        assert rows[0].aggregate_id == session.id
+        assert rows[0].aggregate_id == session_id
         assert rows[0].task_log_id is None
     finally:
-        db.close()
-        engine.dispose()
-
-
-def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
-    """Enable SQLite FK enforcement on every new connection.
-
-    SQLite does NOT enforce foreign keys by default; SQLAlchemy's
-    modern SQLite dialect enables them, but the in-memory engine
-    used in this test is created with the bare ``sqlite+pysqlite``
-    URL so we set the pragma explicitly to make the FK SET NULL
-    behaviour reliable.
-    """
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON")
-    cursor.close()
+        verify_db.close()

@@ -1,6 +1,8 @@
-"""SQLite unit tests for :class:`DailySummaryAttemptRepository`.
+"""PostgreSQL unit tests for :class:`DailySummaryAttemptRepository`.
 
-These tests stand up an in-memory SQLite engine and exercise the
+These tests run against the project-wide ``pg_db`` fixture (a
+function-scoped session on a one-shot ``alembic upgrade head`` schema
+rolled back after every test). They exercise the
 :class:`DailySummaryAttemptRepository` API surface against the contract
 from Todo 15. They cover:
 
@@ -26,10 +28,8 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401  (registers the DailySummaryGenerationAttempt model on Base.metadata)
 from src.application.summary_attempt import (
     ACTIVE_STATUSES,
     ALLOWED_TRANSITIONS,
@@ -45,48 +45,20 @@ from src.application.summary_attempt.repository import (
     FAILURE_REASON_TIMEOUT,
     DailySummaryAttemptRepository,
 )
-from src.db.base_class import Base
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
 from src.models.task_log import TaskLog
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def db_session() -> Session:
-    """Return a function-scoped SQLite session bound to an in-memory engine.
-
-    ``Base.metadata.create_all`` stands up the full schema (including
-    the ``daily_summary_generation_attempt`` table with its partial
-    unique index) so the unit tests exercise the same column /
-    constraint contract as production — just against an in-memory
-    SQLite engine rather than PostgreSQL.
-    """
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = factory()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
-
-
 def _make_task_log(db: Session) -> TaskLog:
-    """Insert a minimal ``TaskLog`` and commit so it has a server-assigned ``id``."""
+    """Insert a minimal ``TaskLog`` and flush so it has a server-assigned ``id``."""
     task_log = TaskLog(task_type="summary_attempt.unit", status="pending")
     db.add(task_log)
-    db.commit()
-    db.refresh(task_log)
+    db.flush()
     return task_log
-
-
-def _commit(db: Session) -> None:
-    """Commit the session so the row is visible to follow-up queries."""
-    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +66,10 @@ def _commit(db: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_claim_creates_first_attempt_no_one(db_session: Session) -> None:
+def test_claim_creates_first_attempt_no_one(pg_db: Session) -> None:
     """A first claim for a date writes a row with ``attempt_no=1``,
     ``status='claimed'``, and returns ``created=True``."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     outcome = repo.claim(
@@ -106,7 +78,7 @@ def test_claim_creates_first_attempt_no_one(db_session: Session) -> None:
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert outcome.created is True
     assert outcome.attempt.summary_date == target_date
@@ -117,16 +89,16 @@ def test_claim_creates_first_attempt_no_one(db_session: Session) -> None:
     assert outcome.attempt.claimed_at is not None
     assert outcome.attempt.finished_at is None
 
-    rows = db_session.query(DailySummaryGenerationAttempt).all()
+    rows = pg_db.query(DailySummaryGenerationAttempt).all()
     assert len(rows) == 1
     assert rows[0].id == outcome.attempt.id
 
 
-def test_claim_with_existing_active_returns_created_false(db_session: Session) -> None:
+def test_claim_with_existing_active_returns_created_false(pg_db: Session) -> None:
     """A second claim for the same date with an active row in place
     returns ``created=False`` pointing at the existing row — the
     caller is told "back off, someone else owns this date"."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     first = repo.claim(
@@ -135,7 +107,7 @@ def test_claim_with_existing_active_returns_created_false(db_session: Session) -
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     second = repo.claim(
         summary_date=target_date,
@@ -143,21 +115,21 @@ def test_claim_with_existing_active_returns_created_false(db_session: Session) -
         triggered_by="manual",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert first.created is True
     assert second.created is False
     assert second.attempt.id == first.attempt.id
     assert second.attempt.attempt_no == 1
 
-    rows = db_session.query(DailySummaryGenerationAttempt).all()
+    rows = pg_db.query(DailySummaryGenerationAttempt).all()
     assert len(rows) == 1
 
 
-def test_claim_rejects_non_positive_attempt_no(db_session: Session) -> None:
+def test_claim_rejects_non_positive_attempt_no(pg_db: Session) -> None:
     """``attempt_no`` must be positive; ``0`` and negatives raise
     :class:`ValueError` before any INSERT is issued."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     with pytest.raises(ValueError, match="attempt_no"):
         repo.claim(
             summary_date=date(2026, 9, 1),
@@ -165,7 +137,7 @@ def test_claim_rejects_non_positive_attempt_no(db_session: Session) -> None:
             triggered_by=None,
             task_log_id=None,
         )
-    assert db_session.query(DailySummaryGenerationAttempt).count() == 0
+    assert pg_db.query(DailySummaryGenerationAttempt).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +145,11 @@ def test_claim_rejects_non_positive_attempt_no(db_session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_claim_after_supersede_allows_new_attempt(db_session: Session) -> None:
+def test_claim_after_supersede_allows_new_attempt(pg_db: Session) -> None:
     """Once an active attempt is superseded the per-date active slot is
     free again, so the next call inserts a fresh row with the next
     ``attempt_no``."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     first = repo.claim(
@@ -186,12 +158,12 @@ def test_claim_after_supersede_allows_new_attempt(db_session: Session) -> None:
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     superseded = repo.mark_superseded(first.attempt.id)
     assert superseded is not None
     assert superseded.status == DailySummaryAttemptStatus.SUPERSEDED.value
-    _commit(db_session)
+    pg_db.commit()
 
     second = repo.claim(
         summary_date=target_date,
@@ -199,21 +171,21 @@ def test_claim_after_supersede_allows_new_attempt(db_session: Session) -> None:
         triggered_by="manual",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert second.created is True
     assert second.attempt.attempt_no == 2
     assert second.attempt.id != first.attempt.id
 
-    rows = db_session.query(DailySummaryGenerationAttempt).all()
+    rows = pg_db.query(DailySummaryGenerationAttempt).all()
     assert sorted(row.attempt_no for row in rows) == [1, 2]
 
 
-def test_claim_after_succeeded_allows_new_attempt(db_session: Session) -> None:
+def test_claim_after_succeeded_allows_new_attempt(pg_db: Session) -> None:
     """A ``succeeded`` row keeps ``attempt_no=1`` but the partial
     unique index predicate no longer matches, so the next claim
     inserts a new row with ``attempt_no=2``."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     first = repo.claim(
@@ -222,13 +194,13 @@ def test_claim_after_succeeded_allows_new_attempt(db_session: Session) -> None:
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     running = repo.mark_running(first.attempt.id, events_count=12, input_token_estimate=1024)
     assert running is not None
     succeeded = repo.mark_succeeded(first.attempt.id)
     assert succeeded is not None
-    _commit(db_session)
+    pg_db.commit()
 
     second = repo.claim(
         summary_date=target_date,
@@ -236,18 +208,18 @@ def test_claim_after_succeeded_allows_new_attempt(db_session: Session) -> None:
         triggered_by="retry",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert second.created is True
     assert second.attempt.attempt_no == 2
     assert second.attempt.status == DailySummaryAttemptStatus.CLAIMED.value
 
 
-def test_claim_after_failed_allows_new_attempt(db_session: Session) -> None:
+def test_claim_after_failed_allows_new_attempt(pg_db: Session) -> None:
     """A ``failed`` row also leaves the active slot, so the next claim
     inserts a fresh row whose diagnostics for the failed run are
     preserved."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     first = repo.claim(
@@ -256,7 +228,7 @@ def test_claim_after_failed_allows_new_attempt(db_session: Session) -> None:
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     repo.mark_running(first.attempt.id)
     failed = repo.mark_failed(
@@ -266,7 +238,7 @@ def test_claim_after_failed_allows_new_attempt(db_session: Session) -> None:
         failure_reason="llm_error",
     )
     assert failed is not None
-    _commit(db_session)
+    pg_db.commit()
 
     second = repo.claim(
         summary_date=target_date,
@@ -274,7 +246,7 @@ def test_claim_after_failed_allows_new_attempt(db_session: Session) -> None:
         triggered_by="retry",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert second.created is True
     assert second.attempt.attempt_no == 2
@@ -380,21 +352,21 @@ def test_state_machine_expected_from_guard_rejects_mismatch() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_mark_succeeded_sets_finished_at(db_session: Session) -> None:
+def test_mark_succeeded_sets_finished_at(pg_db: Session) -> None:
     """``mark_succeeded`` flips ``running`` → ``succeeded`` and stamps
     ``finished_at``."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     first = repo.claim(
         summary_date=date(2026, 9, 1),
         attempt_no=1,
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     repo.mark_running(first.attempt.id)
     succeeded = repo.mark_succeeded(first.attempt.id)
-    _commit(db_session)
+    pg_db.commit()
 
     assert succeeded is not None
     assert succeeded.status == DailySummaryAttemptStatus.SUCCEEDED.value
@@ -404,21 +376,21 @@ def test_mark_succeeded_sets_finished_at(db_session: Session) -> None:
     assert succeeded.failure_reason is None
 
 
-def test_mark_succeeded_illegal_source_returns_none(db_session: Session) -> None:
+def test_mark_succeeded_illegal_source_returns_none(pg_db: Session) -> None:
     """``mark_succeeded`` on a ``claimed`` row returns ``None``: the
     conditional ``UPDATE`` matches no rows because
     ``claimed → succeeded`` is not in the transition table."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     first = repo.claim(
         summary_date=date(2026, 9, 1),
         attempt_no=1,
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     result = repo.mark_succeeded(first.attempt.id)
-    _commit(db_session)
+    pg_db.commit()
 
     assert result is None
 
@@ -427,17 +399,17 @@ def test_mark_succeeded_illegal_source_returns_none(db_session: Session) -> None
     assert refreshed.status == DailySummaryAttemptStatus.CLAIMED.value
 
 
-def test_mark_failed_records_error_type_and_reason(db_session: Session) -> None:
+def test_mark_failed_records_error_type_and_reason(pg_db: Session) -> None:
     """``mark_failed`` writes ``error_type``, ``last_error``,
     ``failure_reason`` and stamps ``finished_at``."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     first = repo.claim(
         summary_date=date(2026, 9, 1),
         attempt_no=1,
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     repo.mark_running(first.attempt.id)
     failed = repo.mark_failed(
@@ -446,7 +418,7 @@ def test_mark_failed_records_error_type_and_reason(db_session: Session) -> None:
         last_error="unexpected token at line 3",
         failure_reason="llm_error",
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert failed is not None
     assert failed.status == DailySummaryAttemptStatus.FAILED.value
@@ -456,25 +428,25 @@ def test_mark_failed_records_error_type_and_reason(db_session: Session) -> None:
     assert failed.finished_at is not None
 
 
-def test_mark_cancelled_records_cancellation(db_session: Session) -> None:
+def test_mark_cancelled_records_cancellation(pg_db: Session) -> None:
     """``mark_cancelled`` writes ``status='cancelled'``, the supplied
     ``last_error`` and stamps ``finished_at``. ``error_type`` stays
     ``None`` (operator action is not a defect) and ``failure_reason``
     is fixed to ``cancelled``."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     first = repo.claim(
         summary_date=date(2026, 9, 1),
         attempt_no=1,
         triggered_by="manual",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     cancelled = repo.mark_cancelled(
         first.attempt.id,
         last_error="operator pressed cancel",
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert cancelled is not None
     assert cancelled.status == DailySummaryAttemptStatus.CANCELLED.value
@@ -484,31 +456,31 @@ def test_mark_cancelled_records_cancellation(db_session: Session) -> None:
     assert cancelled.finished_at is not None
 
 
-def test_mark_timed_out_distinct_from_failed(db_session: Session) -> None:
+def test_mark_timed_out_distinct_from_failed(pg_db: Session) -> None:
     """``mark_timed_out`` writes ``status='timed_out'`` (different
     from ``failed``) with ``failure_reason='timeout'``. ``claimed``
     has no ``timed_out`` edge — a row that never reached a worker is
     superseded, not timed out."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     first = repo.claim(
         summary_date=date(2026, 9, 1),
         attempt_no=1,
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     # ``claimed`` → ``timed_out`` is not allowed.
     assert repo.mark_timed_out(first.attempt.id, last_error="watchdog") is None
-    _commit(db_session)
+    pg_db.commit()
 
     # Move into ``queued`` and the timed-out edge opens.
     queued = repo.mark_queued(first.attempt.id)
     assert queued is not None
-    _commit(db_session)
+    pg_db.commit()
 
     timed_out = repo.mark_timed_out(first.attempt.id, last_error="worker killed after 5m")
-    _commit(db_session)
+    pg_db.commit()
 
     assert timed_out is not None
     assert timed_out.status == DailySummaryAttemptStatus.TIMED_OUT.value
@@ -524,10 +496,10 @@ def test_mark_timed_out_distinct_from_failed(db_session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_next_attempt_no_returns_max_plus_one_or_one(db_session: Session) -> None:
+def test_next_attempt_no_returns_max_plus_one_or_one(pg_db: Session) -> None:
     """``next_attempt_no`` returns 1 when no rows exist for the date
     and ``max(attempt_no) + 1`` otherwise."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     assert repo.next_attempt_no(target_date) == 1
@@ -539,8 +511,8 @@ def test_next_attempt_no_returns_max_plus_one_or_one(db_session: Session) -> Non
             triggered_by="manual",
             task_log_id=None,
         )
-        repo.mark_superseded(_last_attempt_id(db_session))
-        _commit(db_session)
+        repo.mark_superseded(_last_attempt_id(pg_db))
+        pg_db.commit()
 
     assert repo.next_attempt_no(target_date) == 4
 
@@ -549,10 +521,10 @@ def test_next_attempt_no_returns_max_plus_one_or_one(db_session: Session) -> Non
     assert repo.next_attempt_no(other_date) == 1
 
 
-def test_find_active_returns_only_active_statuses(db_session: Session) -> None:
+def test_find_active_returns_only_active_statuses(pg_db: Session) -> None:
     """``find_active_for_date`` returns exactly the row whose status is
     in :data:`ACTIVE_STATUSES`; every terminal row is excluded."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
 
     # Use distinct summary_dates so the partial unique index does not
     # block attempts that want to remain active in parallel. The query
@@ -578,9 +550,9 @@ def test_find_active_returns_only_active_statuses(db_session: Session) -> None:
             triggered_by="manual",
             task_log_id=None,
         )
-        attempt_id = _last_attempt_id(db_session)
-        _drive_to(db_session, attempt_id, status)
-        _commit(db_session)
+        attempt_id = _last_attempt_id(pg_db)
+        _drive_to(pg_db, attempt_id, status)
+        pg_db.commit()
 
     for status, day in terminal_dates.items():
         repo.claim(
@@ -589,9 +561,9 @@ def test_find_active_returns_only_active_statuses(db_session: Session) -> None:
             triggered_by="manual",
             task_log_id=None,
         )
-        attempt_id = _last_attempt_id(db_session)
-        _drive_to(db_session, attempt_id, status)
-        _commit(db_session)
+        attempt_id = _last_attempt_id(pg_db)
+        _drive_to(pg_db, attempt_id, status)
+        pg_db.commit()
 
     # ``find_active_for_date`` for each active-status date returns the
     # row in the active set and excludes terminal rows entirely.
@@ -609,10 +581,10 @@ def test_find_active_returns_only_active_statuses(db_session: Session) -> None:
         assert terminal[0].status == status.value
 
 
-def test_find_terminal_returns_only_terminal_statuses(db_session: Session) -> None:
+def test_find_terminal_returns_only_terminal_statuses(pg_db: Session) -> None:
     """``find_terminal_for_date`` returns every terminal row, oldest
     first; active rows are excluded."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     target_date = date(2026, 9, 1)
 
     statuses_by_no = [
@@ -629,9 +601,9 @@ def test_find_terminal_returns_only_terminal_statuses(db_session: Session) -> No
             triggered_by="manual",
             task_log_id=None,
         )
-        attempt_id = _last_attempt_id(db_session)
-        _drive_to(db_session, attempt_id, status)
-        _commit(db_session)
+        attempt_id = _last_attempt_id(pg_db)
+        _drive_to(pg_db, attempt_id, status)
+        pg_db.commit()
 
     terminal = repo.find_terminal_for_date(target_date)
     assert {row.status for row in terminal} == {
@@ -644,25 +616,25 @@ def test_find_terminal_returns_only_terminal_statuses(db_session: Session) -> No
     assert [row.attempt_no for row in terminal] == [1, 2, 3, 4, 5]
 
 
-def test_running_records_events_count_and_input_token_estimate(db_session: Session) -> None:
+def test_running_records_events_count_and_input_token_estimate(pg_db: Session) -> None:
     """``mark_running`` snapshots ``events_count`` /
     ``input_token_estimate`` so a post-mortem can tell what the LLM
     was called with."""
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
     first = repo.claim(
         summary_date=date(2026, 9, 1),
         attempt_no=1,
         triggered_by="schedule",
         task_log_id=None,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     running = repo.mark_running(
         first.attempt.id,
         events_count=37,
         input_token_estimate=4096,
     )
-    _commit(db_session)
+    pg_db.commit()
 
     assert running is not None
     assert running.status == DailySummaryAttemptStatus.RUNNING.value
@@ -675,10 +647,10 @@ def test_running_records_events_count_and_input_token_estimate(db_session: Sessi
 # ---------------------------------------------------------------------------
 
 
-def _last_attempt_id(db_session: Session) -> int:
+def _last_attempt_id(pg_db: Session) -> int:
     """Return the highest ``id`` in the attempt table for the active test."""
     row = (
-        db_session.query(DailySummaryGenerationAttempt)
+        pg_db.query(DailySummaryGenerationAttempt)
         .order_by(DailySummaryGenerationAttempt.id.desc())
         .first()
     )
@@ -687,7 +659,7 @@ def _last_attempt_id(db_session: Session) -> int:
 
 
 def _drive_to(
-    db_session: Session,
+    pg_db: Session,
     attempt_id: int,
     target: DailySummaryAttemptStatus,
 ) -> None:
@@ -697,7 +669,7 @@ def _drive_to(
     running → target); the test only invokes this for targets that
     are reachable from ``claimed`` via the spec's transition table.
     """
-    repo = DailySummaryAttemptRepository(db_session)
+    repo = DailySummaryAttemptRepository(pg_db)
 
     if target == DailySummaryAttemptStatus.CLAIMED:
         return

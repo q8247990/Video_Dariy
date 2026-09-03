@@ -1,9 +1,10 @@
-"""SQLite unit tests for :class:`OutboxPublisher`.
+"""PostgreSQL unit tests for :class:`OutboxPublisher`.
 
-These tests stand up an in-memory SQLite engine + the
-:class:`~src.application.outbox.repository.OutboxRepository` and
-exercise the publisher's claim → publish → mark loop with a fake
-:class :class:`BrokerPort` (no Celery / Redis required). They cover:
+These tests run against the project-wide ``pg_db`` fixture (a
+function-scoped session on a one-shot ``alembic upgrade head`` schema
+rolled back after every test). They exercise the publisher's claim →
+publish → mark loop with a fake :class:`BrokerPort` (no Celery / Redis
+required). They cover:
 
 - :func:`compute_next_attempt_at` backoff math at every attempt level;
 - :func:`classify_celery_error` broker-exception mapping;
@@ -24,10 +25,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401  (registers OutboxEvent on Base.metadata)
 from src.application.outbox import contracts as outbox_contracts
 from src.application.outbox.contracts import OutboxCommand, OutboxEvent
 from src.application.outbox.enqueue import enqueue_command
@@ -46,7 +45,6 @@ from src.application.outbox.publisher import (
     compute_next_attempt_at,
 )
 from src.application.outbox.state_machine import OutboxStatus
-from src.db.base_class import Base
 from src.models.outbox import OutboxEvent as OutboxEventRow
 from src.models.task_log import TaskLog
 
@@ -61,20 +59,6 @@ def _reset_emitted_event_ids() -> None:
     outbox_contracts._reset_emitted_event_ids_for_testing()
 
 
-@pytest.fixture
-def db_session() -> Session:
-    """Return a function-scoped SQLite session bound to an in-memory engine."""
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = factory()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -83,8 +67,7 @@ def db_session() -> Session:
 def _make_task_log(db: Session) -> TaskLog:
     task_log = TaskLog(task_type="outbox.unit.publisher", status="pending")
     db.add(task_log)
-    db.commit()
-    db.refresh(task_log)
+    db.flush()
     return task_log
 
 
@@ -158,7 +141,7 @@ class _FakeBroker(BrokerPort):
 def _publisher_config(
     *,
     broker: BrokerPort,
-    db_session: Session,
+    pg_db: Session,
     claimed_by: str = "worker-A",
     poll_interval_seconds: int = 0,
     lease_seconds: int = PUBLISHER_LEASE_SECONDS,
@@ -173,7 +156,7 @@ def _publisher_config(
         one_shot=one_shot,
     )
     return (
-        OutboxPublisher(db_session=db_session, config=config, broker=broker),
+        OutboxPublisher(db_session=pg_db, config=config, broker=broker),
         config,
     )
 
@@ -302,10 +285,10 @@ def test_classify_celery_error_value_error_is_retryable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_once_with_empty_pool_returns_empty_polls(db_session: Session) -> None:
+def test_run_once_with_empty_pool_returns_empty_polls(pg_db: Session) -> None:
     """An empty pool yields a snapshot whose only counter is ``empty_polls``."""
     broker = _FakeBroker()
-    publisher, _config = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _config = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
@@ -325,12 +308,12 @@ def test_run_once_with_empty_pool_returns_empty_polls(db_session: Session) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_run_once_publishes_one_row_and_marks_published(db_session: Session) -> None:
+def test_run_once_publishes_one_row_and_marks_published(pg_db: Session) -> None:
     """A claimable row is published, marked ``published``, and the
     broker received ``task_id=str(event_id)``."""
-    event = _enroll_pending(db_session)
+    event = _enroll_pending(pg_db)
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
@@ -346,7 +329,7 @@ def test_run_once_publishes_one_row_and_marks_published(db_session: Session) -> 
     assert sent["kwargs"] == dict(event.kwargs_json)
 
     # Row transitioned to published.
-    refreshed = db_session.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).one()
+    refreshed = pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).one()
     assert refreshed.status == OutboxStatus.PUBLISHED.value
     assert refreshed.claimed_by is None
     assert refreshed.lease_expires_at is None
@@ -359,14 +342,14 @@ def test_run_once_publishes_one_row_and_marks_published(db_session: Session) -> 
 
 
 def test_run_once_with_retryable_failure_returns_row_to_pending(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A ``ConnectionError`` broker failure flips the row back to
     ``pending``, increments ``attempt_count``, and pushes
     ``next_attempt_at`` into the future."""
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     broker = _FakeBroker(raise_with=ConnectionError("broker down"))
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
@@ -375,7 +358,7 @@ def test_run_once_with_retryable_failure_returns_row_to_pending(
     assert delta.terminal_failures == 0
     assert delta.published == 0
 
-    row = db_session.query(OutboxEventRow).one()
+    row = pg_db.query(OutboxEventRow).one()
     assert row.status == OutboxStatus.PENDING.value
     assert row.attempt_count == 1
     assert row.last_error is not None
@@ -387,30 +370,30 @@ def test_run_once_with_retryable_failure_returns_row_to_pending(
     assert next_attempt_at > datetime.now(tz=timezone.utc)
 
 
-def test_run_once_with_timeout_error_is_retryable(db_session: Session) -> None:
+def test_run_once_with_timeout_error_is_retryable(pg_db: Session) -> None:
     """``TimeoutError`` is a retryable broker failure."""
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     broker = _FakeBroker(raise_with=TimeoutError("publish timed out"))
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
     assert delta.retryable_failures == 1
-    row = db_session.query(OutboxEventRow).one()
+    row = pg_db.query(OutboxEventRow).one()
     assert row.status == OutboxStatus.PENDING.value
     assert row.attempt_count == 1
 
 
-def test_run_once_with_os_error_is_retryable(db_session: Session) -> None:
+def test_run_once_with_os_error_is_retryable(pg_db: Session) -> None:
     """``OSError`` is a retryable broker failure."""
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     broker = _FakeBroker(raise_with=OSError("socket closed"))
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
     assert delta.retryable_failures == 1
-    row = db_session.query(OutboxEventRow).one()
+    row = pg_db.query(OutboxEventRow).one()
     assert row.status == OutboxStatus.PENDING.value
     assert row.attempt_count == 1
 
@@ -421,49 +404,49 @@ def test_run_once_with_os_error_is_retryable(db_session: Session) -> None:
 
 
 def test_run_once_with_not_registered_marks_terminal_immediately(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """``NotRegistered`` is a terminal classification; the row goes
     straight to ``failed`` without consuming the 12-attempt budget."""
     from celery.exceptions import NotRegistered
 
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     broker = _FakeBroker(raise_with=NotRegistered("unknown.task"))
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
     assert delta.claimed == 1
     assert delta.terminal_failures == 1
     assert delta.retryable_failures == 0
-    row = db_session.query(OutboxEventRow).one()
+    row = pg_db.query(OutboxEventRow).one()
     assert row.status == OutboxStatus.FAILED.value
     assert row.last_error is not None
     assert "NotRegistered" in row.last_error
 
 
-def test_run_once_after_max_attempts_marks_terminal(db_session: Session) -> None:
+def test_run_once_after_max_attempts_marks_terminal(pg_db: Session) -> None:
     """The 12th retryable failure crosses the ``max_attempts`` budget
     and the row goes terminal — independent of broker classification."""
-    task_log = _make_task_log(db_session)
-    event = enqueue_command(db_session, _make_command(), task_log).event
+    task_log = _make_task_log(pg_db)
+    event = enqueue_command(pg_db, _make_command(), task_log).event
     # Pin attempt_count to (max_attempts - 1) so the next failure
     # crosses the threshold.
-    db_session.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
+    pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
         {
             "attempt_count": PUBLISHER_MAX_ATTEMPTS - 1,
             "next_attempt_at": datetime.now(tz=timezone.utc) - timedelta(seconds=60),
         }
     )
-    db_session.commit()
+    pg_db.commit()
 
     broker = _FakeBroker(raise_with=ConnectionError("still down"))
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     delta = publisher.run_once()
 
     assert delta.terminal_failures == 1
-    row = db_session.query(OutboxEventRow).one()
+    row = pg_db.query(OutboxEventRow).one()
     assert row.status == OutboxStatus.FAILED.value
 
 
@@ -472,14 +455,14 @@ def test_run_once_after_max_attempts_marks_terminal(db_session: Session) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_run_once_claims_row_after_lease_expired(db_session: Session) -> None:
+def test_run_once_claims_row_after_lease_expired(pg_db: Session) -> None:
     """A second publisher can claim a row whose previous publisher's
     lease has expired. Simulate a stale claim by writing
     ``lease_expires_at`` in the past and a past ``next_attempt_at``
     (the publisher filter requires both)."""
-    task_log = _make_task_log(db_session)
-    event = enqueue_command(db_session, _make_command(), task_log).event
-    db_session.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
+    task_log = _make_task_log(pg_db)
+    event = enqueue_command(pg_db, _make_command(), task_log).event
+    pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
         {
             "status": OutboxStatus.PUBLISHING.value,
             "claimed_by": "worker-A",
@@ -487,10 +470,10 @@ def test_run_once_claims_row_after_lease_expired(db_session: Session) -> None:
             "next_attempt_at": datetime.now(tz=timezone.utc) - timedelta(seconds=600),
         }
     )
-    db_session.commit()
+    pg_db.commit()
 
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session, claimed_by="worker-B")
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db, claimed_by="worker-B")
 
     delta = publisher.run_once()
 
@@ -506,7 +489,7 @@ def test_run_once_claims_row_after_lease_expired(db_session: Session) -> None:
 
 
 def test_run_once_claims_row_when_status_pending_after_lease_expired(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """When the row is already back to ``pending`` (because a previous
     ``mark_failed_to_retry`` ran) AND ``next_attempt_at <= now``,
@@ -514,25 +497,23 @@ def test_run_once_claims_row_when_status_pending_after_lease_expired(
     reclaim path — the previous publisher bumped the row back to
     ``pending`` after a retryable failure, then crashed before the
     lease was reset."""
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     # Pin attempt_count and next_attempt_at to the past; the row is
     # already in ``pending`` because enroll_with_task_log emitted it.
     broker = _FakeBroker(raise_with=ConnectionError("broker down"))
-    publisher_a, _ = _publisher_config(broker=broker, db_session=db_session, claimed_by="worker-A")
+    publisher_a, _ = _publisher_config(broker=broker, pg_db=pg_db, claimed_by="worker-A")
     publisher_a.run_once()
     # Row is back in pending, attempt_count=1, next_attempt_at in the
     # future. Force next_attempt_at to the past to simulate "the
     # backoff has elapsed; another publisher may claim".
-    row = db_session.query(OutboxEventRow).one()
-    db_session.query(OutboxEventRow).filter(OutboxEventRow.id == row.id).update(
+    row = pg_db.query(OutboxEventRow).one()
+    pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == row.id).update(
         {"next_attempt_at": datetime.now(tz=timezone.utc) - timedelta(seconds=60)}
     )
-    db_session.commit()
+    pg_db.commit()
 
     broker_b = _FakeBroker()
-    publisher_b, _ = _publisher_config(
-        broker=broker_b, db_session=db_session, claimed_by="worker-B"
-    )
+    publisher_b, _ = _publisher_config(broker=broker_b, pg_db=pg_db, claimed_by="worker-B")
     delta_b = publisher_b.run_once()
 
     assert delta_b.claimed == 1
@@ -546,11 +527,11 @@ def test_run_once_claims_row_when_status_pending_after_lease_expired(
 
 
 def test_health_check_empty_pool_is_healthy_and_not_degraded(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """An empty pool reports ``healthy=True`` and ``lag_degraded=False``."""
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     health = publisher.health_check()
 
@@ -561,22 +542,22 @@ def test_health_check_empty_pool_is_healthy_and_not_degraded(
 
 
 def test_health_check_old_row_past_degraded_threshold_is_degraded(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """A pending row pinned ``PUBLISHER_BACKLOG_DEGRADED_SECONDS + 50`` in the
     past triggers ``lag_degraded=True``."""
-    task_log = _make_task_log(db_session)
-    event = enqueue_command(db_session, _make_command(), task_log).event
-    db_session.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
+    task_log = _make_task_log(pg_db)
+    event = enqueue_command(pg_db, _make_command(), task_log).event
+    pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
         {
             "next_attempt_at": datetime.now(tz=timezone.utc)
             - timedelta(seconds=PUBLISHER_BACKLOG_DEGRADED_SECONDS + 50)
         }
     )
-    db_session.commit()
+    pg_db.commit()
 
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
     health = publisher.health_check()
 
     assert health.healthy is True
@@ -585,21 +566,21 @@ def test_health_check_old_row_past_degraded_threshold_is_degraded(
     assert health.lag_degraded is True
 
 
-def test_health_check_young_row_not_degraded(db_session: Session) -> None:
+def test_health_check_young_row_not_degraded(pg_db: Session) -> None:
     """A pending row pinned ``PUBLISHER_BACKLOG_DEGRADED_SECONDS - 50`` in the
     past is NOT degraded."""
-    task_log = _make_task_log(db_session)
-    event = enqueue_command(db_session, _make_command(), task_log).event
-    db_session.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
+    task_log = _make_task_log(pg_db)
+    event = enqueue_command(pg_db, _make_command(), task_log).event
+    pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
         {
             "next_attempt_at": datetime.now(tz=timezone.utc)
             - timedelta(seconds=PUBLISHER_BACKLOG_DEGRADED_SECONDS - 50)
         }
     )
-    db_session.commit()
+    pg_db.commit()
 
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
     health = publisher.health_check()
 
     assert health.healthy is True
@@ -644,15 +625,15 @@ def test_publisher_stats_merge_accumulates_counters() -> None:
 
 
 def test_run_until_signal_one_shot_runs_once_then_returns(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """``one_shot=True`` makes :meth:`run_until_signal` call
     :meth:`run_once` once and return immediately — the test entry
     point. Even with ``stop=lambda: True`` we still run one
     iteration (matches the CLI ``--once`` semantics)."""
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session, one_shot=True)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db, one_shot=True)
 
     stats = publisher.run_until_signal(stop=lambda: True)
 
@@ -662,17 +643,17 @@ def test_run_until_signal_one_shot_runs_once_then_returns(
 
 
 def test_run_until_signal_loop_runs_iterations_until_stop(
-    db_session: Session,
+    pg_db: Session,
 ) -> None:
     """The loop runs :meth:`run_once` repeatedly until ``stop()``
     returns ``True``. We use ``poll_interval_seconds=0`` so the test
     does not block."""
     # Enroll 2 rows.
     for _ in range(2):
-        _enroll_pending(db_session)
+        _enroll_pending(pg_db)
 
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     counter = {"calls": 0}
 
@@ -699,20 +680,20 @@ def test_run_until_signal_loop_runs_iterations_until_stop(
 # ---------------------------------------------------------------------------
 
 
-def test_run_once_truncates_oversize_error_message(db_session: Session) -> None:
+def test_run_once_truncates_oversize_error_message(pg_db: Session) -> None:
     """A multi-MB error string is truncated to fit ``last_error``."""
 
     class _HugeError(ConnectionError):
         def __str__(self) -> str:
             return "X" * 50_000
 
-    _enroll_pending(db_session)
+    _enroll_pending(pg_db)
     broker = _FakeBroker(raise_with=_HugeError("huge"))
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     publisher.run_once()
 
-    row = db_session.query(OutboxEventRow).one()
+    row = pg_db.query(OutboxEventRow).one()
     assert row.last_error is not None
     # Truncated to 2000 + "…[truncated]".
     assert len(row.last_error) <= 2000 + len("…[truncated]")
@@ -724,12 +705,12 @@ def test_run_once_truncates_oversize_error_message(db_session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_once_sets_task_id_to_str_event_id(db_session: Session) -> None:
+def test_run_once_sets_task_id_to_str_event_id(pg_db: Session) -> None:
     """The :attr:`BrokerPort.send_task` ``task_id`` argument MUST be
     ``str(event.event_id)`` — the ADR §7 invariant."""
-    event = _enroll_pending(db_session)
+    event = _enroll_pending(pg_db)
     broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, db_session=db_session)
+    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
 
     publisher.run_once()
 

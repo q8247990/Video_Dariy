@@ -9,7 +9,12 @@ from src.db.base import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # ``disable_existing_loggers=False`` keeps host loggers (e.g.
+    # ``src.tasks._analyzer_orchestration``) enabled when migrations execute
+    # in-process; the stdlib default would set ``disabled = True`` on every
+    # non-named logger and silently swallow ``logger.exception(...)`` from
+    # subsequent tests' ``pytest.caplog`` assertions.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

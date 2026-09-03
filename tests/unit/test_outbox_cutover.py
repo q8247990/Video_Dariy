@@ -18,21 +18,19 @@ under the new outbox-in-caller-session model:
 - Webhook dispatches create their own ``TaskLog`` row (no dedupe) but
   still route through the outbox so the FK target is satisfied.
 
-SQLite is used as the unit-test substrate (the PG partial unique index
-is exercised by ``tests/integration/test_outbox_cutover_postgres.py``).
+PG tests use the ``pg_db_factory`` fixture so each ``factory()``
+returns an independent connection — a committed write in one session
+is visible to the other, a rolled-back write is not. The PG partial
+unique index is exercised by ``tests/integration/test_outbox_cutover_postgres.py``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401  (registers all models with Base.metadata)
 from src.application.outbox import contracts as outbox_contracts
 from src.application.outbox.registry import OutboxCommandRegistry
 from src.application.pipeline.commands import (
@@ -41,34 +39,13 @@ from src.application.pipeline.commands import (
     SendWebhookCommand,
     SessionBuildCommand,
 )
-from src.db.base_class import Base
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.outbox import OutboxEvent as OutboxEventRow
 from src.models.task_log import TaskLog
 from src.services.pipeline_constants import ScanMode, TaskStatus, TaskType
 from src.services.task_dispatch_control import create_pending_task_log
 
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    """Shared in-memory SQLite engine so multiple sessions see the
-    same data; ``StaticPool`` keeps the connection alive across
-    ``sessionmaker()`` calls."""
-    eng = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=eng)
-    try:
-        yield eng
-    finally:
-        eng.dispose()
-
-
-@pytest.fixture
-def session_factory(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionFactory = Callable[[], Session]
 
 
 @pytest.fixture(autouse=True)
@@ -88,10 +65,11 @@ def _reset_outbox_state() -> None:
 
 
 def test_dispatcher_writes_task_log_and_outbox_in_one_transaction(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """A single dispatch writes both rows; before commit neither is
     visible to a fresh session, after commit both are."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         task_id = CeleryTaskDispatcher().dispatch_session_build(
@@ -122,9 +100,10 @@ def test_dispatcher_writes_task_log_and_outbox_in_one_transaction(
         fresh.close()
 
 
-def test_dispatcher_rollback_leaves_no_rows(session_factory: sessionmaker[Session]) -> None:
+def test_dispatcher_rollback_leaves_no_rows(pg_db_factory: SessionFactory) -> None:
     """A caller rollback after the dispatcher returns leaves zero rows
     in both tables — the atomicity contract from ADR §1."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         CeleryTaskDispatcher().dispatch_session_build(
@@ -143,10 +122,11 @@ def test_dispatcher_rollback_leaves_no_rows(session_factory: sessionmaker[Sessio
         fresh.close()
 
 
-def test_dispatcher_uses_event_id_as_queue_task_id(session_factory: sessionmaker[Session]) -> None:
+def test_dispatcher_uses_event_id_as_queue_task_id(pg_db_factory: SessionFactory) -> None:
     """``TaskLog.queue_task_id == str(OutboxEvent.event_id)`` so the
     consumer-side ``bind_or_create_running_task_log(queue_task_id=...)``
     can bind by ``event_id``."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         task_id = CeleryTaskDispatcher().dispatch_session_build(
@@ -179,10 +159,11 @@ def test_dispatcher_uses_event_id_as_queue_task_id(session_factory: sessionmaker
 
 
 def test_dispatcher_session_build_hot_then_full_supersedes(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """A FULL dispatch while a HOT is active supersedes the HOT and
     creates a new outbox row keyed by the new ``queue_task_id``."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         hot_log, hot_created = create_pending_task_log(
@@ -228,10 +209,11 @@ def test_dispatcher_session_build_hot_then_full_supersedes(
 
 
 def test_dispatcher_session_build_full_then_hot_defers(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """A HOT dispatch while a FULL is active records a deferred
     (skipped) TaskLog and does NOT create an outbox row."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         full_log, full_created = create_pending_task_log(
@@ -278,10 +260,11 @@ def test_dispatcher_session_build_full_then_hot_defers(
 
 
 def test_dispatcher_duplicate_active_returns_existing_id(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """A second dispatch for the same dedupe key reuses the existing
     ``queue_task_id``; no new outbox row is created."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         first_id = CeleryTaskDispatcher().dispatch_session_build(
@@ -317,9 +300,10 @@ def test_dispatcher_duplicate_active_returns_existing_id(
 
 
 def test_dispatcher_analyze_session_sets_queue_by_priority(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """HOT priority → ``analysis_hot`` queue, FULL → ``analysis_full``."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         hot_id = CeleryTaskDispatcher().dispatch_analyze_session(
@@ -365,9 +349,10 @@ def test_dispatcher_analyze_session_sets_queue_by_priority(
 
 
 def test_dispatcher_generate_daily_summary_with_target_date_in_args(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """A non-None ``target_date_str`` lands in the broker ``args`` list."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         task_id = CeleryTaskDispatcher().dispatch_generate_daily_summary(
@@ -396,9 +381,10 @@ def test_dispatcher_generate_daily_summary_with_target_date_in_args(
 
 
 def test_dispatcher_generate_daily_summary_without_target_date_in_args(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """A None ``target_date_str`` produces an empty ``args`` list."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         CeleryTaskDispatcher().dispatch_generate_daily_summary(
@@ -418,10 +404,11 @@ def test_dispatcher_generate_daily_summary_without_target_date_in_args(
 
 
 def test_dispatcher_webhook_passes_event_type_and_payload_in_kwargs(
-    session_factory: sessionmaker[Session],
+    pg_db_factory: SessionFactory,
 ) -> None:
     """Webhook dispatch wraps ``event_type`` + ``payload`` into the
     outbox ``kwargs``; the broker ``args`` list is empty."""
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         payload = {"date": "2026-09-02", "score": 5}

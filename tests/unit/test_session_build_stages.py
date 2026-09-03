@@ -1,11 +1,11 @@
 """Unit tests for the session-build pipeline stage decomposition (Todo 20).
 
 These tests exercise the public API of
-:mod:`src.services.session_build` end-to-end against an
-in-memory SQLite engine. They cover the per-stage contracts the
-slim Celery task in :mod:`src.tasks.session_build` depends on,
-but that the legacy ``tests/unit/test_session_builder.py``
-suite did not pin explicitly:
+:mod:`src.services.session_build` end-to-end against the project-wide
+PostgreSQL ``pg_db`` / ``pg_db_factory`` fixtures. They cover the
+per-stage contracts the slim Celery task in
+:mod:`src.tasks.session_build` depends on, but that the legacy
+``tests/unit/test_session_builder.py`` suite did not pin explicitly:
 
 * :func:`reducer.reduce_files` — the **pure** reducer.
   Callers feed it in-memory records (no DB) and the function
@@ -32,16 +32,14 @@ advisory-lock semantics live in
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401 — registers every model on Base.metadata
-from src.db.base_class import Base
 from src.models.video_file import VideoFile, build_file_path_hash
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -61,38 +59,35 @@ from src.services.session_build.constants import (
 )
 
 # ---------------------------------------------------------------------------
-# SQLite session fixture
+# PostgreSQL session fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def db_session() -> Session:
-    """Fresh in-memory SQLite session with the full schema registered."""
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = factory()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
+def db_session(pg_db: Session) -> Session:
+    """Single session against the project-wide ``pg_db`` fixture."""
+    return pg_db
 
 
 @pytest.fixture
-def engine_factory():
-    """Yield a ``(engine, sessionmaker)`` tuple the tests use to spin up multi-session scenarios."""
-    engines: list = []
+def engine_factory(pg_db_factory: Callable[[], Session]):
+    """Yield a ``(session_factory_callable,)`` the multi-session test uses.
 
-    def _factory():
-        engine = create_engine("sqlite+pysqlite:///:memory:")
-        Base.metadata.create_all(bind=engine)
-        engines.append(engine)
-        return engine, sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    The single test that needs an independent session (``hot`` + ``full``)
+    is wired up to call ``factory()`` once per scenario; the resulting
+    sessions land on the same PostgreSQL schema and clean up together
+    via ``pg_db_factory``'s TRUNCATE step.
+    """
 
-    yield _factory
-    for engine in engines:
-        engine.dispose()
+    def _factory() -> tuple[Any, Callable[[], Session]]:
+        # The legacy SQLite version returned ``(engine, sessionmaker)``.
+        # Under PostgreSQL we share a single engine across every
+        # ``session_factory()`` call, so the first tuple slot is ``None``
+        # (callers that previously used ``engine.dispose()`` are gone
+        # because ``pg_engine`` is session-scoped via the fixture).
+        return None, pg_db_factory
+
+    return _factory
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +409,22 @@ def _discovered(start_time: datetime, suffix: str) -> DiscoveredFile:
     )
 
 
+def _seed_source(db_session) -> int:
+    """Create a parent ``VideoSource`` and return its server-assigned id."""
+    source = VideoSource(
+        source_name="cam",
+        camera_name="cam",
+        location_name="home",
+        source_type="local_directory",
+        enabled=True,
+    )
+    db_session.add(source)
+    db_session.flush()
+    return source.id
+
+
 def test_dedupe_skips_existing_files(db_session) -> None:
-    source_id = 1
+    source_id = _seed_source(db_session)
     base = datetime(2026, 3, 15, 9, 0, 0)
     file_a = _discovered(base, "a")
     db_session.add(
@@ -447,7 +456,7 @@ def test_dedupe_skips_existing_files(db_session) -> None:
 
 
 def test_dedupe_inserts_new_files(db_session) -> None:
-    source_id = 1
+    source_id = _seed_source(db_session)
     base = datetime(2026, 3, 15, 9, 0, 0)
     files = [
         _discovered(base, "a"),
@@ -467,7 +476,7 @@ def test_dedupe_inserts_new_files(db_session) -> None:
 
 def test_dedupe_marks_existing_hashes_without_query(db_session) -> None:
     """Pre-computed ``existing_hashes`` short-circuits the dedupe query path."""
-    source_id = 1
+    source_id = _seed_source(db_session)
     base = datetime(2026, 3, 15, 9, 0, 0)
     file_a = _discovered(base, "a")
     file_a_hash = build_file_path_hash(file_a.file_path)
@@ -485,7 +494,7 @@ def test_dedupe_marks_existing_hashes_without_query(db_session) -> None:
 
 def test_dedupe_unique_index_race_silently_skips(db_session) -> None:
     """When two workers race to insert the same file, the runner sees ``None``."""
-    source_id = 1
+    source_id = _seed_source(db_session)
     base = datetime(2026, 3, 15, 9, 0, 0)
     file_a = _discovered(base, "a")
     db_session.add(
@@ -555,7 +564,7 @@ def test_run_hot_and_full_agree_on_session_graph(db_session, monkeypatch, engine
     over-gap) must yield the same ``(sessions, rels,
     sealed_sessions)`` under either scan mode.
     """
-    base = datetime(2026, 3, 15, 9, 0, 0)
+    base = datetime(2026, 3, 15, 9, 0, 0, tzinfo=timezone.utc)
     records = [
         {
             "file_name": "a.mp4",
@@ -598,8 +607,9 @@ def test_run_hot_and_full_agree_on_session_graph(db_session, monkeypatch, engine
     )
 
     def _run(scan_mode_func):
-        engine, session_factory = engine_factory()
-        with session_factory() as session:
+        _engine_unused, session_factory = engine_factory()
+        session = session_factory()
+        try:
             session.add(
                 VideoSource(
                     source_name="cam",
@@ -626,13 +636,15 @@ def test_run_hot_and_full_agree_on_session_graph(db_session, monkeypatch, engine
             return (
                 result,
                 [
-                    (s.id, s.session_start_time, s.session_end_time)
+                    (s.session_start_time, s.session_end_time)
                     for s in session.query(VideoSession)
                     .filter(VideoSession.source_id == source_id)
                     .order_by(VideoSession.session_start_time.asc())
                     .all()
                 ],
             )
+        finally:
+            session.close()
 
     hot_result, hot_sessions = _run(runner.run_hot)
     full_result, full_sessions = _run(runner.run_full)
@@ -651,8 +663,11 @@ def test_run_hot_preserves_existing_open_session_end(db_session, monkeypatch) ->
     Reproduces the pre-Todo-20 ``test_build_does_not_merge_older_files_into_latest_open_session``
     invariant against the slim runner.
     """
-    source_id = 1
-    base = datetime(2026, 3, 15, 9, 0, 0)
+    source_id = _seed_source(db_session)
+    # The PG DateTime(timezone=True) columns come back tz-aware, so
+    # the in-test datetimes must be tz-aware too — otherwise the
+    # reducer's ``(start - end).total_seconds()`` raises a TypeError.
+    base = datetime(2026, 3, 15, 9, 0, 0, tzinfo=timezone.utc)
     open_session = VideoSession(
         source_id=source_id,
         session_start_time=base,
@@ -725,7 +740,7 @@ def test_run_hot_preserves_existing_open_session_end(db_session, monkeypatch) ->
 def test_run_empty_hot_mode_seals_buffer_elapsed_session(db_session, monkeypatch) -> None:
     """When discovery returns nothing in HOT mode, the seal-buffer sweep
     seals stale OPEN sessions."""
-    source_id = 1
+    source_id = _seed_source(db_session)
     base = datetime(2026, 3, 15, 9, 0, 0)
     stale_end = base - timedelta(seconds=SEAL_BUFFER_SECONDS + 30)
     open_session = VideoSession(

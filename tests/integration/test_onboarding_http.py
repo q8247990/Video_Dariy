@@ -6,12 +6,9 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
 import src.api.deps as api_deps
-import src.db.base  # noqa: F401
 import src.db.session as db_session_module
 from src.api.v1.endpoints import onboarding, video_sources
 from src.core.config import settings
@@ -22,32 +19,13 @@ from src.models.video_source import VideoSource
 
 
 @pytest.fixture
-def db() -> Session:
-    engine = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    VideoSource.__table__.create(bind=engine)
-    LLMProvider.__table__.create(bind=engine)
-    SystemConfig.__table__.create(bind=engine)
-    HomeProfile.__table__.create(bind=engine)
-    local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    db_session = local_session()
-    try:
-        yield db_session
-    finally:
-        db_session.close()
-
-
-@pytest.fixture
-def client(db: Session) -> TestClient:
+def client(pg_db: Session) -> TestClient:
     app = FastAPI()
     app.include_router(onboarding.router, prefix="/api/v1/onboarding")
     app.include_router(video_sources.router, prefix="/api/v1/video-sources")
 
     def _override_get_db():
-        yield db
+        yield pg_db
 
     def _override_get_current_user() -> SimpleNamespace:
         return SimpleNamespace(id=1, username="admin")
@@ -60,8 +38,8 @@ def client(db: Session) -> TestClient:
         yield test_client
 
 
-def _seed_basic_ready(db: Session) -> None:
-    db.add(
+def _seed_basic_ready(pg_db: Session) -> None:
+    pg_db.add(
         VideoSource(
             source_name="客厅源",
             camera_name="客厅摄像头",
@@ -73,7 +51,7 @@ def _seed_basic_ready(db: Session) -> None:
             last_validate_at=datetime.utcnow(),
         )
     )
-    db.add(
+    pg_db.add(
         LLMProvider(
             provider_name="默认 Provider",
             provider_type="qa_provider",
@@ -91,7 +69,7 @@ def _seed_basic_ready(db: Session) -> None:
             last_test_at=datetime.utcnow(),
         )
     )
-    db.commit()
+    pg_db.commit()
 
 
 def _create_sample_video(root: Path) -> None:
@@ -108,10 +86,10 @@ def test_onboarding_status_empty(client: TestClient) -> None:
     assert body["data"]["overall_status"] == "basic_not_ready"
 
 
-def test_onboarding_status_reaches_full_ready(client: TestClient, db: Session) -> None:
-    _seed_basic_ready(db)
-    db.add(SystemConfig(config_key="home_profile_initialized", config_value=True))
-    db.add(
+def test_onboarding_status_reaches_full_ready(client: TestClient, pg_db: Session) -> None:
+    _seed_basic_ready(pg_db)
+    pg_db.add(SystemConfig(config_key="home_profile_initialized", config_value=True))
+    pg_db.add(
         HomeProfile(
             home_name="王先生一家",
             family_tags_json=["has_child"],
@@ -122,7 +100,7 @@ def test_onboarding_status_reaches_full_ready(client: TestClient, db: Session) -
             home_note="",
         )
     )
-    db.commit()
+    pg_db.commit()
 
     response = client.get("/api/v1/onboarding/status")
     assert response.status_code == 200
@@ -147,7 +125,7 @@ def test_validate_path_outside_root(
 
 
 def test_video_source_test_updates_validate_status(
-    client: TestClient, db: Session, tmp_path: Path, monkeypatch: MonkeyPatch
+    client: TestClient, pg_db: Session, tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "VIDEO_ROOT_PATH", str(tmp_path))
     _create_sample_video(tmp_path)
@@ -160,8 +138,8 @@ def test_video_source_test_updates_validate_status(
         config_json={"root_path": str(tmp_path)},
         enabled=True,
     )
-    db.add(source)
-    db.commit()
+    pg_db.add(source)
+    pg_db.commit()
 
     response = client.post(f"/api/v1/video-sources/{source.id}/test")
     assert response.status_code == 200

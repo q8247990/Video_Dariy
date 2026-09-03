@@ -9,6 +9,7 @@
 """
 
 from datetime import timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import inspect, text
@@ -64,11 +65,14 @@ def test_pre_remediation_seed_restore_and_verify(
             actual = verify_pre_remediation(session)
             assert actual == EXPECTED_ROW_COUNTS
 
-            # 0014 迁移后为 timestamptz；naive 锚点按 UTC 解释并回读为 aware-UTC。
+            # 0014 迁移后为 timestamptz；naive 锚点按上海墙钟时间解释，再比较 UTC 瞬时值。
             row = conn.execute(
                 text("SELECT session_start_time FROM video_session WHERE id = 1")
             ).scalar_one()
-            assert row == ANCHOR_SESSION_START.replace(tzinfo=timezone.utc)
+            expected_utc = ANCHOR_SESSION_START.replace(
+                tzinfo=ZoneInfo("Asia/Shanghai")
+            ).astimezone(timezone.utc)
+            assert row.astimezone(timezone.utc) == expected_utc
             assert row.tzinfo is not None
 
             session.rollback()

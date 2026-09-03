@@ -5,14 +5,12 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 import src.db.base  # noqa: F401
 import src.db.session as db_session_module
 import src.tasks.summarizer as summarizer
-from src.db.base_class import Base
 from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
@@ -26,16 +24,30 @@ from src.services.home_timezone import local_day_bounds
 
 
 @pytest.fixture
-def db_session_factory(monkeypatch):
-    engine = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+def db_session_factory(postgres_real_engine: Engine, pg_db_factory, monkeypatch):
+    """Return a sessionmaker bound to ``postgres_real_engine``.
+
+    The summarizer / dispatch tasks call :func:`task_db_session` which
+    opens a fresh :class:`Session` via :data:`src.db.session.SessionLocal`.
+    We monkey-patch it to bind to ``postgres_real_engine`` so:
+
+    * the worker session commits are visible across connections (real
+      PG commits, not SQLite-only single-connection state);
+    * the worker transaction shares ``postgres_real_schema`` with the
+      test seeding session, so committed seed rows are visible;
+    * depending on ``pg_db_factory`` triggers its teardown
+      ``TRUNCATE`` between tests so committed rows from one test do
+      not leak into the next (e.g. ``system_config`` unique keys,
+      FK chains in ``event_record``).
+
+    ``postgres_real_engine`` is migrated to ``alembic head`` in its own
+    one-shot ``vd_real_<uuid>`` schema, so we never call
+    ``Base.metadata.create_all`` and we never invent another engine.
+    """
+    local_session = sessionmaker(bind=postgres_real_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(db_session_module, "SessionLocal", local_session)
-    return local_session
+    yield local_session
+    monkeypatch.undo()
 
 
 def _seed_qa_provider(db: Session) -> None:
@@ -56,6 +68,39 @@ def _seed_qa_provider(db: Session) -> None:
         )
     )
     db.commit()
+
+
+def _create_source_and_session(
+    db: Session,
+    *,
+    session_start_time: datetime,
+    session_end_time: datetime,
+) -> tuple[int, int]:
+    """Insert a ``VideoSource`` + ``VideoSession`` pair and return their IDs.
+
+    ``EventRecord.source_id`` / ``session_id`` are foreign keys into
+    ``video_source`` (RESTRICT) and ``video_session`` (CASCADE). On
+    PostgreSQL the FK constraints reject hardcoded IDs that do not
+    exist, so each test that creates ``EventRecord`` rows must flush
+    the prerequisite rows first and reuse the auto-assigned ids.
+    """
+    source = VideoSource(
+        source_name="test-source",
+        camera_name="test-camera",
+        location_name="home",
+        source_type="ipcamera",
+        enabled=True,
+    )
+    db.add(source)
+    db.flush()
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=session_start_time,
+        session_end_time=session_end_time,
+    )
+    db.add(session)
+    db.flush()
+    return int(source.id), int(session.id)
 
 
 def test_generate_daily_summary_empty_events_fallback_and_no_webhook(
@@ -104,6 +149,11 @@ def test_generate_daily_summary_structured_persist_success(db_session_factory, m
     db = db_session_factory()
     try:
         _seed_qa_provider(db)
+        source_id, session_id = _create_source_and_session(
+            db,
+            session_start_time=datetime(2026, 3, 13, 0, 0, 0, tzinfo=timezone.utc),
+            session_end_time=datetime(2026, 3, 13, 23, 59, 59, tzinfo=timezone.utc),
+        )
 
         db.add(
             HomeEntityProfile(
@@ -126,9 +176,9 @@ def test_generate_daily_summary_structured_persist_success(db_session_factory, m
         )
         db.add(
             EventRecord(
-                source_id=1,
-                session_id=1,
-                event_start_time=datetime(2026, 3, 13, 9, 0, 0),
+                source_id=source_id,
+                session_id=session_id,
+                event_start_time=datetime(2026, 3, 13, 9, 0, 0, tzinfo=timezone.utc),
                 description="成员出现在客厅",
                 event_type="member_appear",
                 title="成员出现",
@@ -146,9 +196,9 @@ def test_generate_daily_summary_structured_persist_success(db_session_factory, m
         )
         db.add(
             EventRecord(
-                source_id=1,
-                session_id=1,
-                event_start_time=datetime(2026, 3, 13, 10, 0, 0),
+                source_id=source_id,
+                session_id=session_id,
+                event_start_time=datetime(2026, 3, 13, 10, 0, 0, tzinfo=timezone.utc),
                 description="门口出现未知人员",
                 event_type="unknown_person_appear",
                 title="未知人员出现",
@@ -322,30 +372,35 @@ def test_generate_daily_summary_uses_home_timezone_half_open_event_range(
     db = db_session_factory()
     try:
         _seed_qa_provider(db)
+        source_id, session_id = _create_source_and_session(
+            db,
+            session_start_time=datetime(2026, 3, 12, 0, 0, 0, tzinfo=timezone.utc),
+            session_end_time=datetime(2026, 3, 14, 0, 0, 0, tzinfo=timezone.utc),
+        )
         db.add(SystemConfig(config_key="home_timezone", config_value="Asia/Shanghai"))
         db.add_all(
             [
                 EventRecord(
-                    source_id=1,
-                    session_id=1,
+                    source_id=source_id,
+                    session_id=session_id,
                     event_start_time=datetime(2026, 3, 12, 16, tzinfo=timezone.utc),
                     description="local day start",
                 ),
                 EventRecord(
-                    source_id=1,
-                    session_id=1,
+                    source_id=source_id,
+                    session_id=session_id,
                     event_start_time=datetime(2026, 3, 13, 15, 59, 59, tzinfo=timezone.utc),
                     description="local day end",
                 ),
                 EventRecord(
-                    source_id=1,
-                    session_id=1,
+                    source_id=source_id,
+                    session_id=session_id,
                     event_start_time=datetime(2026, 3, 12, 15, 59, 59, tzinfo=timezone.utc),
                     description="previous local day",
                 ),
                 EventRecord(
-                    source_id=1,
-                    session_id=1,
+                    source_id=source_id,
+                    session_id=session_id,
                     event_start_time=datetime(2026, 3, 13, 16, tzinfo=timezone.utc),
                     description="next local day",
                 ),
@@ -370,10 +425,10 @@ def test_generate_daily_summary_uses_home_timezone_half_open_event_range(
 
 
 @pytest.mark.postgres
-def test_concurrent_schedulers_publish_one_daily_summary_task(postgres_engine, monkeypatch) -> None:
-    Base.metadata.create_all(bind=postgres_engine)
-    local_session = sessionmaker(bind=postgres_engine, autocommit=False, autoflush=False)
-    db = local_session()
+def test_concurrent_schedulers_publish_one_daily_summary_task(
+    db_session_factory, monkeypatch
+) -> None:
+    db = db_session_factory()
     try:
         db.add_all(
             [
@@ -384,8 +439,6 @@ def test_concurrent_schedulers_publish_one_daily_summary_task(postgres_engine, m
         db.commit()
     finally:
         db.close()
-
-    monkeypatch.setattr(db_session_module, "SessionLocal", local_session)
     monkeypatch.setattr(
         summarizer,
         "home_now",
@@ -413,54 +466,49 @@ def test_concurrent_schedulers_publish_one_daily_summary_task(postgres_engine, m
 
 @pytest.mark.postgres
 def test_postgres_event_query_maps_new_york_local_day_to_utc_half_open_range(
-    postgres_engine,
+    pg_db: Session,
 ) -> None:
-    Base.metadata.create_all(bind=postgres_engine)
-    db = Session(bind=postgres_engine)
-    try:
-        source = VideoSource(
-            source_name="new-york-camera",
-            camera_name="living",
-            location_name="home",
-            source_type="ipcamera",
-        )
-        db.add(source)
-        db.flush()
-        session = VideoSession(
-            source_id=source.id,
-            session_start_time=datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
-            session_end_time=datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
-        )
-        db.add(session)
-        db.flush()
-        db.add_all(
-            [
-                EventRecord(
-                    source_id=source.id,
-                    session_id=session.id,
-                    event_start_time=datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
-                    description="local start",
-                ),
-                EventRecord(
-                    source_id=source.id,
-                    session_id=session.id,
-                    event_start_time=datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
-                    description="next local start",
-                ),
-            ]
-        )
-        db.commit()
-        start, end = local_day_bounds(ZoneInfo("America/New_York"), datetime(2026, 3, 8).date())
+    source = VideoSource(
+        source_name="new-york-camera",
+        camera_name="living",
+        location_name="home",
+        source_type="ipcamera",
+    )
+    pg_db.add(source)
+    pg_db.flush()
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
+        session_end_time=datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
+    )
+    pg_db.add(session)
+    pg_db.flush()
+    pg_db.add_all(
+        [
+            EventRecord(
+                source_id=source.id,
+                session_id=session.id,
+                event_start_time=datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
+                description="local start",
+            ),
+            EventRecord(
+                source_id=source.id,
+                session_id=session.id,
+                event_start_time=datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
+                description="next local start",
+            ),
+        ]
+    )
+    pg_db.flush()
+    start, end = local_day_bounds(ZoneInfo("America/New_York"), datetime(2026, 3, 8).date())
 
-        events = (
-            db.query(EventRecord)
-            .filter(EventRecord.event_start_time >= start, EventRecord.event_start_time < end)
-            .all()
-        )
+    events = (
+        pg_db.query(EventRecord)
+        .filter(EventRecord.event_start_time >= start, EventRecord.event_start_time < end)
+        .all()
+    )
 
-        assert [event.description for event in events] == ["local start"]
-    finally:
-        db.close()
+    assert [event.description for event in events] == ["local start"]
 
 
 def test_generate_daily_summary_honors_cancel_requested(db_session_factory, monkeypatch) -> None:
@@ -525,6 +573,11 @@ def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
     db = db_session_factory()
     try:
         _seed_qa_provider(db)
+        source_id, session_id = _create_source_and_session(
+            db,
+            session_start_time=datetime(2026, 3, 13, 0, 0, 0, tzinfo=timezone.utc),
+            session_end_time=datetime(2026, 3, 13, 23, 59, 59, tzinfo=timezone.utc),
+        )
 
         db.add(
             WebhookConfig(
@@ -537,9 +590,9 @@ def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
         )
         db.add(
             EventRecord(
-                source_id=1,
-                session_id=1,
-                event_start_time=datetime(2026, 3, 13, 9, 0, 0),
+                source_id=source_id,
+                session_id=session_id,
+                event_start_time=datetime(2026, 3, 13, 9, 0, 0, tzinfo=timezone.utc),
                 description="成员出现在客厅",
                 event_type="member_appear",
                 title="成员出现",
@@ -604,6 +657,11 @@ def test_generate_daily_summary_uses_single_pass_under_threshold(
     db = db_session_factory()
     try:
         _seed_qa_provider(db)
+        source_id, session_id = _create_source_and_session(
+            db,
+            session_start_time=datetime(2026, 3, 13, 0, 0, 0, tzinfo=timezone.utc),
+            session_end_time=datetime(2026, 3, 13, 23, 59, 59, tzinfo=timezone.utc),
+        )
         db.add(
             HomeEntityProfile(
                 entity_type="member",
@@ -616,9 +674,9 @@ def test_generate_daily_summary_uses_single_pass_under_threshold(
         )
         db.add(
             EventRecord(
-                source_id=1,
-                session_id=1,
-                event_start_time=datetime(2026, 3, 13, 9, 0, 0),
+                source_id=source_id,
+                session_id=session_id,
+                event_start_time=datetime(2026, 3, 13, 9, 0, 0, tzinfo=timezone.utc),
                 description="成员出现在客厅",
                 event_type="member_appear",
                 title="成员出现",
@@ -683,6 +741,11 @@ def test_generate_daily_summary_uses_split_when_prompt_over_threshold(
     db = db_session_factory()
     try:
         _seed_qa_provider(db)
+        source_id, session_id = _create_source_and_session(
+            db,
+            session_start_time=datetime(2026, 3, 13, 0, 0, 0, tzinfo=timezone.utc),
+            session_end_time=datetime(2026, 3, 13, 23, 59, 59, tzinfo=timezone.utc),
+        )
         db.add(
             HomeEntityProfile(
                 entity_type="member",
@@ -695,9 +758,9 @@ def test_generate_daily_summary_uses_split_when_prompt_over_threshold(
         )
         db.add(
             EventRecord(
-                source_id=1,
-                session_id=1,
-                event_start_time=datetime(2026, 3, 13, 9, 0, 0),
+                source_id=source_id,
+                session_id=session_id,
+                event_start_time=datetime(2026, 3, 13, 9, 0, 0, tzinfo=timezone.utc),
                 description="成员出现在客厅",
                 event_type="member_appear",
                 title="成员出现",

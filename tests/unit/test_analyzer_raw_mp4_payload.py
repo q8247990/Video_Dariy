@@ -13,16 +13,12 @@ removed (ADR ``0009-remove-keyframe-pipeline.md``):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 
-from src.models.event_record import EventRecord
-from src.models.pipeline_transition_log import PipelineTransitionLog
-from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
-from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.session_analysis_video import SessionVideoChunk, SubChunk
@@ -33,16 +29,7 @@ from src.services.video_analysis.schemas import (
 )
 from src.tasks.analyzer import RAW_MP4_NUM_FRAMES, analyze_session_task
 
-
-def _new_session_factory():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    VideoSource.__table__.create(bind=engine)
-    VideoSession.__table__.create(bind=engine)
-    EventRecord.__table__.create(bind=engine)
-    SessionAnalysisCheckpoint.__table__.create(bind=engine)
-    TaskLog.__table__.create(bind=engine)
-    PipelineTransitionLog.__table__.create(bind=engine)
-    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionFactory = Callable[[], Session]
 
 
 def _seed_source_and_session(db) -> int:
@@ -102,11 +89,13 @@ def test_raw_mp4_num_frames_constant_is_120() -> None:
     assert RAW_MP4_NUM_FRAMES == 120
 
 
-def test_analyzer_emits_video_mp4_payload_with_num_frames(monkeypatch) -> None:
+def test_analyzer_emits_video_mp4_payload_with_num_frames(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
     """The analyzer payload is unconditionally ``data:video/mp4`` with the
     documented ``num_frames``; the keyframe branch is gone."""
 
-    session_factory = _new_session_factory()
+    session_factory = pg_db_factory
     db = session_factory()
     try:
         session_id = _seed_source_and_session(db)

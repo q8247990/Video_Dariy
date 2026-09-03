@@ -1,9 +1,11 @@
 """Unit tests for the /metrics observability gauges.
 
-These tests use an in-memory SQLite engine so the outbox lag, task
-recovery counters and checkpoint-progress queries from
-:mod:`src.db.metrics` are pinned without a live PostgreSQL. Rows are
-inserted via raw SQL to stay independent of ORM FK hygiene.
+These tests use a dedicated real PostgreSQL schema so the outbox lag,
+task-recovery counters and checkpoint-progress queries from
+:mod:`src.db.metrics` are pinned against a live database. Rows are
+inserted via the ORM (with proper FK parent rows) on the dedicated
+``postgres_real_engine``; the fixture truncates that schema at teardown
+so each test starts from an empty database.
 """
 
 from __future__ import annotations
@@ -12,55 +14,69 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
-import src.db.base  # noqa: F401  (registers all models on Base.metadata)
-from src.db.base_class import Base
 from src.db.metrics import (
     checkpoint_progress,
     outbox_metrics,
     task_recovery_metrics,
 )
+from src.models.app_runtime_state import AppRuntimeState
+from src.models.outbox import OutboxEvent
+from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 
 
 @pytest.fixture
-def engine() -> Engine:
-    eng = create_engine("sqlite://")
-    Base.metadata.create_all(eng)
-    return eng
+def engine(postgres_real_engine):
+    yield postgres_real_engine
+    _truncate_schema(postgres_real_engine)
+
+
+def _truncate_schema(engine) -> None:
+    from sqlalchemy import text
+
+    from src.db.base_class import Base
+
+    table_names = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+    if table_names:
+        with engine.connect() as conn:
+            conn.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
+            conn.commit()
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _insert_outbox(engine: Engine, status: str, next_attempt_at: str, task_log_id: int) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO outbox_event "
-                "(event_id, task_log_id, task_name, queue, args_json, kwargs_json, "
-                " status, attempt_count, next_attempt_at, created_at, updated_at) "
-                "VALUES (:eid, :tl, 'src.tasks.x', 'celery', '[]', '{}', "
-                " :status, 0, :next_attempt, :now, :now)"
-            ),
-            {
-                "eid": str(uuid.uuid4()),
-                "tl": task_log_id,
-                "status": status,
-                "next_attempt": next_attempt_at,
-                "now": _now().isoformat(),
-            },
+def _insert_outbox(engine, status: str, next_attempt_at: datetime) -> None:
+    with Session(bind=engine) as session:
+        task_log = TaskLog(task_type="src.tasks.x", status="success")
+        session.add(task_log)
+        session.flush()
+        session.add(
+            OutboxEvent(
+                event_id=str(uuid.uuid4()),
+                task_log_id=task_log.id,
+                task_name="src.tasks.x",
+                queue="celery",
+                args_json=[],
+                kwargs_json={},
+                status=status,
+                next_attempt_at=next_attempt_at,
+            )
         )
+        session.commit()
 
 
-def test_outbox_metrics_reports_lag_and_counts(engine: Engine) -> None:
-    old_next = (_now() - timedelta(seconds=600)).isoformat()
-    recent_next = (_now() - timedelta(seconds=10)).isoformat()
-    _insert_outbox(engine, "pending", old_next, task_log_id=1)
-    _insert_outbox(engine, "pending", recent_next, task_log_id=2)
-    _insert_outbox(engine, "failed", old_next, task_log_id=3)
+def test_outbox_metrics_reports_lag_and_counts(engine) -> None:
+    old_next = _now() - timedelta(seconds=600)
+    recent_next = _now() - timedelta(seconds=10)
+    _insert_outbox(engine, "pending", old_next)
+    _insert_outbox(engine, "pending", recent_next)
+    _insert_outbox(engine, "failed", old_next)
 
     metrics = outbox_metrics(engine)
     assert metrics["pending_count"] == 2
@@ -71,43 +87,24 @@ def test_outbox_metrics_reports_lag_and_counts(engine: Engine) -> None:
     assert metrics["oldest_pending_seconds"] <= 600
 
 
-def test_outbox_metrics_empty_pool_has_null_lag(engine: Engine) -> None:
+def test_outbox_metrics_empty_pool_has_null_lag(engine) -> None:
     metrics = outbox_metrics(engine)
     assert metrics["pending_count"] == 0
     assert metrics["failed_count"] == 0
     assert metrics["oldest_pending_seconds"] is None
 
 
-def test_task_recovery_metrics_counts_recovered_and_heartbeat(engine: Engine) -> None:
-    now = _now()
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO task_log (task_type, status, retry_count, recovery_attempt, "
-                " cancel_requested, created_at, updated_at) "
-                "VALUES ('session_analysis', 'timeout', 0, 2, 0, :n, :n)"
-            ),
-            {"n": now.isoformat()},
-        )
-        conn.execute(
-            text(
-                "INSERT INTO task_log (task_type, status, retry_count, recovery_attempt, "
-                " cancel_requested, created_at, updated_at) "
-                "VALUES ('session_build', 'success', 0, 0, 0, :n, :n)"
-            ),
-            {"n": now.isoformat()},
-        )
-        conn.execute(
-            text(
-                "INSERT INTO app_runtime_state (state_key, state_value, created_at, updated_at) "
-                "VALUES (:key, :val, :n, :n)"
-            ),
-            {
-                "key": "heartbeat_last_counters",
-                "val": '{"timed_out": 3, "pending_recovered": 5}',
-                "n": now.isoformat(),
-            },
-        )
+def test_task_recovery_metrics_counts_recovered_and_heartbeat(engine) -> None:
+    with Session(bind=engine) as session:
+        session.add(TaskLog(task_type="session_analysis", status="timeout",
+                            retry_count=0, recovery_attempt=2))
+        session.add(TaskLog(task_type="session_build", status="success",
+                            retry_count=0, recovery_attempt=0))
+        session.add(AppRuntimeState(
+            state_key="heartbeat_last_counters",
+            state_value={"timed_out": 3, "pending_recovered": 5},
+        ))
+        session.commit()
 
     metrics = task_recovery_metrics(engine)
     assert metrics["leases_recovered_total"] == 1
@@ -115,47 +112,57 @@ def test_task_recovery_metrics_counts_recovered_and_heartbeat(engine: Engine) ->
     assert metrics["last_heartbeat"]["unleased_recovered"] == 5
 
 
-def test_task_recovery_metrics_without_heartbeat_defaults_zero(engine: Engine) -> None:
+def test_task_recovery_metrics_without_heartbeat_defaults_zero(engine) -> None:
     metrics = task_recovery_metrics(engine)
     assert metrics["leases_recovered_total"] == 0
     assert metrics["last_heartbeat"]["leases_recovered"] == 0
     assert metrics["last_heartbeat"]["unleased_recovered"] == 0
 
 
-def test_checkpoint_progress_reports_running_analysis(engine: Engine) -> None:
+def test_checkpoint_progress_reports_running_analysis(engine) -> None:
     now = _now()
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO video_session (id, source_id, session_start_time, "
-                " session_end_time, analysis_status, created_at, updated_at) "
-                "VALUES (1, 1, :s, :e, 'analyzing', :n, :n)"
-            ),
-            {"s": now.isoformat(), "e": now.isoformat(), "n": now.isoformat()},
+    with Session(bind=engine) as session:
+        source = VideoSource(
+            source_name="source-1",
+            camera_name="客厅",
+            location_name="客厅",
+            source_type="local_directory",
+            enabled=True,
         )
-        conn.execute(
-            text(
-                "INSERT INTO task_log (task_type, status, task_target_id, "
-                " retry_count, recovery_attempt, cancel_requested, created_at, updated_at) "
-                "VALUES ('session_analysis', 'running', 1, 0, 0, 0, :n, :n)"
-            ),
-            {"n": now.isoformat()},
+        session.add(source)
+        session.flush()
+        video_session = VideoSession(
+            source_id=source.id,
+            session_start_time=now,
+            session_end_time=now,
+            analysis_status="analyzing",
         )
+        session.add(video_session)
+        session.flush()
+        video_session_id = video_session.id
+        session.add(TaskLog(
+            task_type="session_analysis", status="running",
+            task_target_id=video_session_id, retry_count=0, recovery_attempt=0,
+        ))
         for state, idx in (("success", 0), ("success", 1), ("pending", 2)):
-            conn.execute(
-                text(
-                    "INSERT INTO session_analysis_checkpoint "
-                    "(session_id, analysis_run_id, chunk_index, sub_chunk_index, "
-                    " start_offset_seconds, input_fingerprint, state, prompt_tokens, "
-                    " completion_tokens, total_tokens, attempt_count, created_at, updated_at) "
-                    "VALUES (1, 'run-1', 0, :idx, 0, 'fp', :state, 0, 0, 0, 0, :n, :n)"
-                ),
-                {"idx": idx, "state": state, "n": now.isoformat()},
-            )
+            session.add(SessionAnalysisCheckpoint(
+                session_id=video_session_id,
+                analysis_run_id="run-1",
+                chunk_index=0,
+                sub_chunk_index=idx,
+                start_offset_seconds=0,
+                input_fingerprint="fp",
+                state=state,
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                attempt_count=0,
+            ))
+        session.commit()
 
     progress = checkpoint_progress(engine)
     assert len(progress) == 1
     entry = progress[0]
-    assert entry["session_id"] == 1
+    assert entry["session_id"] == video_session_id
     assert entry["completed_sub_chunks"] == 2
     assert entry["total_sub_chunks"] == 3
