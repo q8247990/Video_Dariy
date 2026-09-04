@@ -143,6 +143,4 @@ __all__ = [
 # Backward-compat aliases used by the existing
 # ``tests/unit/test_analyzer_task.py`` test which monkeypatches
 # ``src.tasks.analyzer._replace_session_events``.
-_aggregate_session_fields = merge_session_fields
-_completed_results = completed_results_for_run
 _replace_session_events = replace_session_events

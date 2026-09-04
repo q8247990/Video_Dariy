@@ -4,7 +4,7 @@ This package owns the SQLAlchemy bridge that persists every
 successful ``pipeline_state`` CAS transition as an
 append-only row in :class:`src.models.pipeline_transition_log.PipelineTransitionLog`.
 The history table exists because ``task_log`` is pruned after 7
-days (``src/tasks/task_maintenance.py:_cleanup_old_task_logs``) and
+days (``src.services.maintenance.cleanup_old_task_logs``) and
 ``detail_json`` lives on the very ``TaskLog`` row whose mutation made
 the row interesting — both of those concerns disappear if the audit
 lives on a separate table with a nullable correlation FK.

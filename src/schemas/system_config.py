@@ -1,16 +1,6 @@
-from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
-
-
-class SystemConfigBase(BaseModel):
-    config_key: str
-    config_value: Optional[Any] = None
-
-
-class SystemConfigCreate(SystemConfigBase):
-    pass
 
 
 class SystemConfigUpdate(BaseModel):
@@ -35,10 +25,3 @@ class SystemConfigUpdate(BaseModel):
     media_segment_ttl_seconds: Optional[int] = None
 
     model_config = ConfigDict(extra="forbid")
-
-
-class SystemConfigResponse(SystemConfigBase):
-    id: int
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)

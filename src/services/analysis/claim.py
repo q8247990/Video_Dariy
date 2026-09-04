@@ -41,7 +41,6 @@ from src.services.pipeline_state import transition_session, transition_task_log
 from src.services.task_dispatch_control import (
     bind_or_create_running_task_log,
     finalize_task_log,
-    get_task_log_for_update,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,11 +284,6 @@ def mark_session_sealed_for_retry(db: Session, session_id: int) -> None:
         )
 
 
-def refresh_task_log(db: Session, task_log_id: int) -> Optional[TaskLog]:
-    """Re-fetch a TaskLog row inside the cancellation / failure paths."""
-    return get_task_log_for_update(db, task_log_id)
-
-
 __all__ = [
     "ClaimContext",
     "SkipOutcome",
@@ -297,5 +291,4 @@ __all__ = [
     "finalize_skip",
     "finalize_stale_message",
     "mark_session_sealed_for_retry",
-    "refresh_task_log",
 ]

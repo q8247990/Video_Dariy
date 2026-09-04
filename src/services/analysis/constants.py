@@ -22,10 +22,6 @@ RAW_MP4_NUM_FRAMES: int = 120
 # task_maintenance.
 DEADLOCK_MAX_RETRIES: int = 3
 
-# Retry backoff baseline (seconds). The Celery ``self.retry`` countdown
-# is ``2 ** self.request.retries`` so the first retry waits 1s.
-DEADLOCK_RETRY_BACKOFF_SECONDS: int = 1
-
 # Backoff schedule used while claiming a session that briefly disappears
 # (e.g. another worker is mid-rollback). The total wait is < 4 seconds.
 NOT_FOUND_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.5, 1.0, 2.0)
@@ -37,7 +33,6 @@ POSTGRES_RETRYABLE_SQLSTATES: frozenset[str] = frozenset({"40P01", "40001"})
 
 __all__ = [
     "DEADLOCK_MAX_RETRIES",
-    "DEADLOCK_RETRY_BACKOFF_SECONDS",
     "NOT_FOUND_RETRY_DELAYS_SECONDS",
     "POSTGRES_RETRYABLE_SQLSTATES",
     "RAW_MP4_NUM_FRAMES",

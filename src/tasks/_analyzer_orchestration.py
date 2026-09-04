@@ -362,9 +362,8 @@ def _run_sub_chunk_loop(
                     sub_chunk_count += 1
                     parse_modes.append("new")
         # Post-loop cancel fence: a cancel that arrives between the
-        # last sub-chunk's commit and the ``_completed_results``
-        # query must still roll the session back to ``SEALED``
-        # rather than to ``PARTIAL``.
+        # last sub-chunk's commit and the completion query must still
+        # roll the session back to ``SEALED`` rather than to ``PARTIAL``.
         seam.ensure_task_not_cancelled(
             db,
             claim.task_log.id,

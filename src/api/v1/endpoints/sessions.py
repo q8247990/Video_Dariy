@@ -51,15 +51,6 @@ def get_sessions(
     )
 
 
-@router.get("/{id}", response_model=BaseResponse[VideoSessionResponse])
-def get_session(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    session = db.query(VideoSession).filter(VideoSession.id == id).first()
-    if not session:
-        return BaseResponse(code=4002, message=t("session.not_found", locale))
-
-    return BaseResponse(data=VideoSessionResponse.model_validate(session))
-
-
 @router.get("/{id}/events", response_model=BaseResponse[list[EventResponse]])
 def get_session_events(
     db: DB,

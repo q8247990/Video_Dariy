@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from src.models.video_session import VideoSession
-from src.services.pipeline_constants import AnalysisPriority, ScanMode, SessionAnalysisStatus
+from src.services.pipeline_constants import ScanMode, SessionAnalysisStatus
 from src.services.pipeline_state import transition_session
 from src.services.session_build.constants import SEAL_BUFFER_SECONDS
 from src.services.session_build.types import SealedSessionInfo
@@ -64,10 +64,6 @@ class SealDecision:
     """
 
     sealed_session_ids: list[int] = field(default_factory=list)
-
-
-def _priority_for_scan_mode(scan_mode: str) -> str:
-    return AnalysisPriority.HOT if scan_mode == ScanMode.HOT else AnalysisPriority.FULL
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -184,7 +180,7 @@ def apply_seal_transitions(
         open_sessions: The same in-memory snapshot the pure
             half saw; used to find the per-id
             :class:`VideoSession` to transition.
-        priority: :class:`AnalysisPriority` value the runner
+        priority: analysis-priority value the runner
             inherited from :attr:`scan_mode`. The value lands
             on ``VideoSession.analysis_priority`` and is
             mirrored into the analyzer dispatch envelope.

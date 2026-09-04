@@ -12,7 +12,6 @@ from src.api.v1.endpoints import (
     onboarding,
     sessions,
     system_config,
-    tags,
     tasks,
     video_sources,
     webhooks,
@@ -32,7 +31,6 @@ api_router.include_router(
     daily_summaries.router, prefix="/daily-summaries", tags=["daily-summaries"]
 )
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
-api_router.include_router(tags.router, prefix="/tags", tags=["tags"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(onboarding.router, prefix="/onboarding", tags=["onboarding"])
 

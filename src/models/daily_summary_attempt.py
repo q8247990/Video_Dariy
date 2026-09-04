@@ -103,7 +103,7 @@ Index / constraint plan
 6. ``FOREIGN KEY (task_log_id) REFERENCES task_log(id) ON DELETE SET
    NULL`` — mirrors the existing ``LLMUsageLog`` pattern. ``task_log``
    rows are pruned after 7 days by
-   ``src/tasks/task_maintenance.py:_cleanup_old_task_logs``; the
+   ``src.services.maintenance.cleanup_old_task_logs``; the
    attempt history must **outlive** that cleanup, so the FK nulls the
    correlation id instead of cascading the delete or blocking the
    cleanup with ``RESTRICT``.

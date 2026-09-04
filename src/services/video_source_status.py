@@ -55,11 +55,6 @@ def build_video_sources_status_map(db: Session, source_ids: list[int]) -> dict[i
     return status_map
 
 
-def _query_source_map(db: Session, source_ids: list[int]) -> dict[int, VideoSource]:
-    rows = db.query(VideoSource).filter(VideoSource.id.in_(source_ids)).all()
-    return {int(row.id): row for row in rows}
-
-
 def _query_full_build_running_map(db: Session, source_ids: list[int]) -> dict[int, bool]:
     """Check if a full build task is running for each source."""
     rows = (

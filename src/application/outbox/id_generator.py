@@ -45,28 +45,4 @@ def new_event_id() -> uuid.UUID:
     return _generator()
 
 
-def reset_generator_for_testing() -> None:
-    """Restore the default UUID v4 generator.
-
-    Tests that monkeypatch the generator MUST call this in
-    ``teardown`` so the next test gets a clean slate.
-    """
-    global _generator
-    _generator = uuid.uuid4
-
-
-def set_generator_for_testing(generator: Callable[[], uuid.UUID]) -> None:
-    """Replace the generator with a deterministic test factory.
-
-    The contract tests use this to avoid colliding with the
-    in-process duplicate-event_id set in
-    :mod:`src.application.outbox.contracts`. The repository integration
-    tests typically do **not** need this because they round-trip the
-    value through the DB and never re-emit the same UUID in the same
-    process.
-    """
-    global _generator
-    _generator = generator
-
-
-__all__ = ["new_event_id", "reset_generator_for_testing", "set_generator_for_testing"]
+__all__ = ["new_event_id"]

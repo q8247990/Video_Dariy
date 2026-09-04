@@ -14,7 +14,7 @@ from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import TaskStatus, TaskType
-from src.services.session_builder import SessionBuilder
+from src.services.session_build.runner import run as run_session_build
 from src.services.task_dispatch_control import (
     bind_or_create_running_task_log,
     create_pending_task_log,
@@ -156,13 +156,13 @@ def test_full_and_hot_build_collision_preserves_one_file_and_relation(
         }
     ]
     monkeypatch.setattr(
-        "src.services.session_builder.XiaomiDirectoryParser.scan_directory",
+        "src.services.session_build.discovery.XiaomiDirectoryParser.scan_directory",
         lambda self, min_time=None, max_time=None, cancel_check=None: records,
     )
 
     def build(scan_mode: str) -> None:
         with Session(postgres_migrated_engine) as db:
-            SessionBuilder().build(
+            run_session_build(
                 db=db,
                 source_id=source_id,
                 root_path="/tmp/videos",

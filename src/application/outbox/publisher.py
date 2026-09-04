@@ -116,7 +116,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, Protocol, Union
+from typing import Any, Callable, Optional, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -259,14 +259,6 @@ class CeleryBrokerPort:
 # ---------------------------------------------------------------------------
 # Error classification
 # ---------------------------------------------------------------------------
-
-RetryableError = Union[
-    "kombu.exceptions.OperationalError",  # type: ignore[name-defined]  # noqa: F821
-    "amqp.exceptions.ConnectionError",  # type: ignore[name-defined]  # noqa: F821
-    ConnectionError,
-    TimeoutError,
-    OSError,
-]
 
 
 def classify_celery_error(exc: BaseException) -> str:

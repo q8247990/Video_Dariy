@@ -280,7 +280,7 @@ def test_task_log_7day_cleanup_keeps_audit_rows(
     postgres_migrated_engine: Engine,
 ) -> None:
     """The 7-day ``TaskLog`` cleanup (a direct ``DELETE`` in this test,
-    mirroring ``src/tasks/task_maintenance.py:_cleanup_old_task_logs``)
+    mirroring ``src.services.maintenance.cleanup_old_task_logs``)
     removes the ``task_log`` row but keeps every audit row that
     referenced it — its ``task_log_id`` goes to ``NULL`` because the FK
     is ``ON DELETE SET NULL``."""

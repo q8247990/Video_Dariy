@@ -94,14 +94,6 @@ def create_video_source(db: DB, current_user: CurrentUser, data: VideoSourceCrea
     return BaseResponse(data=VideoSourceResponse.model_validate(source))
 
 
-@router.get("/{id}", response_model=BaseResponse[VideoSourceResponse])
-def get_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    source = db.query(VideoSource).filter(VideoSource.id == id).first()
-    if not source:
-        return BaseResponse(code=4002, message=t("source.not_found", locale))
-    return BaseResponse(data=VideoSourceResponse.model_validate(source))
-
-
 @router.get("/{id}/status", response_model=BaseResponse[VideoSourceStatusResponse])
 def get_video_source_status(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
     source = db.query(VideoSource).filter(VideoSource.id == id).first()
@@ -189,24 +181,6 @@ def delete_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: i
     db.query(VideoSession).filter(VideoSession.source_id == id).delete(synchronize_session=False)
     db.delete(source)
     db.commit()
-    return BaseResponse(data={})
-
-
-@router.post("/{id}/enable", response_model=BaseResponse[dict])
-def enable_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
-    source = db.query(VideoSource).filter(VideoSource.id == id).first()
-    if source:
-        source.enabled = True
-        db.commit()
-    return BaseResponse(data={})
-
-
-@router.post("/{id}/disable", response_model=BaseResponse[dict])
-def disable_video_source(db: DB, current_user: CurrentUser, id: int) -> Any:
-    source = db.query(VideoSource).filter(VideoSource.id == id).first()
-    if source:
-        source.enabled = False
-        db.commit()
     return BaseResponse(data={})
 
 

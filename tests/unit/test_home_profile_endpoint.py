@@ -6,7 +6,6 @@ from src.api.v1.endpoints.home_profile import (
     create_home_member,
     create_home_pet,
     delete_home_entity,
-    get_home_context,
     get_home_entities,
     get_home_profile,
     put_home_profile,
@@ -44,7 +43,7 @@ def test_home_profile_create_and_update(pg_db: Session) -> None:
     assert update_resp.data.assistant_name == "小布"
 
 
-def test_home_entity_crud_and_context(pg_db: Session) -> None:
+def test_home_entity_crud(pg_db: Session) -> None:
     member_resp = create_home_member(
         db=pg_db,
         current_user=_current_user(),
@@ -117,9 +116,3 @@ def test_home_entity_crud_and_context(pg_db: Session) -> None:
     assert list_pets.code == 0
     assert list_pets.data is not None
     assert len(list_pets.data) == 0
-
-    context_resp = get_home_context(db=pg_db, current_user=_current_user())
-    assert context_resp.code == 0
-    assert context_resp.data is not None
-    assert len(context_resp.data.members) == 1
-    assert len(context_resp.data.pets) == 0

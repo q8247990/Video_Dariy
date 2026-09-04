@@ -28,10 +28,6 @@ class EventBase(BaseModel):
     raw_result: Optional[Any] = None
 
 
-class EventCreate(EventBase):
-    pass
-
-
 class EventResponse(EventBase):
     id: int
     session_start_time: Optional[datetime] = None

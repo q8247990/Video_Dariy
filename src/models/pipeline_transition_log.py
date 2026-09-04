@@ -18,7 +18,7 @@ enough as the only audit trail for two reasons:
    mutation made the row interesting, so a post-mortem that
    discovers only the final state loses the intermediate history.
 2. ``task_log`` is pruned after 7 days by
-   ``src/tasks/task_maintenance.py:_cleanup_old_task_logs``. Any
+   ``src.services.maintenance.cleanup_old_task_logs``. Any
    audit data that lives on the ``TaskLog`` row goes with it, which
    defeats the whole point of having an audit trail for the
    pipeline state machine.

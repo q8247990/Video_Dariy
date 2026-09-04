@@ -136,16 +136,6 @@ def _calc_next_action(
     return "review_settings"
 
 
-def _to_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return False
-
-
 def _profile_non_default(profile: HomeProfile | None) -> bool:
     if profile is None:
         return False

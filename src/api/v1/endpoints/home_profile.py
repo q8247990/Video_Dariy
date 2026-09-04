@@ -16,7 +16,6 @@ from src.core.config import settings
 from src.core.i18n import t
 from src.models.home_entity_profile import HomeEntityProfile
 from src.schemas.home_profile import (
-    HomeContextResponse,
     HomeEntityResponse,
     HomeEntityUpdate,
     HomeOptionsResponse,
@@ -27,7 +26,6 @@ from src.schemas.home_profile import (
 )
 from src.schemas.response import BaseResponse
 from src.services.home_profile import (
-    build_home_context,
     create_member,
     create_pet,
     disable_entity,
@@ -288,13 +286,6 @@ def generate_entity_appearance(
         return BaseResponse(code=result.error_code, message=result.error_message)
     db.commit()
     return BaseResponse(data=result.entity)
-
-
-@router.get("/context", response_model=BaseResponse[HomeContextResponse])
-def get_home_context(db: DB, current_user: CurrentUser) -> Any:
-    context = build_home_context(db)
-    db.commit()
-    return BaseResponse(data=HomeContextResponse.model_validate(context))
 
 
 @router.get("/options", response_model=BaseResponse[HomeOptionsResponse])

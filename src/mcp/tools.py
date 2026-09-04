@@ -92,15 +92,6 @@ def _tool_error(code: str, message: str) -> dict[str, Any]:
     return _tool_result({"error": {"code": code, "message": message}}, is_error=True)
 
 
-TOOL_NAMES = [
-    "get_data_availability",
-    "search_events",
-    "get_sessions",
-    "get_daily_summary",
-    "ask_home_monitor",
-]
-
-
 def _build_tools(locale: str | None = None) -> list[dict[str, Any]]:
     return [
         {
@@ -271,20 +262,4 @@ def _required_str(arguments: dict[str, Any], key: str) -> str:
     value = arguments.get(key)
     if not isinstance(value, str):
         raise MCPInvalidArgumentError(f"{key} is required")
-    return value
-
-
-def _optional_str(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise MCPInvalidArgumentError("string arguments must be strings")
-    return value
-
-
-def _optional_str_list(value: Any) -> Optional[list[str]]:
-    if value is None:
-        return None
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise MCPInvalidArgumentError("list arguments must be string arrays")
     return value

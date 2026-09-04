@@ -24,7 +24,6 @@ import logging
 from typing import Any, Optional
 
 from src.core.i18n.locale_directive import (
-    get_retry_json_instruction,
     get_retry_structured_instruction,
     get_retry_system_role,
 )
@@ -182,36 +181,9 @@ def parse_rollup_output(raw_text: str) -> tuple[str, list[dict[str, Any]]]:
     return overall_summary, normalised
 
 
-def retry_parse_after_failure(
-    *,
-    retry_client: Any,
-    messages: list[dict[str, str]],
-    parse_fn: Any,
-    locale: Optional[str] = None,
-) -> tuple[Any, ...]:
-    """Send one retry message; parse the reply via ``parse_fn``.
-
-    Used by the generation paths when the initial LLM call returned
-    a payload that failed parsing. ``parse_fn`` is typically
-    :func:`parse_subject_summary_output` or
-    :func:`parse_rollup_output`.
-    """
-    retry_messages = [
-        {"role": "system", "content": messages[0]["content"]},
-        {
-            "role": "user",
-            "content": get_retry_json_instruction(locale) + "\n\n" + messages[1]["content"],
-        },
-    ]
-    retry_text = retry_client.chat_completion(retry_messages, temperature=0, max_tokens=8192)
-    parsed = parse_fn(retry_text)
-    return (parsed,)
-
-
 __all__ = [
     "extract_json_payload",
     "parse_rollup_output",
     "parse_subject_summary_output",
     "parse_summary_with_retry",
-    "retry_parse_after_failure",
 ]

@@ -3,11 +3,11 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.deps import DB, CurrentUser, Locale
+from src.api.deps import DB, Locale
 from src.core.i18n import t
 from src.core.security import create_access_token, get_password_hash, verify_password
 from src.models.admin_user import AdminUser
-from src.schemas.auth import UserChangePassword, UserInit, UserLogin
+from src.schemas.auth import UserInit, UserLogin
 from src.schemas.response import BaseResponse
 from src.schemas.user import TokenResponse, UserResponse
 
@@ -39,25 +39,3 @@ def login(db: DB, locale: Locale, data: UserLogin) -> Any:
     return BaseResponse(
         data=TokenResponse(token=token, user=UserResponse(id=user.id, username=user.username))
     )
-
-
-@router.get("/me", response_model=BaseResponse[UserResponse])
-def get_me(current_user: CurrentUser) -> Any:
-    return BaseResponse(data=UserResponse(id=current_user.id, username=current_user.username))
-
-
-@router.post("/change-password", response_model=BaseResponse[dict])
-def change_password(
-    db: DB, current_user: CurrentUser, locale: Locale, data: UserChangePassword
-) -> Any:
-    if not verify_password(data.old_password, current_user.password_hash):
-        return BaseResponse(code=4001, message=t("auth.incorrect_old_password", locale))
-
-    current_user.password_hash = get_password_hash(data.new_password)
-    db.commit()
-    return BaseResponse(data={})
-
-
-@router.post("/logout", response_model=BaseResponse[dict])
-def logout(current_user: CurrentUser) -> Any:
-    return BaseResponse(data={})

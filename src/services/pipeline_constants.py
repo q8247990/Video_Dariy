@@ -48,10 +48,3 @@ class SessionAnalysisStatus(str, Enum):
 class AnalysisPriority(str, Enum):
     HOT = "hot"
     FULL = "full"
-
-
-class PipelineStatus(str, Enum):
-    IDLE = "idle"
-    BUILDING = "building"
-    ANALYZING = "analyzing"
-    FAILED = "failed"

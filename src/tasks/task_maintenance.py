@@ -16,8 +16,8 @@ existing test suite relies on: ``datetime`` / ``timezone`` /
 ``mark_missing_video_files`` / ``get_container`` / ``celery_app`` /
 ``task_db_session`` and the legacy private policy aliases
 (``_dispatch_hot_builds`` / ``_recover_timed_out_tasks`` /
-``_recover_orphan_pending_tasks`` / ``_mark_missing_video_files`` /
-``_cleanup_old_task_logs``) keep resolving at
+``_recover_orphan_pending_tasks`` / ``_mark_missing_video_files``)
+keep resolving at
 ``src.tasks.task_maintenance.<name>`` unchanged. The orchestration
 reads every seam dynamically off this module at call time.
 """
@@ -52,7 +52,6 @@ _dispatch_hot_builds = dispatch_hot_builds
 _recover_timed_out_tasks = recover_timed_out_tasks
 _recover_orphan_pending_tasks = recover_orphan_pending_tasks
 _mark_missing_video_files = mark_missing_video_files
-_cleanup_old_task_logs = cleanup_old_task_logs
 
 
 @celery_app.task(bind=True)  # type: ignore[untyped-decorator]
@@ -75,12 +74,12 @@ def heartbeat(self: Any) -> dict[str, int]:
 
 
 __all__ = [
-    "_cleanup_old_task_logs",
     "_dispatch_hot_builds",
     "_mark_missing_video_files",
     "_recover_orphan_pending_tasks",
     "_recover_timed_out_tasks",
     "celery_app",
+    "cleanup_old_task_logs",
     "get_container",
     "heartbeat",
 ]

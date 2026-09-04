@@ -14,10 +14,6 @@ class DailySummaryBase(BaseModel):
     provider_id: Optional[int] = None
 
 
-class DailySummaryCreate(DailySummaryBase):
-    pass
-
-
 class DailySummaryResponse(DailySummaryBase):
     id: int
     generated_at: datetime

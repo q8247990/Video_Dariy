@@ -2,15 +2,7 @@ from datetime import timedelta
 
 from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
-from src.services.video_analysis.schemas import RecognitionResultDTO, RecognizedEventDTO
-
-
-def map_recognition_result_to_session(session: VideoSession, result: RecognitionResultDTO) -> None:
-    session.summary_text = result.session_summary.summary_text
-    session.activity_level = result.session_summary.activity_level
-    session.main_subjects_json = result.session_summary.main_subjects
-    session.has_important_event = result.session_summary.has_important_event
-    session.analysis_notes_json = [note.model_dump() for note in result.analysis_notes]
+from src.services.video_analysis.schemas import RecognizedEventDTO
 
 
 def build_event_record_from_recognized_event(

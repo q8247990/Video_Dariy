@@ -7,8 +7,6 @@ from src.api.deps import DB, ContainerDep, CurrentUser, Locale
 from src.application.llm_providers import (
     create_provider_use_case,
     delete_provider_use_case,
-    disable_provider_use_case,
-    enable_provider_use_case,
     set_default_provider_use_case,
     test_provider_use_case,
     update_provider_use_case,
@@ -112,22 +110,6 @@ def get_provider_daily_usage(db: DB, current_user: CurrentUser, days: int = 7) -
     safe_days = min(max(days, 1), 30)
     items = get_daily_usage_stats(db, days=safe_days)
     return BaseResponse(data=[LLMProviderUsageDailyItem.model_validate(item) for item in items])
-
-
-@router.post("/{id}/enable", response_model=BaseResponse[dict])
-def enable_provider(db: DB, current_user: CurrentUser, id: int) -> Any:
-    enable_provider_use_case(db, id)
-    db.commit()
-    return BaseResponse(data={})
-
-
-@router.post("/{id}/disable", response_model=BaseResponse[dict])
-def disable_provider(db: DB, current_user: CurrentUser, locale: Locale, id: int) -> Any:
-    result = disable_provider_use_case(db, id, locale)
-    if result.error_code != 0:
-        return BaseResponse(code=result.error_code, message=result.error_message)
-    db.commit()
-    return BaseResponse(data={})
 
 
 @router.post("/{id}/set-default-vision", response_model=BaseResponse[dict])
