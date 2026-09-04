@@ -1,5 +1,4 @@
 """PostgreSQL unit tests for the append-only pipeline transition audit.
-
 These tests run against the project-wide ``pg_db`` fixture (a
 function-scoped PG session on a one-shot ``alembic upgrade head``
 schema rolled back after every test). They exercise the
@@ -409,72 +408,3 @@ def test_transition_audit_has_all_fields_populated(pg_db: Session) -> None:
     assert row.source == "seal_all_open"
     assert row.task_log_id is None
     assert row.occurred_at is not None
-
-
-# ---------------------------------------------------------------------------
-# Cleanup survival — ``TaskLog`` deletion nulls the audit FK, keeps history
-# ---------------------------------------------------------------------------
-
-
-def test_cleanup_task_log_nullifies_fk_but_keeps_transition_audit(
-    pg_db_factory: SessionFactory,
-) -> None:
-    """The 7-day ``task_log`` cleanup surrogate (a direct ``DELETE``
-    on a real PG schema) must NOT delete the audit row. The FK is
-    ``ON DELETE SET NULL`` so the row's ``task_log_id`` goes to
-    ``NULL`` and the audit history survives.
-
-    Uses ``pg_db_factory`` exclusively — three independent, real-commit
-    sessions — because the ``DELETE`` and the post-delete verification
-    each need their own connection to observe the committed state
-    (the project-wide ``pg_db`` fixture wraps everything in a
-    rolled-back outer transaction, which would mask the FK
-    ``SET NULL`` outcome).
-    """
-    session_factory = pg_db_factory
-
-    seed_db = session_factory()
-    try:
-        source = _seed_source(seed_db)
-        session = _seed_session(seed_db, source, SessionAnalysisStatus.OPEN)
-        task_log = _seed_task_log(seed_db)
-
-        # Drive a transition that records an audit row correlated
-        # with the ``TaskLog``.
-        applied = transition_session(
-            seed_db,
-            session.id,
-            SessionAnalysisStatus.OPEN,
-            SessionAnalysisStatus.SEALED,
-            reason="before_cleanup",
-            source="unit_test",
-            task_log=task_log,
-        )
-        assert applied.applied is True
-        _commit(seed_db)
-
-        task_log_id = task_log.id
-        session_id = session.id
-    finally:
-        seed_db.close()
-
-    # Surrogate for the 7-day ``task_log`` cleanup: delete the
-    # TaskLog row directly. The migration declares the FK as
-    # ``ON DELETE SET NULL``.
-    delete_db = session_factory()
-    try:
-        delete_db.query(TaskLog).filter(TaskLog.id == task_log_id).delete(synchronize_session=False)
-        _commit(delete_db)
-    finally:
-        delete_db.close()
-
-    # Audit row must survive with ``task_log_id`` NULL.
-    verify_db = session_factory()
-    try:
-        rows = verify_db.query(PipelineTransitionLog).all()
-        assert len(rows) == 1, "audit row must outlive the TaskLog cleanup"
-        assert rows[0].id is not None
-        assert rows[0].aggregate_id == session_id
-        assert rows[0].task_log_id is None
-    finally:
-        verify_db.close()

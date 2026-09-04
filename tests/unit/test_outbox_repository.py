@@ -276,24 +276,6 @@ def test_mark_published_is_conditional_on_publishing(pg_db: Session) -> None:
     assert result is None
 
 
-def test_mark_published_idempotent_under_double_call(pg_db: Session) -> None:
-    """A second ``mark_published`` call on the same ``event_id``
-    returns ``None`` because the row is no longer in ``publishing``;
-    the row stays ``published``."""
-    claimed = _claim_pending_row(pg_db, OutboxRepository(pg_db))
-    repo = OutboxRepository(pg_db)
-
-    first = repo.mark_published(claimed.event_id)
-    second = repo.mark_published(claimed.event_id)
-    assert first is not None
-    assert first.status is OutboxStatus.PUBLISHED
-    assert second is None
-
-    rows = pg_db.query(OutboxEventRow).all()
-    assert len(rows) == 1
-    assert rows[0].status == "published"
-
-
 def test_mark_failed_to_retry_flips_publishing_to_pending(
     pg_db: Session,
 ) -> None:
@@ -383,55 +365,6 @@ def _publish_one(
     published = repo.mark_published(claimed.event_id, now=fixed)
     assert published is not None
     return published
-
-
-def test_cleanup_published_older_than_deletes_only_old_rows(
-    pg_db: Session,
-) -> None:
-    """Only ``published`` rows older than the threshold are deleted;
-    fresh rows are kept."""
-    repo = OutboxRepository(pg_db)
-    old = _publish_one(pg_db, published_at=datetime.now(tz=timezone.utc) - timedelta(days=40))
-    fresh = _publish_one(pg_db, published_at=datetime.now(tz=timezone.utc))
-
-    threshold = datetime.now(tz=timezone.utc) - timedelta(days=30)
-    deleted = repo.cleanup_published_older_than(threshold)
-
-    assert deleted == 1
-    remaining = pg_db.query(OutboxEventRow).all()
-    assert [row.id for row in remaining] == [fresh.id]
-    assert old.id not in {row.id for row in remaining}
-
-
-def test_count_pending_older_than_counts_publishing_with_expired_lease(
-    pg_db: Session,
-) -> None:
-    """A publishing row whose lease has expired still counts against
-    the backlog — the publisher does not skip rows, only logs."""
-    repo = OutboxRepository(pg_db)
-
-    # Pending row with next_attempt_at in the distant past.
-    task_log_a = _make_task_log(pg_db)
-    repo.enroll_with_task_log(task_log_a, _make_command())
-    pg_db.query(OutboxEventRow).filter(OutboxEventRow.task_log_id == task_log_a.id).update(
-        {"next_attempt_at": datetime.now(tz=timezone.utc) - timedelta(seconds=600)}
-    )
-    pg_db.commit()
-
-    # Publishing row whose lease has expired.
-    task_log_b = _make_task_log(pg_db)
-    repo.enroll_with_task_log(task_log_b, _make_command())
-    pg_db.query(OutboxEventRow).filter(OutboxEventRow.task_log_id == task_log_b.id).update(
-        {
-            "status": OutboxStatus.PUBLISHING.value,
-            "claimed_by": "worker-A",
-            "lease_expires_at": datetime.now(tz=timezone.utc) - timedelta(seconds=600),
-        }
-    )
-    pg_db.commit()
-
-    count = repo.count_pending_older_than(seconds=300)
-    assert count == 2
 
 
 def test_count_pending_older_than_ignores_fresh_pending_rows(

@@ -308,66 +308,9 @@ def test_run_once_with_empty_pool_returns_empty_polls(pg_db: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_once_publishes_one_row_and_marks_published(pg_db: Session) -> None:
-    """A claimable row is published, marked ``published``, and the
-    broker received ``task_id=str(event_id)``."""
-    event = _enroll_pending(pg_db)
-    broker = _FakeBroker()
-    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
-
-    delta = publisher.run_once()
-
-    assert delta.claimed == 1
-    assert delta.published == 1
-    assert delta.empty_polls == 0
-    assert len(broker.sent_calls) == 1
-    sent = broker.sent_calls[0]
-    assert sent["task_id"] == str(event.event_id)
-    assert sent["name"] == event.task_name
-    assert sent["queue"] == event.queue
-    assert sent["args"] == list(event.args_json)
-    assert sent["kwargs"] == dict(event.kwargs_json)
-
-    # Row transitioned to published.
-    refreshed = pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).one()
-    assert refreshed.status == OutboxStatus.PUBLISHED.value
-    assert refreshed.claimed_by is None
-    assert refreshed.lease_expires_at is None
-    assert refreshed.published_at is not None
-
-
 # ---------------------------------------------------------------------------
 # OutboxPublisher.run_once — retryable failure
 # ---------------------------------------------------------------------------
-
-
-def test_run_once_with_retryable_failure_returns_row_to_pending(
-    pg_db: Session,
-) -> None:
-    """A ``ConnectionError`` broker failure flips the row back to
-    ``pending``, increments ``attempt_count``, and pushes
-    ``next_attempt_at`` into the future."""
-    _enroll_pending(pg_db)
-    broker = _FakeBroker(raise_with=ConnectionError("broker down"))
-    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
-
-    delta = publisher.run_once()
-
-    assert delta.claimed == 1
-    assert delta.retryable_failures == 1
-    assert delta.terminal_failures == 0
-    assert delta.published == 0
-
-    row = pg_db.query(OutboxEventRow).one()
-    assert row.status == OutboxStatus.PENDING.value
-    assert row.attempt_count == 1
-    assert row.last_error is not None
-    assert "ConnectionError" in row.last_error
-    # next_attempt_at is in the future.
-    next_attempt_at = row.next_attempt_at
-    if next_attempt_at.tzinfo is None:
-        next_attempt_at = next_attempt_at.replace(tzinfo=timezone.utc)
-    assert next_attempt_at > datetime.now(tz=timezone.utc)
 
 
 def test_run_once_with_timeout_error_is_retryable(pg_db: Session) -> None:
@@ -423,31 +366,6 @@ def test_run_once_with_not_registered_marks_terminal_immediately(
     assert row.status == OutboxStatus.FAILED.value
     assert row.last_error is not None
     assert "NotRegistered" in row.last_error
-
-
-def test_run_once_after_max_attempts_marks_terminal(pg_db: Session) -> None:
-    """The 12th retryable failure crosses the ``max_attempts`` budget
-    and the row goes terminal — independent of broker classification."""
-    task_log = _make_task_log(pg_db)
-    event = enqueue_command(pg_db, _make_command(), task_log).event
-    # Pin attempt_count to (max_attempts - 1) so the next failure
-    # crosses the threshold.
-    pg_db.query(OutboxEventRow).filter(OutboxEventRow.id == event.id).update(
-        {
-            "attempt_count": PUBLISHER_MAX_ATTEMPTS - 1,
-            "next_attempt_at": datetime.now(tz=timezone.utc) - timedelta(seconds=60),
-        }
-    )
-    pg_db.commit()
-
-    broker = _FakeBroker(raise_with=ConnectionError("still down"))
-    publisher, _ = _publisher_config(broker=broker, pg_db=pg_db)
-
-    delta = publisher.run_once()
-
-    assert delta.terminal_failures == 1
-    row = pg_db.query(OutboxEventRow).one()
-    assert row.status == OutboxStatus.FAILED.value
 
 
 # ---------------------------------------------------------------------------

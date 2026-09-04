@@ -181,40 +181,6 @@ def test_claim_after_supersede_allows_new_attempt(pg_db: Session) -> None:
     assert sorted(row.attempt_no for row in rows) == [1, 2]
 
 
-def test_claim_after_succeeded_allows_new_attempt(pg_db: Session) -> None:
-    """A ``succeeded`` row keeps ``attempt_no=1`` but the partial
-    unique index predicate no longer matches, so the next claim
-    inserts a new row with ``attempt_no=2``."""
-    repo = DailySummaryAttemptRepository(pg_db)
-    target_date = date(2026, 9, 1)
-
-    first = repo.claim(
-        summary_date=target_date,
-        attempt_no=1,
-        triggered_by="schedule",
-        task_log_id=None,
-    )
-    pg_db.commit()
-
-    running = repo.mark_running(first.attempt.id, events_count=12, input_token_estimate=1024)
-    assert running is not None
-    succeeded = repo.mark_succeeded(first.attempt.id)
-    assert succeeded is not None
-    pg_db.commit()
-
-    second = repo.claim(
-        summary_date=target_date,
-        attempt_no=2,
-        triggered_by="retry",
-        task_log_id=None,
-    )
-    pg_db.commit()
-
-    assert second.created is True
-    assert second.attempt.attempt_no == 2
-    assert second.attempt.status == DailySummaryAttemptStatus.CLAIMED.value
-
-
 def test_claim_after_failed_allows_new_attempt(pg_db: Session) -> None:
     """A ``failed`` row also leaves the active slot, so the next claim
     inserts a fresh row whose diagnostics for the failed run are

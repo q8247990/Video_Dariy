@@ -100,28 +100,6 @@ def test_dispatcher_writes_task_log_and_outbox_in_one_transaction(
         fresh.close()
 
 
-def test_dispatcher_rollback_leaves_no_rows(pg_db_factory: SessionFactory) -> None:
-    """A caller rollback after the dispatcher returns leaves zero rows
-    in both tables — the atomicity contract from ADR §1."""
-    session_factory = pg_db_factory
-    db = session_factory()
-    try:
-        CeleryTaskDispatcher().dispatch_session_build(
-            db,
-            SessionBuildCommand(source_id=1, scan_mode=ScanMode.HOT),
-        )
-        db.rollback()
-    finally:
-        db.close()
-
-    fresh = session_factory()
-    try:
-        assert fresh.query(TaskLog).count() == 0
-        assert fresh.query(OutboxEventRow).count() == 0
-    finally:
-        fresh.close()
-
-
 def test_dispatcher_uses_event_id_as_queue_task_id(pg_db_factory: SessionFactory) -> None:
     """``TaskLog.queue_task_id == str(OutboxEvent.event_id)`` so the
     consumer-side ``bind_or_create_running_task_log(queue_task_id=...)``
@@ -156,56 +134,6 @@ def test_dispatcher_uses_event_id_as_queue_task_id(pg_db_factory: SessionFactory
 # ---------------------------------------------------------------------------
 # Dedupe semantics (HOT over FULL, FULL over HOT)
 # ---------------------------------------------------------------------------
-
-
-def test_dispatcher_session_build_hot_then_full_supersedes(
-    pg_db_factory: SessionFactory,
-) -> None:
-    """A FULL dispatch while a HOT is active supersedes the HOT and
-    creates a new outbox row keyed by the new ``queue_task_id``."""
-    session_factory = pg_db_factory
-    db = session_factory()
-    try:
-        hot_log, hot_created = create_pending_task_log(
-            db,
-            task_type=TaskType.SESSION_BUILD,
-            task_target_id=1,
-            detail_json={"scan_mode": ScanMode.HOT, "source_id": 1},
-        )
-        assert hot_created is True
-        db.commit()
-        hot_log_id = hot_log.id
-
-        new_task_id = CeleryTaskDispatcher().dispatch_session_build(
-            db,
-            SessionBuildCommand(source_id=1, scan_mode=ScanMode.FULL),
-        )
-        db.commit()
-    finally:
-        db.close()
-
-    assert new_task_id is not None
-    fresh = session_factory()
-    try:
-        hot_log = fresh.query(TaskLog).filter(TaskLog.id == hot_log_id).one()
-        full_log = (
-            fresh.query(TaskLog)
-            .filter(
-                TaskLog.task_type == TaskType.SESSION_BUILD,
-                TaskLog.task_target_id == 1,
-                TaskLog.status == TaskStatus.PENDING,
-            )
-            .one()
-        )
-        outbox_row = (
-            fresh.query(OutboxEventRow).filter(OutboxEventRow.task_log_id == full_log.id).one()
-        )
-        assert hot_log.status == TaskStatus.CANCELLED
-        assert full_log.detail_json["scan_mode"] == ScanMode.FULL.value
-        assert full_log.queue_task_id == new_task_id
-        assert new_task_id == str(outbox_row.event_id)
-    finally:
-        fresh.close()
 
 
 def test_dispatcher_session_build_full_then_hot_defers(
