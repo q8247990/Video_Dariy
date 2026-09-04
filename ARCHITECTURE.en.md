@@ -63,7 +63,7 @@ Video Directory / NAS -> Scan Task -> VideoFile -> VideoSession -> EventRecord -
 - Creates the FastAPI application
 - Registers the API Router and MCP Router
 - Runs `init_db()` at startup, which executes Alembic migrations and initializes the default admin user
-- Exposes `/health` and `/health/bootstrap`
+- Exposes `/health`, `/livez`, `/readyz`, `/metrics`, and `/health/bootstrap`
 
 ### 4.2 `src/api/`
 
@@ -119,7 +119,10 @@ Responsibility: Core domain services.
 
 Key services:
 
-- `session_builder.py`: Directory scanning, deduplication, session merging, sealing
+- `session_build/`: Directory scanning, deduplication, session merging, and sealing split into discovery, dedupe, reducer, persistence, seal policy, and runner stages
+- `analysis/`: Session analysis split into claim, chunk planning, sub-chunk execution, checkpoints, aggregation, and finalization
+- `summarizer/`: Daily-summary scheduling, evidence, generation, parsing, and finalization stages
+- `dispatch/` and `maintenance/`: Task claim/lease/dedupe/cancel plus hot scheduling, recovery, and retention policies
 - `session_analysis_video.py`: Session slicing, video segment processing
 - `daily_summary/*`: Daily report preprocessing and output parsing
 - `home_profile.py`: Family profile context building
@@ -167,7 +170,7 @@ Core entities:
 - `VideoSessionFileRel`: Ordered relationship between sessions and file segments
 - `EventRecord`: Structured event identified by AI
 - `DailySummary`: Daily report
-- `LLMProvider`: Model service configuration (includes `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` three video preprocessing fields; see §5.2, the keyframe path is disabled)
+- `LLMProvider`: Model service configuration and capability flags
 - `TaskLog`: Async task log and status
 - `WebhookConfig`: Webhook configuration
 - `HomeProfile` / `HomeEntityProfile`: Family profile
@@ -215,10 +218,10 @@ Key capabilities:
 
 Implemented tools:
 
-- `get_daily_summary`
+- `get_data_availability`
 - `search_events`
-- `get_event_detail`
-- `get_video_segments`
+- `get_sessions`
+- `get_daily_summary`
 - `ask_home_monitor`
 
 ### 4.10 `frontend/`
@@ -252,14 +255,14 @@ Nginx forwards `/api/`, `/mcp`, and `/health` to the backend.
 Core code:
 
 - `src/tasks/session_build.py`
-- `src/services/session_builder.py`
+- `src/services/session_build/runner.py`
 - `src/adapters/xiaomi_parser.py`
 
 Workflow:
 
 1. `task_maintenance.heartbeat` iterates over all enabled, non-paused video sources every 60 seconds
 2. If no active scan task of the same type exists for a video source, a hot scan task is dispatched
-3. `SessionBuilder.build()` calls `XiaomiDirectoryParser.scan_directory()` to scan the directory
+3. `session_build.runner.run()` invokes `XiaomiDirectoryParser.scan_directory()` through the discovery stage
 4. `VideoFile.file_path_hash` is used for deduplication, preventing duplicate ingestion and analysis
 5. New files are appended to the current open session in chronological order; if the gap between adjacent clips exceeds 61 seconds, a new session is created
 6. In hot scan mode, only the most recent open session is kept; older open sessions are sealed
@@ -278,7 +281,6 @@ Core code:
 
 - `src/tasks/analyzer.py`
 - `src/services/session_analysis_video.py`
-- `src/services/keyframe_extractor.py`
 - `src/services/video_analysis/output_parser.py`
 - `src/services/video_analysis/mapper.py`
 
@@ -287,8 +289,7 @@ Workflow:
 1. Tasks can only claim a session from `SEALED` state, transitioning it to `ANALYZING`
 2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds (10-min session-level chunk)
 3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 60 seconds) into sub-chunks; one LLM call per sub-chunk
-4. The LLM payload is fixed to `raw_mp4`: the 60s mp4 is sent directly to vLLM as base64 with `media_io_kwargs.video.num_frames=120`; vLLM uniformly samples 120 frames at 2fps under the 100M pixel budget (1216x672 per frame ≈ 88.7% of 720p). No client-side ffmpeg decode or cv2/numpy required.
-   - The keyframe path (client-side ffmpeg single-pass decode + MAD/pHash + top-N JPEG) is preserved in `keyframe_extractor.py` / `session_analysis_video.py` but disabled as a product decision: the API schema only accepts `raw_mp4`, the analyzer runtime force-overrides the mode to `raw_mp4` (migration `20260825_0011` normalized existing rows), and no configuration surface can re-enable it.
+4. The LLM payload is fixed to `raw_mp4`: each sub-chunk is sent as base64 with `media_io_kwargs.video.num_frames` for server-side uniform sampling. The client no longer retains keyframe decoding, MAD/pHash, or JPEG preprocessing paths.
 5. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
 6. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)
 7. The returned JSON is parsed and converted into multiple `EventRecord` entries (offsets are absolute session-time, non-negative)
@@ -312,7 +313,7 @@ Analysis and checkpoint/resume semantics:
 
 Additional mechanisms:
 
-- Task log binding and status persistence; detail_json adds `sub_chunk_count` / `llm_chunk_seconds` / `preprocess_mode` / `keyframe_total` / `keyframe_fallback`
+- Task log binding and status persistence; detail_json records sub-chunk planning and execution results
 - Token quota checking and token usage recording
 - Deadlock retry and analysis status rollback
 - On failure, the raw model response summary fragments are preserved for debugging
@@ -323,8 +324,7 @@ Additional mechanisms:
 Core code:
 
 - `src/tasks/summarizer.py`
-- `src/services/daily_summary/preprocess.py`
-- `src/services/daily_summary/output_parser.py`
+- `src/services/summarizer/`
 - `src/application/prompt/compiler.py`
 
 Workflow:
@@ -336,8 +336,8 @@ Workflow:
 5. If the prompt size is small, `single_pass` mode is used
 6. If the prompt size is large, `split_serial` mode is used: summaries are first generated per subject, then an overall summary is produced
 7. Results are trimmed to a display-friendly length range
-8. Upsert is performed using `summary_date` as the unique key
-9. If a relevant webhook subscription exists, a `daily_summary_generated` event is dispatched
+8. The report is published by `summary_date`, while `DailySummaryGenerationAttempt` retains every attempt
+9. One targeted webhook outbox event is created per matching subscriber for `daily_summary_generated`
 
 Protection mechanisms:
 
@@ -460,7 +460,9 @@ Model descriptions:
 - `backend`
   - FastAPI + Uvicorn
 - `celery_worker`
-  - Executes scan, analysis, daily report, webhook, and other async tasks
+  - Executes scan, daily-report, webhook, and maintenance tasks on the general queue
+- `celery_vision_worker`
+  - Consumes `analysis_hot` and `analysis_full` with `concurrency=1`
 - `celery_beat`
   - Scheduled dispatch of heartbeat and daily report tasks
 - `frontend`
@@ -472,7 +474,7 @@ Model descriptions:
 - `ffmpeg` is installed in the image
 - Frontend image uses a two-stage build: Node for building, Nginx for serving
 - `backend` depends on `postgres` and `redis` health checks
-- `celery_worker` / `celery_beat` depend on `backend` health check
+- `celery_worker` / `celery_vision_worker` / `celery_beat` / `outbox_publisher` depend on the `backend` health check
 
 ### 7.3 Volume Mounts
 
@@ -512,12 +514,6 @@ Key environment variables:
 - `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST` (Webhook SSRF-protection intranet allowlist)
 - `ANALYZER_SEGMENT_SECONDS`
 - `ANALYZER_LLM_CHUNK_SECONDS` (default 60; sub-chunk duration per LLM call)
-- (The following are inert compatibility-only: video preprocessing is raw_mp4-only, so the
-  keyframe path cannot be re-enabled)
-  `ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS` (default 8),
-  `ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD` (default 1.0),
-  `ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD` (default 6),
-  `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4` (default true)
 
 Note: The root `.env.example` has been updated to reflect the actual PostgreSQL, Redis, MCP, and playback cache directory configuration. Refer to `src/core/config.py` and `docker-compose.yml` as the authoritative runtime references.
 
@@ -560,9 +556,8 @@ Session analysis states (`analysis_status`) include:
 - `success`
 - `failed`
 
-A separate `pipeline_state` additionally tracks the progression of build/analyze/report
-pipeline stages and advances as checkpoints progress. Scan builds and task logs also have
-their own independent state sets.
+`pipeline_state.py` centralizes legal `VideoSession` and `TaskLog` transitions and writes
+an append-only `PipelineTransitionLog` audit. Scan builds and task logs retain their own state sets.
 
 ### 9.3 Media Lifecycle and Source Deletion (FK Policy)
 
@@ -643,15 +638,12 @@ Backend tests are located in `tests/unit/` and `tests/integration/`.
 Common commands:
 
 ```bash
-python3 -m pytest tests/unit -q         # unit tests (289)
+python3 -m pytest tests/unit -q         # unit tests
 python3 -m pytest -m postgres           # integration tests; requires real PostgreSQL (DATABASE_URL)
 python3 -m alembic upgrade head
-python3 -m alembic heads                # expect 20260902_0021
+python3 -m alembic heads                # expect 20260904_0022
 ruff check .
 ruff format --check src tests
-# Known exceptions: ruff format --check has 4 pre-existing out-of-scope failures in
-# src/application/prompt/compiler.py, src/application/qa/agent.py,
-# tests/unit/test_i18n.py, tests/unit/test_keyframe_extractor.py
 ```
 
 Existing test coverage includes:

@@ -63,7 +63,7 @@
 - 创建 FastAPI 应用
 - 注册 API Router 与 MCP Router
 - 启动时执行 `init_db()`，自动跑 Alembic 迁移并初始化默认管理员
-- 暴露 `/health` 与 `/health/bootstrap`
+- 暴露 `/health`、`/livez`、`/readyz`、`/metrics` 与 `/health/bootstrap`
 
 ### 4.2 `src/api/`
 
@@ -85,7 +85,6 @@
 - `src/api/v1/endpoints/media.py`
 - `src/api/v1/endpoints/home_profile.py`
 - `src/api/v1/endpoints/system_config.py`
-- `src/api/v1/endpoints/tags.py`
 - `src/api/v1/endpoints/onboarding.py`
 
 接口特点：
@@ -121,7 +120,10 @@
 
 关键服务：
 
-- `session_builder.py`：目录扫描、去重入库、Session 合并、封口
+- `session_build/`：按 discovery、dedupe、reducer、persistence、seal_policy 与 runner 拆分目录扫描、去重入库、Session 合并和封口
+- `analysis/`：按 claim、chunk plan、sub-chunk、checkpoint、聚合与 finalize 拆分 Session 分析
+- `summarizer/`：按调度、证据、生成、解析与 finalize 拆分日报生成
+- `dispatch/` 与 `maintenance/`：任务 claim/lease/dedupe/cancel，以及热调度、超时恢复、文件/日志清理
 - `session_analysis_video.py`：Session 切片、视频片段处理
 - `daily_summary/*`：日报预处理与输出解析
 - `home_profile.py`：家庭画像上下文构建
@@ -169,7 +171,7 @@
 - `VideoSessionFileRel`：Session 与文件片段顺序关系
 - `EventRecord`：AI 识别出的结构化事件
 - `DailySummary`：日报
-- `LLMProvider`：模型服务配置（含 `video_preprocess_mode` / `video_keyframe_target_n` / `video_keyframe_jpeg_quality` 三个视频预处理字段；见 §5.2，关键帧路径已停用）
+- `LLMProvider`：模型服务配置与能力标记
 - `TaskLog`：异步任务日志与状态
 - `WebhookConfig`：Webhook 配置
 - `HomeProfile` / `HomeEntityProfile`：家庭画像
@@ -256,14 +258,14 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 核心代码：
 
 - `src/tasks/session_build.py`
-- `src/services/session_builder.py`
+- `src/services/session_build/runner.py`
 - `src/adapters/xiaomi_parser.py`
 
 流程：
 
 1. `task_maintenance.heartbeat` 每 60 秒遍历所有启用且未暂停的视频源
 2. 若当前视频源没有同类活跃扫描任务，则派发热扫描任务
-3. `SessionBuilder.build()` 调用 `XiaomiDirectoryParser.scan_directory()` 扫描目录
+3. `session_build.runner.run()` 经 discovery 阶段调用 `XiaomiDirectoryParser.scan_directory()` 扫描目录
 4. 使用 `VideoFile.file_path_hash` 去重，避免重复入库和重复分析
 5. 新文件按时间顺序追加到当前 open Session，若相邻片段间隔大于 61 秒则创建新 Session
 6. 热扫描模式下保留最近 open Session，历史 open Session 被 seal
@@ -282,7 +284,6 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 - `src/tasks/analyzer.py`
 - `src/services/session_analysis_video.py`
-- `src/services/keyframe_extractor.py`
 - `src/services/video_analysis/output_parser.py`
 - `src/services/video_analysis/mapper.py`
 
@@ -291,8 +292,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
 2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒（10 分钟 session-level chunk）
 3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 60 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
-4. LLM 载荷固定为 `raw_mp4`：直接将 60 秒 mp4 base64 传给 vLLM，通过 `media_io_kwargs.video.num_frames=120` 让 vLLM 均匀采 120 帧（2fps），100M 预算下每帧 1216×672 ≈ 720p 88.7%。无需客户端 ffmpeg 解码或 cv2/numpy。
-   - 关键帧路径（客户端 ffmpeg 单遍解码 + MAD/pHash + top-N JPEG）的代码仍保留在 `keyframe_extractor.py` / `session_analysis_video.py` 中，但已作为产品决策停用：API schema 只接受 `raw_mp4`，analyzer 运行时强制覆盖为 `raw_mp4`（migration `20260825_0011` 已将存量行规范化），任何配置都无法重新接入。
+4. LLM 载荷固定为 `raw_mp4`：直接将 sub-chunk mp4 base64 传给视觉模型，并通过 `media_io_kwargs.video.num_frames` 请求服务端均匀采样。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径。
 5. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
 6. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
 7. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
@@ -315,7 +315,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 附加机制：
 
-- 任务日志绑定与状态落库；detail_json 新增字段 `sub_chunk_count` / `llm_chunk_seconds` / `preprocess_mode` / `keyframe_total` / `keyframe_fallback`
+- 任务日志绑定与状态落库；detail_json 记录 sub-chunk 计划和执行结果
 - token quota 检查与 token usage 记录
 - 死锁重试与分析状态回滚
 - 失败时保留原始模型返回摘要片段，方便排查
@@ -326,8 +326,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 核心代码：
 
 - `src/tasks/summarizer.py`
-- `src/services/daily_summary/preprocess.py`
-- `src/services/daily_summary/output_parser.py`
+- `src/services/summarizer/`
 - `src/application/prompt/compiler.py`
 
 流程：
@@ -339,8 +338,8 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 5. 如果 prompt 规模较小，走 `single_pass`
 6. 如果 prompt 规模过大，走 `split_serial`：先按对象生成摘要，再生成总述
 7. 将结果裁剪到更适合展示的长度区间
-8. 以 `summary_date` 为唯一键执行 upsert
-9. 若配置了相关 Webhook 订阅，派发 `daily_summary_generated`
+8. 以 `summary_date` 为唯一键发布日报，并以 `DailySummaryGenerationAttempt` 保留每次尝试
+9. 对每个匹配订阅者写入一个定向 webhook outbox 事件，事件类型为 `daily_summary_generated`
 
 保护机制：
 
@@ -459,7 +458,9 @@ DailySummary 1 --- 1 summary_date
 - `backend`
   - FastAPI + Uvicorn
 - `celery_worker`
-  - 执行扫描、分析、日报、Webhook 等异步任务
+  - 执行扫描、日报、Webhook 和维护等通用队列任务
+- `celery_vision_worker`
+  - 以 `concurrency=1` 消费 `analysis_hot` / `analysis_full` 队列
 - `celery_beat`
   - 定时派发心跳与日报任务
 - `frontend`
@@ -471,7 +472,7 @@ DailySummary 1 --- 1 summary_date
 - 镜像中安装 `ffmpeg`
 - 前端镜像为两阶段构建：Node 构建，Nginx 运行
 - `backend` 依赖 `postgres` 和 `redis` 健康检查
-- `celery_worker` / `celery_beat` 依赖 `backend` 健康检查
+- `celery_worker` / `celery_vision_worker` / `celery_beat` / `outbox_publisher` 依赖 `backend` 健康检查
 
 ### 7.3 挂载约定
 
@@ -558,8 +559,7 @@ Session 分析状态（`analysis_status`）主要包括：
 - `success`
 - `failed`
 
-`pipeline_state` 额外刻画构建/分析/日报等流水线阶段的推进状态，并随检查点推进而更新。
-扫描构建与任务日志也有独立的运行状态集合。
+`pipeline_state.py` 集中定义并执行 `VideoSession` 与 `TaskLog` 的合法状态迁移，同时写入 append-only 的 `PipelineTransitionLog` 审计。扫描构建与任务日志有各自的运行状态集合。
 
 ### 9.3 媒体生命周期与源删除（外键策略）
 
@@ -632,15 +632,14 @@ Session 分析状态（`analysis_status`）主要包括：
 常用命令：
 
 ```bash
-python3 -m pytest tests/unit -q         # 单元测试（289 项）
+python3 -m pytest tests/unit -q         # 单元测试
 python3 -m pytest -m postgres           # 集成测试，需真实 PostgreSQL（DATABASE_URL）
 python3 -m alembic upgrade head
-python3 -m alembic heads                # 期望 20260902_0021
+python3 -m alembic heads                # 期望 20260904_0022
 ruff check .
 ruff format --check src tests
 # 已知例外：ruff format --check 在
 # src/application/prompt/compiler.py、src/application/qa/agent.py、
-# tests/unit/test_i18n.py、tests/unit/test_keyframe_extractor.py 存在既有范围外失败
 ```
 
 现有测试覆盖了：

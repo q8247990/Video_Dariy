@@ -40,7 +40,7 @@
 }
 ```
 
-## 3. 鉴权与健康检查
+## 3. 鉴权、OpenAPI 与运行探针
 
 ### Auth
 
@@ -48,19 +48,21 @@
   - 初始化管理员，仅首次有效
 - `POST /api/v1/auth/login`
   - 登录，返回 JWT Token 与当前用户信息
-- `GET /api/v1/auth/me`
-  - 获取当前登录用户
-- `POST /api/v1/auth/change-password`
-  - 修改密码
-- `POST /api/v1/auth/logout`
-  - 登出，占位接口
 
 ### Health
 
 - `GET /health`
-  - 基础健康检查
+  - 前端反代的基础健康检查，返回进程存活结果
+- `GET /livez`
+  - 进程存活探针，不检查外部依赖
+- `GET /readyz`
+  - 就绪探针；检查数据库、Redis 和当前 Alembic revision，不就绪时返回 `503`
+- `GET /metrics`
+  - 返回 JSON 指标：outbox 延迟/失败、heartbeat 恢复计数和分析 checkpoint 进度
 - `GET /health/bootstrap`
   - 返回 Alembic 版本、已注册表数量与表名，用于启动自检
+- `GET /api/v1/openapi.json`
+  - FastAPI 生成的 OpenAPI 描述，是请求/响应 schema 的最终参考
 
 ## 4. 仪表盘与引导
 
@@ -80,18 +82,12 @@
   - 批量获取视频源状态，参数 `source_ids=1,2,3`
 - `POST /`
   - 创建视频源
-- `GET /{id}`
-  - 获取视频源详情
 - `GET /{id}/status`
   - 获取视频源运行状态
 - `PUT /{id}`
   - 更新视频源
 - `DELETE /{id}`
   - 删除视频源；若存在运行中任务会拒绝
-- `POST /{id}/enable`
-  - 启用视频源
-- `POST /{id}/disable`
-  - 禁用视频源
 - `POST /{id}/test`
   - 校验视频源路径与可读性
 - `POST /{id}/pause`
@@ -134,8 +130,6 @@
 
 - `GET /`
   - 分页查询 Session
-- `GET /{id}`
-  - 获取 Session 详情
 - `GET /{id}/events`
   - 获取指定 Session 下的事件列表
 
@@ -148,17 +142,6 @@
   - 支持 `source_id`、`object_type`、`action_type`、`analysis_status`
 - `GET /{id}`
   - 获取事件详情，附带来源、会话和标签信息
-
-### Tags
-
-前缀：`/api/v1/tags`
-
-- `GET /`
-  - 分页查询标签，支持 `tag_type`、`enabled`
-- `POST /`
-  - 创建标签
-- `PUT /{id}`
-  - 更新标签
 
 ## 8. 日报与问答 API
 
@@ -203,8 +186,14 @@
   - 更新实体
 - `DELETE /entities/{entity_id}`
   - 逻辑删除实体
-- `GET /context`
-  - 获取用于问答/日报/分析的家庭上下文
+- `GET /entities/{entity_id}/image`
+  - 获取实体头像文件
+- `POST /entities/{entity_id}/image`
+  - 上传实体头像
+- `DELETE /entities/{entity_id}/image`
+  - 删除实体头像
+- `POST /entities/{entity_id}/generate-appearance`
+  - 通过默认视觉模型生成实体外观描述
 - `GET /options`
   - 获取前端可选项枚举
 
@@ -234,16 +223,12 @@
   - 删除模型提供方
 - `GET /usage/daily`
   - 查询最近 N 天模型调用用量，`days` 最大 30
-- `POST /{id}/enable`
-  - 启用提供方
-- `POST /{id}/disable`
-  - 禁用提供方
 - `POST /{id}/set-default-vision`
   - 设为默认视觉模型
 - `POST /{id}/set-default-qa`
   - 设为默认问答模型
 - `POST /{id}/test`
-  - 连通性测试
+  - 执行连通性、视觉和工具调用能力探测，并回写可用能力
 
 ### Webhooks
 
@@ -272,6 +257,8 @@
   - 播放合并后的 Session 视频
 - `GET /sessions/{session_id}/hls/index.m3u8`
   - 获取 Session 的 HLS 清单
+- `GET /sessions/{session_id}/hls/{file_name}`
+  - 获取 HLS 媒体分片；播放 URL 必须带签名能力参数
 
 ## 12. MCP 接口
 
@@ -290,10 +277,10 @@
 
 当前工具能力：
 
-- `get_daily_summary`
+- `get_data_availability`
 - `search_events`
-- `get_event_detail`
-- `get_video_segments`
+- `get_sessions`
+- `get_daily_summary`
 - `ask_home_monitor`
 
 ## 13. 模块与路由文件映射
@@ -304,7 +291,6 @@
 - `src/api/v1/endpoints/tasks.py` -> 任务与任务日志
 - `src/api/v1/endpoints/sessions.py` -> Session
 - `src/api/v1/endpoints/events.py` -> 事件
-- `src/api/v1/endpoints/tags.py` -> 标签
 - `src/api/v1/endpoints/daily_summaries.py` -> 日报
 - `src/api/v1/endpoints/chat.py` -> 问答
 - `src/api/v1/endpoints/home_profile.py` -> 家庭画像
@@ -320,4 +306,6 @@
 - HTTP API 以后台管理为主，天然偏内网/受控环境
 - MCP 是单独的工具调用入口，不走 `/api/v1`
 - 媒体接口用于前端播放，和普通业务接口分开
-- 大部分异步动作不直接执行，而是返回 Celery `task_id`
+- 大部分异步动作不直接执行，而是创建 `TaskLog` 和事务性 `OutboxEvent`，并返回 outbox `event_id` 形式的 Celery `task_id`
+- `/health` 由前端 Nginx 反代；`/livez`、`/readyz`、`/metrics` 和 `/health/bootstrap` 是后端直连运维端点，若需从前端入口暴露，必须额外配置反代
+- Webhook 写入只接受规范化的 `event_subscriptions_json`；`event_types_json` 已从应用模型移除。迁移 `20260904_0022` 为不可逆操作，生产执行前须完成线上盘点和已验证备份
