@@ -89,14 +89,53 @@ def _build_agent_system_prompt(
 # ---------------------------------------------------------------------------
 
 
+def _extract_reference_ids(result_str: str) -> tuple[list[int], list[int]]:
+    """从工具结果 JSON 中提取事件/会话引用 ID。
+
+    ``search_events`` 返回 ``{"events": [{"id": ...}]}``，``get_sessions``
+    返回 ``{"sessions": [{"id": ...}]}``。解析失败或结构不符时返回空列表，
+    引用提取绝不影响主回答流程。
+    """
+    try:
+        payload = json.loads(result_str)
+    except (json.JSONDecodeError, TypeError):
+        return [], []
+    if not isinstance(payload, dict):
+        return [], []
+
+    event_ids: list[int] = []
+    for item in payload.get("events") or []:
+        if isinstance(item, dict) and isinstance(item.get("id"), int):
+            event_ids.append(item["id"])
+
+    session_ids: list[int] = []
+    for item in payload.get("sessions") or []:
+        if isinstance(item, dict) and isinstance(item.get("id"), int):
+            session_ids.append(item["id"])
+
+    return event_ids, session_ids
+
+
+def _append_unique(target: list[int], values: list[int]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
 class QAAgentResult:
     def __init__(
         self,
         answer_text: str,
         tool_calls_log: list[dict[str, Any]],
+        referenced_event_ids: list[int] | None = None,
+        referenced_session_ids: list[int] | None = None,
     ):
         self.answer_text = answer_text
         self.tool_calls_log = tool_calls_log
+        self.referenced_event_ids = referenced_event_ids if referenced_event_ids is not None else []
+        self.referenced_session_ids = (
+            referenced_session_ids if referenced_session_ids is not None else []
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +184,8 @@ class QAAgent:
         ]
 
         tool_calls_log: list[dict[str, Any]] = []
+        referenced_event_ids: list[int] = []
+        referenced_session_ids: list[int] = []
 
         # 4. Agentic loop（最多 MAX_TOOL_ROUNDS 轮）
         for round_idx in range(MAX_TOOL_ROUNDS):
@@ -169,6 +210,8 @@ class QAAgent:
                 return QAAgentResult(
                     answer_text=content or "",
                     tool_calls_log=tool_calls_log,
+                    referenced_event_ids=referenced_event_ids,
+                    referenced_session_ids=referenced_session_ids,
                 )
 
             # 将 assistant message（含 tool_calls）追加到 messages
@@ -194,6 +237,10 @@ class QAAgent:
                 )
 
                 result_str = execute_tool(self.db, tool_name, arguments)
+
+                new_event_ids, new_session_ids = _extract_reference_ids(result_str)
+                _append_unique(referenced_event_ids, new_event_ids)
+                _append_unique(referenced_session_ids, new_session_ids)
 
                 tool_calls_log.append(
                     {
@@ -232,4 +279,6 @@ class QAAgent:
         return QAAgentResult(
             answer_text=final_answer or "",
             tool_calls_log=tool_calls_log,
+            referenced_event_ids=referenced_event_ids,
+            referenced_session_ids=referenced_session_ids,
         )
