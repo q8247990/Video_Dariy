@@ -44,12 +44,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional
 
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
-from src.services.pipeline_constants import SessionAnalysisStatus
+from src.services.pipeline_constants import SessionAnalysisStatus, TaskType
 from src.services.session_build.reducer import (
     EXTEND,
     NEW_SESSION,
@@ -88,6 +90,45 @@ def find_open_sessions_for_source(
     if order_by_end_desc:
         query = query.order_by(VideoSession.session_end_time.desc())
     return query.all()
+
+
+def find_stuck_sealed_sessions(db: Session, source_id: int) -> list[VideoSession]:
+    """Return the source's ``SEALED`` sessions that lost their analysis handoff.
+
+    A session whose seal committed but whose analyzer dispatch never
+    landed (worker death between the two commits, or a swallowed
+    dispatch error) sits in ``SEALED`` with **no** ``session_analysis``
+    ``TaskLog`` row at all. The next build re-dispatches these so the
+    handoff self-heals.
+
+    The "no TaskLog at all" predicate is deliberate: a session that
+    exhausted its recovery budget is also ``SEALED`` but carries a
+    terminal ``TaskLog`` (TIMEOUT), so it is excluded here and left
+    for manual retry instead of being auto-re-dispatched in a loop.
+    """
+    # Hermetic SQLite contexts without the task_log table (minimal unit
+    # schemas) have nothing to cross-reference; report no stuck sessions.
+    if db.bind is None or not inspect(db.bind).has_table(TaskLog.__tablename__):
+        return []
+
+    analysis_log_exists = (
+        db.query(TaskLog.id)
+        .filter(
+            TaskLog.task_type == TaskType.SESSION_ANALYSIS,
+            TaskLog.task_target_id == VideoSession.id,
+        )
+        .exists()
+    )
+    return (
+        db.query(VideoSession)
+        .filter(
+            VideoSession.source_id == source_id,
+            VideoSession.analysis_status == SessionAnalysisStatus.SEALED,
+            ~analysis_log_exists,
+        )
+        .order_by(VideoSession.session_end_time.asc())
+        .all()
+    )
 
 
 def _next_rel_sort_index(db: Session, session_id: int) -> int:
@@ -349,4 +390,5 @@ def apply_file_actions(
 __all__ = [
     "apply_file_actions",
     "find_open_sessions_for_source",
+    "find_stuck_sealed_sessions",
 ]

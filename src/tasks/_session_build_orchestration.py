@@ -26,8 +26,16 @@ from src.adapters.xiaomi_parser import XiaomiDirectoryParser
 from src.application.pipeline.commands import AnalyzeSessionCommand
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import ScanMode, SourceType, TaskStatus, TaskType
+from src.services.pipeline_constants import (
+    AnalysisPriority,
+    ScanMode,
+    SourceType,
+    TaskStatus,
+    TaskType,
+)
+from src.services.session_build.persistence import find_stuck_sealed_sessions
 from src.services.session_build.runner import run_full, run_hot
+from src.services.session_build.types import SealedSessionInfo
 from src.services.system_config_registry import HOME_TIMEZONE, get_config
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
@@ -115,6 +123,25 @@ def _dispatch_analysis_for_sealed(db: Session, sealed_sessions: list) -> list[di
     return dispatched
 
 
+def _stuck_sealed_envelopes(db: Session, source_id: int) -> list[SealedSessionInfo]:
+    """Dispatch envelopes for sealed sessions that lost their analysis handoff.
+
+    Self-heal for the split-commit failure where a build's seal
+    transition committed but the analyzer dispatch did not (worker
+    death or a swallowed dispatch error): those sessions sit in
+    ``SEALED`` with no ``session_analysis`` TaskLog and no other
+    mechanism would ever re-dispatch them.
+    """
+    return [
+        SealedSessionInfo(
+            session_id=session.id,
+            source_id=source_id,
+            priority=session.analysis_priority or AnalysisPriority.HOT,
+        )
+        for session in find_stuck_sealed_sessions(db, source_id)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Shared task body: TaskLog lifecycle + cancel/failure handling.
 # ---------------------------------------------------------------------------
@@ -169,6 +196,15 @@ def _run_with_task_log_lifecycle(
             return outcome
 
         build_result = outcome["result"]
+        # Sessions this build just sealed are SEALED inside this
+        # transaction and carry no TaskLog yet; exclude them so the
+        # stuck-sweep count and the dispatch list do not double them.
+        fresh_ids = {info.session_id for info in build_result.sealed_sessions}
+        stuck_envelopes = [
+            envelope
+            for envelope in _stuck_sealed_envelopes(db, source_id)
+            if envelope.session_id not in fresh_ids
+        ]
         finalize_task_log(
             task_log,
             TaskStatus.SUCCESS,
@@ -180,19 +216,25 @@ def _run_with_task_log_lifecycle(
                 "scan_end": outcome["scan_end"].isoformat(),
                 "files_found": build_result.files_found,
                 "files_inserted": build_result.files_inserted,
-                "files_skipped": build_result.files_skipped,
                 "sessions_created": build_result.sessions_created,
                 "sessions_sealed": build_result.sessions_sealed,
+                "analysis_redispatched": len(stuck_envelopes),
             },
         )
+        # Dispatch before the commit: seal and analyzer handoff commit
+        # atomically, so a worker death can no longer leave a session
+        # SEALED without an analysis TaskLog.
+        dispatched = _dispatch_analysis_for_sealed(
+            db, [*build_result.sealed_sessions, *stuck_envelopes]
+        )
         db.commit()
-        dispatched = _dispatch_analysis_for_sealed(db, build_result.sealed_sessions)
         return {
             "files_found": build_result.files_found,
             "files_inserted": build_result.files_inserted,
             "sessions_created": build_result.sessions_created,
             "sessions_sealed": build_result.sessions_sealed,
             "analysis_dispatched": len(dispatched),
+            "analysis_redispatched": len(stuck_envelopes),
         }
 
     except TaskCancellationRequested as exc:
