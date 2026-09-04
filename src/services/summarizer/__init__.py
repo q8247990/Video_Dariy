@@ -64,7 +64,8 @@ stage:
 
 ``finalize``
     The final-stage helpers the Celery task calls into:
-    ``find_subscribed_webhooks`` and ``build_webhook_payload``.
+    ``find_subscribed_webhooks`` (the per-day pre-publish discovery
+    of subscribers).
     The actual ``publish_daily_summary`` call lives in
     :mod:`src.tasks.summarizer` so this layer stays free of
     :mod:`src.application.*` imports.
@@ -87,7 +88,6 @@ from src.services.summarizer.constants import (
 )
 from src.services.summarizer.evidence import Evidence, build_evidence
 from src.services.summarizer.finalize import (
-    build_webhook_payload,
     find_subscribed_webhooks,
 )
 from src.services.summarizer.generation import (
@@ -139,7 +139,6 @@ __all__ = [
     "build_evidence",
     "build_fallback_overall_summary",
     "build_subject_fallback_summary",
-    "build_webhook_payload",
     "claim_attempt",
     "claim_dispatch_guard",
     "clamp_summary_payload",

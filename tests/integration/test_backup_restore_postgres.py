@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session
 
 from scripts.backup_restore_db import run_backup, run_restore, verify_checksum
+from src.db.init_db import EXPECTED_ALEMBIC_REVISION
 from src.models.task_log import TaskLog
 from src.models.video_source import VideoSource
 
@@ -122,7 +123,8 @@ def test_backup_verify_restore_roundtrip_preserves_revision_and_counts(
     finally:
         target_engine.dispose()
 
-    assert restored_revision == source_revision == "20260902_0021"
+    assert restored_revision == source_revision
+    assert restored_revision == EXPECTED_ALEMBIC_REVISION
     assert restored_counts == source_counts == seeded
 
 

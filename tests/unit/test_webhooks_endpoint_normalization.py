@@ -16,21 +16,23 @@ def test_normalize_webhook_payload_prefers_event_subscriptions() -> None:
         {"event": "daily_summary_generated", "version": "1.0"},
         {"event": "all", "version": ""},
     ]
-    assert normalized["event_types_json"] == ["daily_summary_generated", "all"]
+    assert "event_types_json" not in normalized
 
 
-def test_normalize_webhook_payload_accepts_legacy_event_types() -> None:
+def test_normalize_webhook_payload_ignores_unknown_keys() -> None:
     payload = {
-        "event_types_json": ["daily_summary_generated", "question_answered", ""],
+        "event_subscriptions_json": [
+            {"event": "daily_summary_generated", "version": "1.0"},
+        ],
+        "event_types_json": ["should_be_discarded"],
     }
 
     normalized = _normalize_webhook_payload(payload)
 
     assert normalized["event_subscriptions_json"] == [
-        {"event": "daily_summary_generated", "version": ""},
-        {"event": "question_answered", "version": ""},
+        {"event": "daily_summary_generated", "version": "1.0"},
     ]
-    assert normalized["event_types_json"] == ["daily_summary_generated", "question_answered"]
+    assert "event_types_json" not in normalized
 
 
 def test_normalize_webhook_payload_defaults_to_empty() -> None:
@@ -39,4 +41,4 @@ def test_normalize_webhook_payload_defaults_to_empty() -> None:
     normalized = _normalize_webhook_payload(payload)
 
     assert normalized["event_subscriptions_json"] == []
-    assert normalized["event_types_json"] == []
+    assert "event_types_json" not in normalized

@@ -26,17 +26,6 @@ def _extract_subscriptions(hook: WebhookConfig) -> list[dict[str, str]]:
             if normalized is not None:
                 subscriptions.append(normalized)
 
-    if subscriptions:
-        return subscriptions
-
-    legacy_events = hook.event_types_json
-    if isinstance(legacy_events, list):
-        for event_name in legacy_events:
-            event = str(event_name or "").strip()
-            if not event:
-                continue
-            subscriptions.append({"event": event, "version": ""})
-
     return subscriptions
 
 

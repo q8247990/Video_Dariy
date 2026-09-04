@@ -54,7 +54,6 @@ from src.models.task_log import TaskLog
 from src.models.webhook_config import WebhookConfig
 from src.services.summarizer import (
     WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-    build_webhook_payload,
     claim_attempt,
     claim_dispatch_guard,
     find_subscribed_webhooks,
@@ -360,7 +359,7 @@ def test_pg_dispatch_guard_holds_across_sessions(
 
 
 # ---------------------------------------------------------------------------
-# Webhook fan-out (PG-side outbox enrollment + legacy payload shape)
+# Webhook subscriber discovery.
 # ---------------------------------------------------------------------------
 
 
@@ -376,22 +375,23 @@ def test_pg_find_subscribed_webhooks_filters_disabled(
                 WebhookConfig(
                     name="matching-enabled",
                     url="https://example.com/hook",
-                    event_types_json=[WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED],
-                    event_subscriptions_json=None,
+                    event_subscriptions_json=[
+                        {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""}
+                    ],
                     enabled=True,
                 ),
                 WebhookConfig(
                     name="non-matching-enabled",
                     url="https://example.com/other",
-                    event_types_json=["other_event"],
-                    event_subscriptions_json=None,
+                    event_subscriptions_json=[{"event": "other_event", "version": ""}],
                     enabled=True,
                 ),
                 WebhookConfig(
                     name="matching-disabled",
                     url="https://example.com/disabled",
-                    event_types_json=[WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED],
-                    event_subscriptions_json=None,
+                    event_subscriptions_json=[
+                        {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""}
+                    ],
                     enabled=False,
                 ),
             ]
@@ -402,26 +402,6 @@ def test_pg_find_subscribed_webhooks_filters_disabled(
         assert ids == [1]
     finally:
         db.close()
-
-
-@pytest.mark.postgres
-def test_pg_build_webhook_payload_uses_legacy_envelope(
-    postgres_migrated_engine: Engine,
-) -> None:
-    """The legacy payload shape — ``data.date`` + ``data.summary_title`` — survives."""
-    payload = build_webhook_payload(
-        target_date=date(2026, 9, 2),
-        summary_title="2026-09-02 家庭日报",
-        overall_summary="今天整体平稳。",
-        subject_sections=[{"subject_name": "爸爸", "summary": "在客厅"}],
-        attention_items=[{"title": "门口停留"}],
-        event_count=4,
-    )
-    assert payload["event"] == WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED
-    assert payload["version"] == "1.0"
-    assert payload["data"]["date"] == "2026-09-02"
-    assert payload["data"]["summary_title"] == "2026-09-02 家庭日报"
-    assert payload["data"]["event_count"] == 4
 
 
 # ---------------------------------------------------------------------------

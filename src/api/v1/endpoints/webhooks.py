@@ -16,16 +16,8 @@ from src.services.webhook_url_policy import WebhookUrlPolicyError, validate_webh
 
 def _normalize_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
     subscriptions = payload.get("event_subscriptions_json")
-    if subscriptions is None:
-        legacy_events = payload.get("event_types_json")
-        if isinstance(legacy_events, list):
-            subscriptions = [
-                {"event": str(event_name).strip(), "version": ""}
-                for event_name in legacy_events
-                if str(event_name or "").strip()
-            ]
-        else:
-            subscriptions = []
+    if not isinstance(subscriptions, list):
+        subscriptions = []
 
     normalized_subscriptions: list[dict[str, str]] = []
     for item in subscriptions:
@@ -38,7 +30,7 @@ def _normalize_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
         normalized_subscriptions.append({"event": event, "version": version})
 
     payload["event_subscriptions_json"] = normalized_subscriptions
-    payload["event_types_json"] = [item["event"] for item in normalized_subscriptions]
+    payload.pop("event_types_json", None)
     return payload
 
 
@@ -121,7 +113,11 @@ def test_webhook(
     try:
         orchestrator.dispatch_webhook(
             db,
-            SendWebhookCommand(event_type="test_event", payload=payload),
+            SendWebhookCommand(
+                event_type="test_event",
+                payload=payload,
+                webhook_id=int(id),
+            ),
         )
         db.commit()
     except OperationalError as e:

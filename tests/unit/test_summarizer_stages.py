@@ -43,7 +43,6 @@ from src.services.summarizer import (
     SERIAL_SPLIT_PROMPT_THRESHOLD,
     WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
     build_evidence,
-    build_webhook_payload,
     claim_attempt,
     claim_dispatch_guard,
     clamp_summary_payload,
@@ -516,8 +515,9 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
         WebhookConfig(
             name="matching",
             url="https://example.com/hook",
-            event_types_json=[WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED],
-            event_subscriptions_json=None,
+            event_subscriptions_json=[
+                {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""},
+            ],
             enabled=True,
         )
     )
@@ -525,8 +525,7 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
         WebhookConfig(
             name="non-matching",
             url="https://example.com/other",
-            event_types_json=["other_event"],
-            event_subscriptions_json=None,
+            event_subscriptions_json=[{"event": "other_event", "version": ""}],
             enabled=True,
         )
     )
@@ -534,30 +533,14 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
         WebhookConfig(
             name="disabled",
             url="https://example.com/disabled",
-            event_types_json=[WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED],
-            event_subscriptions_json=None,
+            event_subscriptions_json=[
+                {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""},
+            ],
             enabled=False,
         )
     )
     pg_db.commit()
     assert find_subscribed_webhooks(pg_db) == [1]
-
-
-def test_build_webhook_payload_shape(pg_db: Session) -> None:
-    payload = build_webhook_payload(
-        target_date=date(2026, 3, 13),
-        summary_title="2026-03-13 家庭日报",
-        overall_summary="整体平稳。",
-        subject_sections=[{"subject_name": "爸爸", "summary": "在客厅"}],
-        attention_items=[],
-        event_count=3,
-    )
-    assert payload["event"] == WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED
-    assert payload["version"] == "1.0"
-    assert "generated_at" in payload
-    assert payload["data"]["date"] == "2026-03-13"
-    assert payload["data"]["summary_title"] == "2026-03-13 家庭日报"
-    assert payload["data"]["event_count"] == 3
 
 
 # ---------------------------------------------------------------------------

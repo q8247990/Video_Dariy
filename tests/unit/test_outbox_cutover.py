@@ -434,6 +434,71 @@ def test_dispatcher_webhook_passes_event_type_and_payload_in_kwargs(
         fresh.close()
 
 
+def test_dispatcher_webhook_with_target_id_forwards_webhook_id(
+    pg_db_factory: SessionFactory,
+) -> None:
+    """Targeted dispatch forwards ``webhook_id`` so the consumer
+    delivers to one subscriber only (no fan-out duplicate)."""
+    session_factory = pg_db_factory
+    db = session_factory()
+    try:
+        task_id = CeleryTaskDispatcher().dispatch_webhook(
+            db,
+            SendWebhookCommand(
+                event_type="daily_summary_generated",
+                payload={"hook_only": True},
+                webhook_id=42,
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    fresh = session_factory()
+    try:
+        outbox_row = fresh.query(OutboxEventRow).one()
+        assert task_id == str(outbox_row.event_id)
+        assert outbox_row.kwargs_json == {
+            "event_type": "daily_summary_generated",
+            "payload": {"hook_only": True},
+            "webhook_id": 42,
+        }
+        task_log = fresh.query(TaskLog).filter(TaskLog.id == outbox_row.task_log_id).one()
+        assert task_log.task_type == "webhook_delivery"
+        assert task_log.task_target_id == 42
+        assert task_log.detail_json["webhook_id"] == 42
+    finally:
+        fresh.close()
+
+
+def test_dispatcher_webhook_without_target_id_omits_webhook_id(
+    pg_db_factory: SessionFactory,
+) -> None:
+    """Without ``command.webhook_id`` the dispatcher uses the legacy
+    fan-out semantics: the outbox kwargs carry no ``webhook_id`` so
+    ``send_webhook_task`` falls back to subscriber iteration."""
+    session_factory = pg_db_factory
+    db = session_factory()
+    try:
+        CeleryTaskDispatcher().dispatch_webhook(
+            db,
+            SendWebhookCommand(event_type="test_event", payload={"k": 1}),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    fresh = session_factory()
+    try:
+        outbox_row = fresh.query(OutboxEventRow).one()
+        assert "webhook_id" not in outbox_row.kwargs_json
+        task_log = fresh.query(TaskLog).filter(TaskLog.id == outbox_row.task_log_id).one()
+        assert task_log.task_target_id is None
+        assert "webhook_id" not in (task_log.detail_json or {})
+    finally:
+        fresh.close()
+
+
 # ---------------------------------------------------------------------------
 # Fake dispatcher signature — protocol satisfaction
 # ---------------------------------------------------------------------------

@@ -47,7 +47,7 @@ Hot/full scan semantics (preserved)
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
@@ -243,16 +243,34 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
         for retries). We still create a fresh ``TaskLog`` row so the
         outbox row's FK target is non-null and so operators have a
         delivery trail.
+
+        When ``command.webhook_id`` is set, the task receives a
+        targeted ``webhook_id`` kwarg so the consumer delivers to
+        exactly that one subscriber; the canonical
+        ``publish_daily_summary`` use case uses this to enroll one
+        outbox row per subscriber and avoids the fan-out duplicate
+        path. Without ``webhook_id``, the consumer falls back to the
+        legacy fan-out semantics so existing producers that have not
+        yet migrated continue to work.
         """
+        detail_json = {
+            "event_type": command.event_type,
+            "payload_keys": sorted((command.payload or {}).keys()),
+        }
+        kwargs: dict[str, Any] = {
+            "event_type": command.event_type,
+            "payload": command.payload,
+        }
+        if command.webhook_id is not None:
+            kwargs["webhook_id"] = int(command.webhook_id)
+            detail_json["webhook_id"] = int(command.webhook_id)
+
         pending_log = TaskLog(
             task_type="webhook_delivery",
-            task_target_id=None,
+            task_target_id=command.webhook_id,
             dedupe_key=None,
             status="pending",
-            detail_json={
-                "event_type": command.event_type,
-                "payload_keys": sorted((command.payload or {}).keys()),
-            },
+            detail_json=detail_json,
         )
         db.add(pending_log)
         db.flush()
@@ -263,10 +281,7 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
                 task_name="src.tasks.webhook.send_webhook_task",
                 queue=DEFAULT_QUEUE,
                 args=(),
-                kwargs={
-                    "event_type": command.event_type,
-                    "payload": command.payload,
-                },
+                kwargs=kwargs,
             ),
             pending_log,
         )

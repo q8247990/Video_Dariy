@@ -9,7 +9,6 @@ class WebhookBase(BaseModel):
     url: str
     headers_json: Optional[Any] = None
     event_subscriptions_json: Optional[list[dict[str, str]]] = None
-    event_types_json: Optional[list[str]] = None
     enabled: bool = True
 
 
@@ -22,7 +21,6 @@ class WebhookUpdate(BaseModel):
     url: Optional[str] = None
     headers_json: Optional[Any] = None
     event_subscriptions_json: Optional[list[dict[str, str]]] = None
-    event_types_json: Optional[list[str]] = None
     enabled: Optional[bool] = None
 
 

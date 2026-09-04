@@ -28,7 +28,6 @@ from sqlalchemy.orm import Session
 
 from src.application.pipeline.commands import (
     GenerateDailySummaryCommand,
-    SendWebhookCommand,
 )
 from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.application.prompt.compiler import compile_daily_summary_prompt
@@ -50,10 +49,8 @@ from src.services.provider_selector import (
     find_required_enabled_provider,
 )
 from src.services.summarizer import (
-    WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
     attempt_already_running,
     build_evidence,
-    build_webhook_payload,
     claim_attempt,
     claim_dispatch_guard,
     clamp_summary_payload,
@@ -372,37 +369,6 @@ def _handle_llm_failure(
     )
 
 
-def _dispatch_legacy_webhook(
-    db: Any,
-    *,
-    target_date: date,
-    summary_title: str,
-    overall_summary: str,
-    structured_subject_sections: list[Any],
-    structured_attention_items: list[Any],
-    event_count: int,
-) -> None:
-    """Enqueue the legacy webhook fan-out (one celery task per event)."""
-    try:
-        legacy_payload = build_webhook_payload(
-            target_date=target_date,
-            summary_title=summary_title,
-            overall_summary=overall_summary,
-            subject_sections=structured_subject_sections,
-            attention_items=structured_attention_items,
-            event_count=event_count,
-        )
-        _get_pipeline_orchestrator().dispatch_webhook(
-            db,
-            SendWebhookCommand(
-                event_type=WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-                payload=legacy_payload,
-            ),
-        )
-    except Exception:
-        logger.exception("Failed to enqueue daily summary webhook task")
-
-
 def run_daily_summary_generation(
     db: Session,
     *,
@@ -582,17 +548,6 @@ def _run_generation_pipeline(
         )
         outcome.attempt_status = "failed"
         return outcome
-
-    if webhook_subscriber_ids:
-        _dispatch_legacy_webhook(
-            db,
-            target_date=target_date,
-            summary_title=summary_title,
-            overall_summary=overall_summary,
-            structured_subject_sections=structured_subject_sections,
-            structured_attention_items=structured_attention_items,
-            event_count=outcome.event_count,
-        )
 
     detail = _build_task_log_detail(
         task_log=task_log,

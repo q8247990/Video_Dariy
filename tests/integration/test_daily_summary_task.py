@@ -567,7 +567,7 @@ def test_generate_daily_summary_honors_cancel_requested(db_session_factory, monk
         verify_db.close()
 
 
-def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
+def test_generate_daily_summary_enrolls_one_outbox_per_subscriber(
     db_session_factory, monkeypatch
 ) -> None:
     db = db_session_factory()
@@ -579,14 +579,25 @@ def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
             session_end_time=datetime(2026, 3, 13, 23, 59, 59, tzinfo=timezone.utc),
         )
 
-        db.add(
-            WebhookConfig(
-                name="legacy-hook",
-                url="https://example.com/webhook",
-                event_types_json=["daily_summary_generated"],
-                event_subscriptions_json=None,
-                enabled=True,
-            )
+        db.add_all(
+            [
+                WebhookConfig(
+                    name="hook-one",
+                    url="https://example.com/hook-one",
+                    event_subscriptions_json=[
+                        {"event": "daily_summary_generated", "version": ""}
+                    ],
+                    enabled=True,
+                ),
+                WebhookConfig(
+                    name="hook-two",
+                    url="https://example.com/hook-two",
+                    event_subscriptions_json=[
+                        {"event": "daily_summary_generated", "version": ""}
+                    ],
+                    enabled=True,
+                ),
+            ]
         )
         db.add(
             EventRecord(
@@ -638,15 +649,19 @@ def test_generate_daily_summary_dispatch_webhook_with_legacy_subscription(
         result = summarizer.generate_daily_summary_task.run("2026-03-13")
 
         assert result["summary_date"] == "2026-03-13"
-        assert len(webhook_calls) == 1
-        assert webhook_calls[0]["event_type"] == "daily_summary_generated"
+        assert webhook_calls == []
 
-        payload = webhook_calls[0]["payload"]
-        assert payload["event"] == "daily_summary_generated"
-        assert payload["version"] == "1.0"
-        assert "generated_at" in payload
-        assert payload["data"]["date"] == "2026-03-13"
-        assert payload["data"]["summary_title"] == "2026-03-13 家庭日报"
+        from src.application.outbox.contracts import OutboxStatus
+        from src.models.outbox import OutboxEvent as OutboxEventRow
+
+        outbox_rows = db.query(OutboxEventRow).all()
+        assert len(outbox_rows) == 2
+        targeted_webhook_ids = sorted(int(row.kwargs_json["webhook_id"]) for row in outbox_rows)
+        assert targeted_webhook_ids == [1, 2]
+        for row in outbox_rows:
+            assert row.task_name == "src.tasks.webhook.send_webhook_task"
+            assert row.kwargs_json["event_type"] == "daily_summary_generated"
+            assert row.status == OutboxStatus.PENDING.value
     finally:
         db.close()
 
