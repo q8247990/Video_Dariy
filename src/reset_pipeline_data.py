@@ -2,6 +2,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text
+
 from src.core.celery_app import celery_app
 from src.core.config import settings
 from src.db.session import SessionLocal
@@ -115,16 +117,18 @@ def main() -> None:
             "app_runtime_state": db.query(AppRuntimeState).count(),
         }
 
-        db.query(EventTagRel).delete(synchronize_session=False)
-        db.query(EventRecord).delete(synchronize_session=False)
-        db.query(DailySummary).delete(synchronize_session=False)
-        db.query(ChatQueryLog).delete(synchronize_session=False)
-        db.query(McpCallLog).delete(synchronize_session=False)
-        db.query(VideoSessionFileRel).delete(synchronize_session=False)
-        db.query(VideoSession).delete(synchronize_session=False)
-        db.query(VideoFile).delete(synchronize_session=False)
-        db.query(TaskLog).delete(synchronize_session=False)
-        db.query(VideoSourceRuntimeState).delete(synchronize_session=False)
+        # TRUNCATE ... CASCADE, not per-table delete(): outbox_event references
+        # task_log (RESTRICT), so deleting task_log first would raise a FK error.
+        db.execute(
+            text(
+                "TRUNCATE TABLE "
+                "outbox_event, event_tag_rel, event_record, daily_summary, "
+                "daily_summary_generation_attempt, chat_query_log, mcp_call_log, "
+                "llm_usage_log, video_session_file_rel, video_session, "
+                "video_file, task_log, video_source_runtime_state, "
+                "pipeline_transition_log, session_analysis_checkpoint CASCADE"
+            )
+        )
 
         db.query(AppRuntimeState).filter(
             AppRuntimeState.state_key.in_(list(LEGACY_RUNTIME_KEYS))
