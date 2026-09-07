@@ -39,12 +39,53 @@ def _clamp_range_end(byte2: int, file_size: int) -> int:
 
 
 def _parse_byte_range(range_header: str | None, file_size: int) -> tuple[int, int] | None:
+    """Parse an RFC 7233 ``bytes`` Range header into inclusive offsets.
+
+    Returns ``(start, end)`` for a satisfiable range, or ``None`` when the
+    request carries no Range header. Raises ``ValueError`` when the header is
+    malformed or the requested range cannot be satisfied by the file; the
+    stream endpoints translate that into HTTP 416.
+    """
     if not range_header:
         return None
-    byte1, byte2_text = range_header.removeprefix("bytes=").split("-", maxsplit=1)
-    start = int(byte1)
-    end = _clamp_range_end(int(byte2_text) if byte2_text else file_size - 1, file_size)
-    return start, end
+    if not range_header.startswith("bytes="):
+        raise ValueError("unsupported Range unit")
+    if file_size == 0:
+        raise ValueError("range not satisfiable")
+    start_text, sep, end_text = range_header.removeprefix("bytes=").partition("-")
+    if sep == "":
+        raise ValueError("malformed Range header")
+
+    if start_text == "":
+        # Suffix range spec (RFC 7233 §3.1): the final N bytes of the file.
+        try:
+            suffix = int(end_text)
+        except ValueError:
+            raise ValueError("malformed Range header") from None
+        if suffix <= 0:
+            raise ValueError("range not satisfiable")
+        return max(0, file_size - suffix), _clamp_range_end(file_size - 1, file_size)
+
+    try:
+        start = int(start_text)
+    except ValueError:
+        raise ValueError("malformed Range header") from None
+    end = file_size - 1 if end_text == "" else int(end_text)
+    if start >= file_size or end < start:
+        raise ValueError("range not satisfiable")
+    return start, _clamp_range_end(end, file_size)
+
+
+def _resolve_byte_range(request: Request, locale: Locale, file_size: int) -> tuple[int, int] | None:
+    """Parse the request Range header, answering 416 for invalid or unsatisfiable ranges."""
+    try:
+        return _parse_byte_range(request.headers.get("Range"), file_size)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+            detail=t("media.range_not_satisfiable", locale),
+            headers={"Content-Range": f"bytes */{file_size}"},
+        ) from None
 
 
 def send_bytes_range_requests(
@@ -144,7 +185,7 @@ def stream_video(
         raise HTTPException(status_code=404, detail=t("media.physical_file_not_found", locale))
 
     file_size = path.stat().st_size
-    byte_range = _parse_byte_range(request.headers.get("Range"), file_size)
+    byte_range = _resolve_byte_range(request, locale, file_size)
 
     if byte_range:
         byte1, byte2 = byte_range
@@ -319,7 +360,7 @@ def stream_session_merged_video(
         raise HTTPException(status_code=404, detail=t("media.merged_video_not_found", locale))
 
     file_size = os.path.getsize(path)
-    byte_range = _parse_byte_range(request.headers.get("Range"), file_size)
+    byte_range = _resolve_byte_range(request, locale, file_size)
 
     if byte_range:
         byte1, byte2 = byte_range
