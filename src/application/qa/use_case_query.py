@@ -16,6 +16,8 @@ rows the underlying service persists.
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from sqlalchemy.orm import Session
 
 from src.application.bootstrap import Container
@@ -32,16 +34,33 @@ class AnswerQuestionUseCase:
     container's ``llm_factory`` port on demand. Construction is cheap
     because the factory itself is stateless; multiple questions in the
     same request can share one use case instance safely.
+
+    ``qa_service_factory`` is an optional test seam / port injection:
+    callers that want to substitute the underlying QA service (e.g.
+    unit tests) may pass a ``Callable[[Session, Any], Any]`` that
+    returns a service compatible with :class:`~src.application.qa.service.QAService`.
+    When ``None``, the default lazy-import path instantiates the real
+    :class:`QAService` — preserving existing production behaviour.
     """
 
-    def __init__(self, *, db: Session, container: Container):
+    def __init__(
+        self,
+        *,
+        db: Session,
+        container: Container,
+        qa_service_factory: Callable[[Session, Any], Any] | None = None,
+    ):
         self.db = db
         self._container = container
+        self._qa_service_factory = qa_service_factory
 
     def execute(self, request: QARequest) -> QAResult:
-        from src.application.qa.service import QAService
+        if self._qa_service_factory is not None:
+            service = self._qa_service_factory(self.db, self._container.llm_factory)
+        else:
+            from src.application.qa.service import QAService
 
-        service = QAService(db=self.db, llm_factory=self._container.llm_factory)
+            service = QAService(db=self.db, llm_factory=self._container.llm_factory)
         return service.answer(request)
 
 

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.analysis.claim import claim_session_for_analysis
 from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.services.pipeline_state import (
     SESSION_ALLOWED_TRANSITIONS,
@@ -14,7 +15,6 @@ from src.services.pipeline_state import (
     transition_session,
     transition_task_log,
 )
-from src.tasks.analyzer import _claim_session_for_analysis
 
 
 def _seed_session(pg_db: Session, status: SessionAnalysisStatus) -> VideoSession:
@@ -99,13 +99,28 @@ def test_transition_session_rejects_open_to_analyzing(pg_db: Session) -> None:
 def test_atomic_claim_allows_exactly_one_owner(pg_db: Session) -> None:
     session = _seed_session(pg_db, SessionAnalysisStatus.SEALED)
 
-    claimed, first_reason = _claim_session_for_analysis(pg_db, session.id)
-    duplicate, second_reason = _claim_session_for_analysis(pg_db, session.id)
+    claimed, first_outcome = claim_session_for_analysis(
+        pg_db,
+        session_id=session.id,
+        priority="normal",
+        queue_task_id="queue-claim-1",
+        analysis_run_id="run-1",
+    )
+    pg_db.refresh(session)
+    duplicate, second_outcome = claim_session_for_analysis(
+        pg_db,
+        session_id=session.id,
+        priority="normal",
+        queue_task_id="queue-claim-1",
+        analysis_run_id="run-1",
+    )
 
     assert claimed is not None
-    assert first_reason is None
+    assert first_outcome is None
+    assert session.analysis_status == SessionAnalysisStatus.ANALYZING
     assert duplicate is None
-    assert second_reason == "already_analyzing"
+    assert second_outcome is not None
+    assert second_outcome.reason == "already_analyzing"
 
 
 def test_stale_retry_and_completion_after_cancellation_are_noops(pg_db: Session) -> None:

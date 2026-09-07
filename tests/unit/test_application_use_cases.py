@@ -302,20 +302,18 @@ class _RecordingQAService:
         )
 
 
-def test_answer_question_use_case_binds_llm_factory(
-    monkeypatch: pytest.MonkeyPatch, pg_db: Session
-) -> None:
+def test_answer_question_use_case_binds_llm_factory(pg_db: Session) -> None:
     _RecordingQAService.instances.clear()
     fake_factory = FakeLLMGatewayFactory()
     container = bootstrap_for_tests(llm_factory=fake_factory)
 
-    # Patch QAService so the use case is exercised without the
-    # full QA plumbing (DB provider rows, token quota, etc).
-    from src.application.qa import service as qa_service_module
-
-    monkeypatch.setattr(qa_service_module, "QAService", _RecordingQAService)
-
-    use_case = AnswerQuestionUseCase(db=pg_db, container=container)
+    use_case = AnswerQuestionUseCase(
+        db=pg_db,
+        container=container,
+        qa_service_factory=lambda db, llm_factory: _RecordingQAService(
+            db=db, llm_factory=llm_factory
+        ),
+    )
     result = use_case.execute(
         QARequest(
             question="hello",
@@ -328,28 +326,18 @@ def test_answer_question_use_case_binds_llm_factory(
     assert _RecordingQAService.instances[0].llm_factory is fake_factory
 
 
-def test_mcp_tool_use_case_routes_ask_home_monitor(
-    monkeypatch: pytest.MonkeyPatch, pg_db: Session
-) -> None:
+def test_mcp_tool_use_case_routes_ask_home_monitor(pg_db: Session) -> None:
+    _RecordingQAService.instances.clear()
     container = bootstrap_for_tests()
-    # Substitute QAService so the ask_home_monitor path returns a
-    # known answer without requiring provider rows.
-    from src.application.mcp import service as mcp_service
-
-    def _stub(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "answer_text": "on the couch",
-            "referenced_events": [],
-            "referenced_sessions": [],
-        }
-
-    monkeypatch.setattr(mcp_service.MCPToolService, "ask_home_monitor", _stub)
 
     use_case = MCPToolUseCase(
         db=pg_db,
         container=container,
         stream_url_builder=lambda fid: f"/files/{fid}",
         session_playback_url_builder=lambda sid: f"/sessions/{sid}",
+        qa_service_factory=lambda db, llm_factory: _RecordingQAService(
+            db=db, llm_factory=llm_factory
+        ),
     )
 
     result = use_case.execute(
@@ -358,7 +346,9 @@ def test_mcp_tool_use_case_routes_ask_home_monitor(
         locale="zh-CN",
     )
 
-    assert result["answer_text"] == "on the couch"
+    assert result["answer_text"] == "echo: where is the cat?"
+    assert result["referenced_events"] == []
+    assert result["referenced_sessions"] == []
 
 
 def test_mcp_tool_use_case_surfaces_invalid_argument(

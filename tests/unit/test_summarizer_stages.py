@@ -1,5 +1,7 @@
 """PostgreSQL unit tests for the daily-summary pipeline stage decomposition (Todo 19).
 
+白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+
 These tests exercise the public API of :mod:`src.services.summarizer`
 end-to-end against the PG test schema (``tests/conftest.py`` ``pg_db``
 fixture) — every model is already created by ``alembic upgrade head``,
@@ -511,16 +513,15 @@ def test_mark_cancelled_preserves_prior_summary(pg_db: Session) -> None:
 def test_find_subscribed_webhooks_returns_only_matching_enabled(
     pg_db: Session,
 ) -> None:
-    pg_db.add(
-        WebhookConfig(
-            name="matching",
-            url="https://example.com/hook",
-            event_subscriptions_json=[
-                {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""},
-            ],
-            enabled=True,
-        )
+    matching = WebhookConfig(
+        name="matching",
+        url="https://example.com/hook",
+        event_subscriptions_json=[
+            {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""},
+        ],
+        enabled=True,
     )
+    pg_db.add(matching)
     pg_db.add(
         WebhookConfig(
             name="non-matching",
@@ -540,7 +541,7 @@ def test_find_subscribed_webhooks_returns_only_matching_enabled(
         )
     )
     pg_db.commit()
-    assert find_subscribed_webhooks(pg_db) == [1]
+    assert find_subscribed_webhooks(pg_db) == [matching.id]
 
 
 # ---------------------------------------------------------------------------

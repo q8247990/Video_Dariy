@@ -31,6 +31,11 @@ class MCPToolUseCase:
     ``Session``. URL builders (``stream_url_builder`` /
     ``session_playback_url_builder``) are still caller-supplied so the
     MCP layer can keep wiring its signing paths and base URLs.
+
+    ``qa_service_factory`` is an optional test seam / port injection
+    forwarded to :class:`~src.application.mcp.service.MCPToolService`;
+    when ``None``, the default production path instantiates the real
+    :class:`~src.application.qa.service.QAService`.
     """
 
     def __init__(
@@ -40,11 +45,13 @@ class MCPToolUseCase:
         container: Container,
         stream_url_builder: Callable[[int], str],
         session_playback_url_builder: Callable[[int], str],
+        qa_service_factory: Optional[Callable[[Session, Any], Any]] = None,
     ) -> None:
         self.db = db
         self._container = container
         self._stream_url_builder = stream_url_builder
         self._session_playback_url_builder = session_playback_url_builder
+        self._qa_service_factory = qa_service_factory
 
     def execute(
         self,
@@ -58,6 +65,7 @@ class MCPToolUseCase:
             stream_url_builder=self._stream_url_builder,
             session_playback_url_builder=self._session_playback_url_builder,
             llm_factory=self._container.llm_factory,
+            qa_service_factory=self._qa_service_factory,
         )
         return _dispatch_tool(service, tool_name, arguments, locale=locale)
 

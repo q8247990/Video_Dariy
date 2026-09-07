@@ -9,9 +9,8 @@ Three write paths live here:
   processing / error).
 * :func:`_checkpoint_for_work` — the legacy, kwargs-based signature
   used by the existing unit test
-  ``test_analyze_session_changed_input_invalidates_stale_checkpoints``.
-  Re-exported as ``_checkpoint_for_work`` from
-  ``src.tasks.analyzer`` for backward compatibility.
+  ``test_analyze_session_changed_input_invalidates_stale_checkpoints``
+  (tests import it directly from this module).
 * :func:`write_sub_chunk_checkpoint` / :func:`write_token_usage` /
   :func:`mark_checkpoint_processing` — the success / token / lease
   writes the sub-chunk loop issues.
@@ -211,10 +210,9 @@ def _checkpoint_for_work(  # noqa: PLR0913 — legacy signature, kept for tests.
 
     The existing unit test
     ``test_analyze_session_changed_input_invalidates_stale_checkpoints``
-    imports ``_checkpoint_for_work`` from ``src.tasks.analyzer`` and
-    exercises the input-fingerprint-invalidation branch. Kept here
-    so the slim Celery task can re-export it unchanged; the slim
-    task itself calls the cleaner :func:`get_or_create_checkpoint`.
+    imports ``_checkpoint_for_work`` from this module and exercises
+    the input-fingerprint-invalidation branch. The orchestration
+    itself calls the cleaner :func:`get_or_create_checkpoint`.
     """
     start_offset_seconds = int(getattr(sub_chunk, "start_offset_seconds", 0))
     sub_chunk_index = int(getattr(sub_chunk, "sub_chunk_index", 0))
@@ -333,12 +331,11 @@ def write_token_usage(
 ) -> None:
     """Write the LLMUsageLog row bound to this checkpoint.
 
-    ``record_token_usage_fn`` accepts the existing
-    ``src.services.llm_qos.record_token_usage`` callable so the slim
-    analyzer task can pass its own monkey-patched reference (the
-    ``src.tasks.analyzer.record_token_usage`` name). When ``None`` the
-    helper imports the canonical helper from
-    :mod:`src.services.llm_qos`.
+    ``record_token_usage_fn`` accepts the
+    :func:`src.services.llm_qos.record_token_usage` callable so the
+    analyzer orchestration can pass its own reference (patchable in
+    the orchestration module's namespace). When ``None`` the helper
+    uses the canonical helper from :mod:`src.services.llm_qos`.
     """
     if record_token_usage_fn is None:
         record_token_usage_fn = record_token_usage

@@ -2,12 +2,9 @@ from datetime import date, datetime
 from typing import Generator
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-import src.api.deps as api_deps
-import src.db.session as db_session_module
 from src.core.config import settings
 from src.mcp.server import router as mcp_router
 from src.models.daily_summary import DailySummary
@@ -32,17 +29,8 @@ def mcp_token_fixture() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def client(pg_db: Session) -> Generator[TestClient, None, None]:
-    app = FastAPI()
-    app.include_router(mcp_router)
-
-    def _override_get_db():
-        yield pg_db
-
-    app.dependency_overrides[api_deps.get_db] = _override_get_db
-    app.dependency_overrides[db_session_module.get_db] = _override_get_db
-
-    with TestClient(app) as test_client:
+def client(pg_db: Session, make_http_client) -> Generator[TestClient, None, None]:
+    with make_http_client([mcp_router], authenticated=False) as test_client:
         yield test_client
 
 

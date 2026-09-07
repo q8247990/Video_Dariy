@@ -11,11 +11,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.models.task_log import TaskLog
+from src.models.task_log import ACTIVE_DEDUPE_INDEX_PREDICATE, TaskLog
 from src.services.dispatch.constants import TERMINAL_TASK_STATUSES
 from src.services.dispatch.dedupe import ensure_dict_detail
 from src.services.dispatch.worker_bind._state import (
@@ -159,8 +160,7 @@ def insert_fresh_running_row(
             .values(**row_values)
             .on_conflict_do_nothing(
                 index_elements=[TaskLog.dedupe_key],
-                index_where=TaskLog.dedupe_key.is_not(None)
-                & TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+                index_where=text(ACTIVE_DEDUPE_INDEX_PREDICATE),
             )
             .returning(TaskLog.id)
         )

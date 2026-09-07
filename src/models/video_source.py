@@ -29,7 +29,7 @@ class VideoSource(Base):
     analyze_from_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     last_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_validate_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    last_validate_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    last_validate_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_validate_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

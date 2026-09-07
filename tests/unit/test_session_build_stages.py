@@ -1,5 +1,7 @@
 """Unit tests for the session-build pipeline stage decomposition (Todo 20).
 
+白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+
 These tests exercise the public API of
 :mod:`src.services.session_build` end-to-end against the project-wide
 PostgreSQL ``pg_db`` / ``pg_db_factory`` fixtures. They cover the

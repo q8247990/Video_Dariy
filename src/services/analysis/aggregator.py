@@ -140,7 +140,6 @@ __all__ = [
 ]
 
 
-# Backward-compat aliases used by the existing
-# ``tests/unit/test_analyzer_task.py`` test which monkeypatches
-# ``src.tasks.analyzer._replace_session_events``.
+# Private alias for the analyzer orchestration (tests patch it in the
+# orchestration module's namespace).
 _replace_session_events = replace_session_events

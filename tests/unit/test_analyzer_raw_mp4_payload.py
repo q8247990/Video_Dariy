@@ -21,13 +21,14 @@ from sqlalchemy.orm import Session
 
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.analysis.constants import RAW_MP4_NUM_FRAMES
 from src.services.session_analysis_video import SessionVideoChunk, SubChunk
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks.analyzer import RAW_MP4_NUM_FRAMES, analyze_session_task
+from src.tasks.analyzer import analyze_session_task
 
 SessionFactory = Callable[[], Session]
 
@@ -128,9 +129,9 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
         finally:
             db.close()
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _fake_task_db_session)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _fake_task_db_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [
             SessionVideoChunk(
                 chunk_index=0,
@@ -141,7 +142,7 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [
             SubChunk(
                 chunk_index=0,
@@ -153,21 +154,24 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: "data:video/mp4;base64,AAA",
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=1, provider_name="mock-provider")),
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer.record_token_usage",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.record_token_usage",
         lambda db, provider_id, provider_name_snapshot, scene, usage, **kwargs: None,
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(0),
     )
 

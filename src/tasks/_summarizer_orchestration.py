@@ -6,15 +6,10 @@ orchestration (dispatch guard / claim + evidence / single-or-serial
 LLM phase / publish + finalize) to this module so the task entry
 stays a ~100-line delegate.
 
-Patchable seam
-==============
-
-The names the existing tests monkeypatch at
-``src.tasks.summarizer.<name>`` (``_get_pipeline_orchestrator``,
-``home_now`` and ``SERIAL_SPLIT_PROMPT_THRESHOLD``) are read
-dynamically through the task module via :func:`_seam` at call
-time, so a ``monkeypatch.setattr("src.tasks.summarizer.X", ...)``
-in an existing test takes effect unchanged.
+Every helper this module calls is imported at module top level and
+called directly; tests that need to stub one monkeypatch the name in
+this module's namespace
+(``src.tasks._summarizer_orchestration.X``).
 """
 
 from __future__ import annotations
@@ -22,7 +17,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
@@ -49,6 +44,7 @@ from src.services.provider_selector import (
     find_required_enabled_provider,
 )
 from src.services.summarizer import (
+    SERIAL_SPLIT_PROMPT_THRESHOLD,
     attempt_already_running,
     build_evidence,
     claim_attempt,
@@ -80,13 +76,6 @@ from src.services.task_dispatch_control import (
 logger = logging.getLogger(__name__)
 
 
-def _seam() -> Any:
-    """Return :mod:`src.tasks.summarizer` (the patchable seam module)."""
-    import src.tasks.summarizer as _summarizer_module
-
-    return _summarizer_module
-
-
 @dataclass
 class GenerationOutcome:
     """Return shape of the generation pipeline."""
@@ -116,13 +105,10 @@ def _close_gateway_safely(client: Any) -> None:
 
 
 def _get_pipeline_orchestrator() -> PipelineOrchestrator:
-    """Build a fresh :class:`PipelineOrchestrator`.
+    """Build a fresh :class:`PipelineOrchestrator` from the composition root."""
+    from src.tasks._container import get_container
 
-    Read through the patchable seam so the legacy
-    ``monkeypatch.setattr("src.tasks.summarizer._get_pipeline_orchestrator",
-    ...)`` tests keep landing.
-    """
-    return cast(PipelineOrchestrator, _seam()._get_pipeline_orchestrator())
+    return PipelineOrchestrator(dispatcher=get_container().dispatcher)
 
 
 def run_dispatch_scheduled(db: Session, *, container: Any, now: datetime) -> dict[str, Any]:
@@ -408,17 +394,15 @@ def _run_generation_pipeline(
 ) -> GenerationOutcome:
     """Drive the full single-day generation flow.
 
-    ``serial_split_prompt_threshold`` defaults to the seam's module
-    ``SERIAL_SPLIT_PROMPT_THRESHOLD`` (read dynamically through
-    :func:`_seam`) so the legacy
-    ``monkeypatch.setattr("src.tasks.summarizer.SERIAL_SPLIT_PROMPT_THRESHOLD",
-    ...)`` test keeps working.
+    ``serial_split_prompt_threshold`` defaults to
+    ``SERIAL_SPLIT_PROMPT_THRESHOLD`` (a module-level import, patchable
+    in this module's namespace).
     """
     if locale is None:
         locale = get_system_default_locale()
 
     if serial_split_prompt_threshold is None:
-        serial_split_prompt_threshold = int(_seam().SERIAL_SPLIT_PROMPT_THRESHOLD)
+        serial_split_prompt_threshold = int(SERIAL_SPLIT_PROMPT_THRESHOLD)
 
     outcome = GenerationOutcome(summary_date=target_date, event_count=0)
 

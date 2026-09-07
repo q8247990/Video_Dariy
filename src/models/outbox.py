@@ -102,6 +102,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base_class import Base
 
+#: Literal predicate of the partial unique index
+#: ``uq_outbox_event_pending_task_log``. Used verbatim as the
+#: ``ON CONFLICT … WHERE`` arbiter in the outbox enqueue INSERT.
+#:
+#: **Must stay plain SQL with literal constants — no bind parameters.**
+#: A parameterized arbiter cannot be matched against the index predicate
+#: under a PostgreSQL *generic* plan (the plan cache adopts one after
+#: ~10 executions of the same prepared statement inside a single
+#: transaction), which raises ``InvalidColumnReference: there is no
+#: unique or exclusion constraint matching the ON CONFLICT
+#: specification``. See ``ACTIVE_DEDUPE_INDEX_PREDICATE`` in
+#: ``src.models.task_log`` for the identical constraint.
+PENDING_INDEX_PREDICATE = "status = 'pending' AND task_log_id IS NOT NULL"
+
 
 class OutboxEvent(Base):
     """SQLAlchemy mapping for the ``outbox_event`` row.
@@ -190,8 +204,8 @@ class OutboxEvent(Base):
             "uq_outbox_event_pending_task_log",
             "task_log_id",
             unique=True,
-            postgresql_where=text("status = 'pending' AND task_log_id IS NOT NULL"),
-            sqlite_where=text("status = 'pending' AND task_log_id IS NOT NULL"),
+            postgresql_where=text(PENDING_INDEX_PREDICATE),
+            sqlite_where=text(PENDING_INDEX_PREDICATE),
         ),
         # -- Publisher hot path (ADR §2, item 5) ---------------------
         Index(
@@ -217,4 +231,4 @@ class OutboxEvent(Base):
     )
 
 
-__all__ = ["OutboxEvent"]
+__all__ = ["OutboxEvent", "PENDING_INDEX_PREDICATE"]

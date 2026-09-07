@@ -50,7 +50,7 @@ def client(db: Session) -> TestClient:
 
     app.dependency_overrides[api_deps.get_db] = _override_get_db
     app.dependency_overrides[api_deps.get_current_user] = _override_get_current_user
-    with TestClient(app) as test_client:
+    with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
 
 
@@ -158,3 +158,53 @@ def test_signed_media_rejects_tampered_and_cross_session_segment_tokens(
 
     assert cross_session.status_code == 403
     assert tampered.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("range_header", "expected_status", "expected_body"),
+    [
+        ("bytes=5-1", 416, None),
+        ("bytes=100-200", 416, None),
+        ("bytes=abc", 416, None),
+        ("bytes=-", 416, None),
+        ("bytes=-0", 416, None),
+        ("bytes=-3", 206, b"hij"),
+        ("bytes=-100", 206, b"abcdefghij"),
+    ],
+)
+def test_range_headers_have_documented_http_contract(
+    client: TestClient,
+    db: Session,
+    tmp_path: Path,
+    range_header: str,
+    expected_status: int,
+    expected_body: bytes | None,
+) -> None:
+    """Range 头在文件流端点的 HTTP 契约（RFC 7233）。
+
+    格式合法但语义越界的 Range（``bytes=5-1`` start > end、``bytes=100-200``
+    超出文件长度）与完全无法解析的 Range（``bytes=abc``、``bytes=-``）均返回
+    416 + ``Content-Range: bytes */<size>``，不得出现 500。
+
+    ``bytes=-N`` 是合法的 suffix range（文件末尾 N 字节）：``bytes=-3`` 返回
+    末尾 3 字节；``bytes=-100`` 请求超过文件长度，返回整个 10 字节文件。
+    """
+    old_video_root = settings.VIDEO_ROOT_PATH
+    settings.VIDEO_ROOT_PATH = str(tmp_path)
+    video_path = tmp_path / "clip.mp4"
+    try:
+        video_path.write_bytes(b"abcdefghij")
+        _, file_id = _seed_playable_session(db, video_path)
+
+        playback = client.get("/api/v1/media/sessions/1/playback")
+        file_url = playback.json()["data"]["files"][0]["stream_url"]
+
+        response = client.get(f"/api/v1{file_url}", headers={"Range": range_header})
+
+        assert response.status_code == expected_status
+        if expected_status == 206:
+            assert response.content == expected_body
+        else:
+            assert response.headers["content-range"] == "bytes */10"
+    finally:
+        settings.VIDEO_ROOT_PATH = old_video_root

@@ -151,29 +151,32 @@ def test_analyze_session_failure_then_retry_resumes_only_remaining_on_postgres(
         def get_last_raw_response_text(self):
             return "raw"
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _task_session)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [SessionVideoChunk(0, 0, 180, ["/tmp/pg.mp4"])],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [
             SubChunk(0, index, index * 60, 60, [f"/tmp/pg-{index}.mp4"]) for index in range(3)
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: f"data:video/mp4;base64,{chunk.start_offset_seconds}",
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(int(response)),
     )
 
@@ -208,7 +211,7 @@ def test_analyze_session_failure_then_retry_resumes_only_remaining_on_postgres(
             return response
 
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_RetryClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     result = analyze_session_task.run(session_id=session_id)

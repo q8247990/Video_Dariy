@@ -1,5 +1,7 @@
 """PostgreSQL integration tests for the daily-summary pipeline decomposition (Todo 19).
 
+白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+
 These tests exercise the staged helpers in :mod:`src.services.summarizer`
 against a real PostgreSQL schema migrated to the new head. They
 cover the PG-specific behaviour the SQLite unit tests in
@@ -370,16 +372,17 @@ def test_pg_find_subscribed_webhooks_filters_disabled(
     factory = _session_factory(postgres_migrated_engine)
     db = factory()
     try:
+        matching = WebhookConfig(
+            name="matching-enabled",
+            url="https://example.com/hook",
+            event_subscriptions_json=[
+                {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""}
+            ],
+            enabled=True,
+        )
         db.add_all(
             [
-                WebhookConfig(
-                    name="matching-enabled",
-                    url="https://example.com/hook",
-                    event_subscriptions_json=[
-                        {"event": WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED, "version": ""}
-                    ],
-                    enabled=True,
-                ),
+                matching,
                 WebhookConfig(
                     name="non-matching-enabled",
                     url="https://example.com/other",
@@ -399,7 +402,7 @@ def test_pg_find_subscribed_webhooks_filters_disabled(
         db.commit()
 
         ids = find_subscribed_webhooks(db)
-        assert ids == [1]
+        assert ids == [matching.id]
     finally:
         db.close()
 

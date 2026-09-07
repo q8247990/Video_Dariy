@@ -63,7 +63,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -75,7 +75,7 @@ from src.application.outbox.contracts import (
     OutboxStatus,
     emit_event,
 )
-from src.application.outbox.id_generator import new_event_id
+from src.models.outbox import PENDING_INDEX_PREDICATE
 from src.models.outbox import OutboxEvent as OutboxEventRow
 from src.models.task_log import TaskLog
 
@@ -182,10 +182,7 @@ class OutboxRepository:
             insert_stmt: Any = postgresql_insert(OutboxEventRow).values(**row_values)
             insert_stmt = insert_stmt.on_conflict_do_nothing(
                 index_elements=["task_log_id"],
-                index_where=(
-                    (OutboxEventRow.status == OutboxStatus.PENDING.value)
-                    & OutboxEventRow.task_log_id.is_not(None)
-                ),
+                index_where=text(PENDING_INDEX_PREDICATE),
             )
             result = self._db.execute(
                 insert_stmt.returning(OutboxEventRow.event_id, OutboxEventRow.id)
@@ -584,6 +581,4 @@ def _rowcount(result: Any) -> int:
     return int(raw)
 
 
-# Public re-export of ``new_event_id`` so callers can patch it without
-# importing the internal ``id_generator`` module.
-__all__ = ["EnrollOutcome", "OutboxRepository", "new_event_id"]
+__all__ = ["EnrollOutcome", "OutboxRepository"]

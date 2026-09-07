@@ -10,7 +10,7 @@ by tests.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -104,105 +104,65 @@ def test_callable_locale_provider_invokes_loader_each_time() -> None:
 
 
 def test_system_config_locale_provider_returns_default_when_session_unavailable() -> None:
-    """If the ORM cannot be imported (e.g. import error), default is returned."""
+    """If the session factory raises (e.g. session cannot be opened), default is returned."""
 
-    provider = SystemConfigLocaleProvider()
-    with patch.dict("sys.modules", {"src.db.session": None}):
-        assert provider.get_default_locale() == DEFAULT_LOCALE
+    factory = MagicMock(side_effect=RuntimeError("db down"))
+    provider = SystemConfigLocaleProvider(session_factory=factory)
+    assert provider.get_default_locale() == DEFAULT_LOCALE
 
 
 def test_system_config_locale_provider_returns_default_on_query_error() -> None:
     """DB driver errors must not bubble; the legacy contract swallows them."""
 
-    fake_session_local = MagicMock()
     fake_session = MagicMock()
-    fake_session_local.return_value = fake_session
-    fake_query = MagicMock()
-    fake_query.filter.return_value.first.side_effect = RuntimeError("db down")
-    fake_session.query.return_value = fake_query
+    fake_session.query.return_value.filter.return_value.first.side_effect = RuntimeError("db down")
+    factory = MagicMock(return_value=fake_session)
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "src.db.session": MagicMock(SessionLocal=fake_session_local),
-            "src.models.system_config": MagicMock(SystemConfig=MagicMock()),
-        },
-    ):
-        provider = SystemConfigLocaleProvider()
-        assert provider.get_default_locale() == DEFAULT_LOCALE
+    provider = SystemConfigLocaleProvider(session_factory=factory)
+    assert provider.get_default_locale() == DEFAULT_LOCALE
 
 
 def test_system_config_locale_provider_returns_default_when_row_missing() -> None:
     """No row in ``system_config`` → DEFAULT_LOCALE."""
 
-    fake_session_local = MagicMock()
     fake_session = MagicMock()
-    fake_session_local.return_value = fake_session
-    fake_query = MagicMock()
-    fake_query.filter.return_value.first.return_value = None
-    fake_session.query.return_value = fake_query
+    fake_session.query.return_value.filter.return_value.first.return_value = None
+    factory = MagicMock(return_value=fake_session)
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "src.db.session": MagicMock(SessionLocal=fake_session_local),
-            "src.models.system_config": MagicMock(SystemConfig=MagicMock()),
-        },
-    ):
-        provider = SystemConfigLocaleProvider()
-        assert provider.get_default_locale() == DEFAULT_LOCALE
+    provider = SystemConfigLocaleProvider(session_factory=factory)
+    assert provider.get_default_locale() == DEFAULT_LOCALE
 
 
 def test_system_config_locale_provider_caches_value() -> None:
     """Subsequent calls within the TTL window return the cached value."""
 
-    provider = SystemConfigLocaleProvider(ttl_seconds=60.0)
-    fake_session_local = MagicMock()
     fake_session = MagicMock()
-    fake_session_local.return_value = fake_session
-    fake_query = MagicMock()
     row = MagicMock()
     row.config_value = "en-US"
-    fake_query.filter.return_value.first.return_value = row
-    fake_session.query.return_value = fake_query
+    fake_session.query.return_value.filter.return_value.first.return_value = row
+    factory = MagicMock(return_value=fake_session)
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "src.db.session": MagicMock(SessionLocal=fake_session_local),
-            "src.models.system_config": MagicMock(SystemConfig=MagicMock()),
-        },
-    ):
-        assert provider.get_default_locale() == "en-US"
-        # Second call must not re-open the session.
-        assert provider.get_default_locale() == "en-US"
-        assert fake_session_local.call_count == 1
+    provider = SystemConfigLocaleProvider(ttl_seconds=60.0, session_factory=factory)
+    assert provider.get_default_locale() == "en-US"
+    # Second call must not re-open the session.
+    assert provider.get_default_locale() == "en-US"
+    assert factory.call_count == 1
 
 
 def test_system_config_locale_provider_invalidate_clears_cache() -> None:
     """After ``invalidate``, the next call re-reads the DB."""
 
-    provider = SystemConfigLocaleProvider(ttl_seconds=60.0)
-    fake_session_local = MagicMock()
     fake_session = MagicMock()
-    fake_session_local.return_value = fake_session
-    fake_query = MagicMock()
     row = MagicMock()
     row.config_value = "en-US"
-    fake_query.filter.return_value.first.return_value = row
-    fake_session.query.return_value = fake_query
+    fake_session.query.return_value.filter.return_value.first.return_value = row
+    factory = MagicMock(return_value=fake_session)
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "src.db.session": MagicMock(SessionLocal=fake_session_local),
-            "src.models.system_config": MagicMock(SystemConfig=MagicMock()),
-        },
-    ):
-        provider.get_default_locale()
-        provider.invalidate()
-        provider.get_default_locale()
-        assert fake_session_local.call_count == 2
+    provider = SystemConfigLocaleProvider(ttl_seconds=60.0, session_factory=factory)
+    provider.get_default_locale()
+    provider.invalidate()
+    provider.get_default_locale()
+    assert factory.call_count == 2
 
 
 # ---------------------------------------------------------------------------

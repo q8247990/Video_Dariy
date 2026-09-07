@@ -36,7 +36,6 @@ from src.services.analysis.checkpoint_writer import ClaimGuards
 from src.services.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
-    TaskType,
 )
 from src.services.pipeline_state import transition_session, transition_task_log
 from src.services.task_dispatch_control import finalize_task_log
@@ -223,7 +222,6 @@ def record_failed_transition(
 
 
 __all__ = [
-    "TaskType",
     "cancel_session",
     "finalize_session_success",
     "record_failed_transition",

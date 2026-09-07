@@ -22,7 +22,7 @@ Protocol back from this module at top level).
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # Protocol
@@ -69,6 +69,10 @@ class SystemConfigLocaleProvider(LocaleProvider):
     shared by every consumer that needs the locale, and so that
     :func:`src.core.i18n.reload_catalogs` can invalidate it through the
     provider handle.
+
+    An optional ``session_factory`` constructor argument acts as a test
+    seam so unit tests can inject a fake session without monkey-patching
+    ``sys.modules``.
     """
 
     CONFIG_KEY: str = "default_locale"
@@ -78,10 +82,12 @@ class SystemConfigLocaleProvider(LocaleProvider):
         self,
         *,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
+        session_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._ttl_seconds = ttl_seconds
         self._cache: Optional[str] = None
         self._cache_ts: float = 0.0
+        self._session_factory = session_factory
 
     def get_default_locale(self) -> str:
         now = time.monotonic()
@@ -123,7 +129,10 @@ class SystemConfigLocaleProvider(LocaleProvider):
             return DEFAULT_LOCALE
 
         try:
-            db = SessionLocal()
+            if self._session_factory is not None:
+                db = self._session_factory()
+            else:
+                db = SessionLocal()
         except Exception:
             return DEFAULT_LOCALE
 

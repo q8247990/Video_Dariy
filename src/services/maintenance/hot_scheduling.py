@@ -16,11 +16,7 @@ a single failed source cannot poison the rest of the heartbeat.
 The split from the pre-Wave-5 ``_dispatch_hot_builds`` keeps the
 private prefix off the public surface (``heartbeat`` is in
 ``src.tasks.task_maintenance``; the policy module is the
-implementation detail). The pre-existing
-``tests/unit/test_tasks_di.py`` keeps importing
-``task_maintenance._dispatch_hot_builds`` for the legacy test
-contract — the helper is re-exported under that name from
-``src/tasks/task_maintenance.py`` for backward compatibility.
+implementation detail).
 """
 
 from __future__ import annotations
@@ -57,11 +53,9 @@ def dispatch_hot_builds(db: Session) -> list[dict]:
         .filter(VideoSource.enabled.is_(True), VideoSource.source_paused.is_(False))
         .all()
     )
-    # Late import preserves the legacy ``src.tasks.task_maintenance.get_container``
-    # monkeypatch surface (used by ``tests/unit/test_tasks_di.py``).
-    from src.tasks import task_maintenance
+    from src.tasks._container import get_container
 
-    dispatcher = task_maintenance.get_container().dispatcher
+    dispatcher = get_container().dispatcher
     dispatched: list[dict] = []
     for source in sources:
         try:

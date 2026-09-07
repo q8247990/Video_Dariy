@@ -1,5 +1,7 @@
 """Unit tests for the analysis-stage modules split out in Wave 5 (Todo 18).
 
+白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+
 These tests exercise the public API of
 :mod:`src.services.analysis` end-to-end against the PG test schema
 (``tests/conftest.py`` ``pg_db`` fixture) — every model is already

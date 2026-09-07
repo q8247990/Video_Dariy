@@ -6,15 +6,11 @@
 
 import dataclasses
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
 
 from src.application.ports.llm_gateway import LLMGatewayFactoryPort
-from src.application.qa.service import (
-    QAProviderInvokeError,
-    QAProviderNotConfiguredError,
-)
 from src.application.query.schemas import (
     DateRange,
     EventFilters,
@@ -32,17 +28,29 @@ class MCPInvalidArgumentError(ValueError):
 
 
 class MCPToolService:
+    """MCP tool surface backed by HomeQueryService + QAService.
+
+    ``qa_service_factory`` is an optional test seam / port injection:
+    callers that want to substitute the underlying QA service (e.g.
+    unit tests) may pass a ``Callable[[Session, Any], Any]`` that
+    returns a service compatible with :class:`~src.application.qa.service.QAService`.
+    When ``None``, the default lazy-import path instantiates the real
+    :class:`QAService` — preserving existing production behaviour.
+    """
+
     def __init__(
         self,
         db: Session,
         stream_url_builder: Callable[[int], str],
         session_playback_url_builder: Callable[[int], str],
         llm_factory: Optional[LLMGatewayFactoryPort] = None,
+        qa_service_factory: Optional[Callable[[Session, Any], Any]] = None,
     ):
         self.db = db
         self.stream_url_builder = stream_url_builder
         self.session_playback_url_builder = session_playback_url_builder
         self._llm_factory = llm_factory
+        self._qa_service_factory = qa_service_factory
         self._query_service = HomeQueryService(db)
 
     # ------------------------------------------------------------------
@@ -165,9 +173,13 @@ class MCPToolService:
             raise MCPInvalidArgumentError("question is required")
 
         from src.application.qa.schemas import QARequest
-        from src.application.qa.service import QAService
 
-        service = QAService(self.db, llm_factory=self._llm_factory)
+        if self._qa_service_factory is not None:
+            service = self._qa_service_factory(self.db, self._llm_factory)
+        else:
+            from src.application.qa.service import QAService
+
+            service = QAService(self.db, llm_factory=self._llm_factory)
         result = service.answer(
             QARequest(
                 question=clean_question,
@@ -218,6 +230,4 @@ __all__ = [
     "MCPInvalidArgumentError",
     "MCPNotFoundError",
     "MCPToolService",
-    "QAProviderInvokeError",
-    "QAProviderNotConfiguredError",
 ]

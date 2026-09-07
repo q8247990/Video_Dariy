@@ -52,13 +52,13 @@ def build_provider_client(
 def _build_provider_client(
     db: Session, *, llm_factory: LLMGatewayFactoryPort | None = None
 ) -> tuple[Any, LLMProvider]:
-    """Backward-compatible helper used by ``src.tasks.analyzer``.
+    """Build the vision provider client for the analyzer orchestration.
 
     ``llm_factory`` defaults to ``None`` so unit tests that monkey-patch
-    ``src.tasks.analyzer._build_provider_client`` with the legacy
-    single-arg lambda keep working unchanged; in production we read
-    the factory from the task-layer ``get_container()`` singleton so
-    the composition root owns the adapter binding.
+    ``src.tasks._analyzer_orchestration._build_provider_client`` with
+    the legacy single-arg lambda keep working unchanged; in production
+    we read the factory from the task-layer ``get_container()``
+    singleton so the composition root owns the adapter binding.
     """
     if llm_factory is None:
         from src.tasks._container import get_container

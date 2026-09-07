@@ -30,7 +30,6 @@ from uuid import UUID
 import pytest
 
 from src.application.outbox.contracts import (
-    DEFAULT_QUEUE,
     OutboxCommand,
     OutboxEvent,
     emit_event,
@@ -40,7 +39,7 @@ from src.application.outbox.errors import (
     OutboxContractViolation,
     OutboxRegistryError,
 )
-from src.application.outbox.registry import OutboxCommandRegistry
+from src.application.outbox.registry import DEFAULT_QUEUE, OutboxCommandRegistry
 from src.application.outbox.state_machine import (
     OutboxStatus,
     transition,

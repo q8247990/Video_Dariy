@@ -10,8 +10,8 @@ from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.maintenance import recover_timed_out_tasks
 from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
-from src.tasks.task_maintenance import _recover_timed_out_tasks
 
 pytestmark = pytest.mark.postgres
 
@@ -64,12 +64,12 @@ def test_concurrent_lost_analysis_recovery_creates_one_resume(
 
     local_session = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(
-        "src.tasks.task_maintenance.celery_app.control.revoke", lambda *args, **kwargs: None
+        "src.core.celery_app.celery_app.control.revoke", lambda *args, **kwargs: None
     )
 
     def recover() -> None:
         with local_session() as db:
-            _recover_timed_out_tasks(db, datetime.now(timezone.utc))
+            recover_timed_out_tasks(db, datetime.now(timezone.utc))
             db.commit()
 
     with ThreadPoolExecutor(max_workers=2) as executor:

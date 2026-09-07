@@ -18,12 +18,12 @@ from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
-from src.tasks.task_maintenance import (
-    _mark_missing_video_files,
-    _recover_orphan_pending_tasks,
-    _recover_timed_out_tasks,
+from src.services.maintenance import (
+    mark_missing_video_files,
+    recover_orphan_pending_tasks,
+    recover_timed_out_tasks,
 )
+from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 
 SessionFactory = Callable[[], Session]
 
@@ -31,7 +31,7 @@ SessionFactory = Callable[[], Session]
 def _bind_fake_dispatcher(monkeypatch: pytest.MonkeyPatch) -> FakeTaskDispatcher:
     dispatcher = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=dispatcher)
-    monkeypatch.setattr("src.tasks.task_maintenance.get_container", lambda: container)
+    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
     return dispatcher
 
 
@@ -84,10 +84,10 @@ def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
         )
         db.commit()
         dispatcher = _bind_fake_dispatcher(monkeypatch)
-        monkeypatch.setattr("src.tasks.task_maintenance.celery_app.control.revoke", MagicMock())
+        monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
 
         now = datetime.now(timezone.utc)
-        count = _recover_timed_out_tasks(db, now)
+        count = recover_timed_out_tasks(db, now)
         db.commit()
 
         assert count == 1
@@ -97,7 +97,7 @@ def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
         assert session.analysis_status == SessionAnalysisStatus.SEALED
         assert len(dispatcher.dispatched_analyze_session) == 1
 
-        assert _recover_timed_out_tasks(db, now) == 0
+        assert recover_timed_out_tasks(db, now) == 0
         assert len(dispatcher.dispatched_analyze_session) == 1
     finally:
         db.close()
@@ -120,7 +120,7 @@ def test_healthy_queued_pending_task_is_not_falsely_timed_out(
         db.commit()
 
         now = datetime.now(timezone.utc)
-        count = _recover_orphan_pending_tasks(db, now)
+        count = recover_orphan_pending_tasks(db, now)
         db.commit()
 
         assert count == 0
@@ -149,10 +149,10 @@ def test_unleased_stale_build_task_times_out_and_revokes(
         db.commit()
 
         revoke_mock = MagicMock()
-        monkeypatch.setattr("src.tasks.task_maintenance.celery_app.control.revoke", revoke_mock)
+        monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", revoke_mock)
 
         now = datetime.now(timezone.utc)
-        count = _recover_orphan_pending_tasks(db, now)
+        count = recover_orphan_pending_tasks(db, now)
         db.commit()
 
         assert count == 1
@@ -161,7 +161,7 @@ def test_unleased_stale_build_task_times_out_and_revokes(
         assert pending.message == "Pending task was never picked up by a worker; timed out"
         revoke_mock.assert_called_once_with("lost-celery-task-id", terminate=True)
 
-        assert _recover_orphan_pending_tasks(db, now) == 0
+        assert recover_orphan_pending_tasks(db, now) == 0
     finally:
         db.close()
 
@@ -184,7 +184,7 @@ def test_unleased_stale_analysis_task_is_not_touched(
         db.commit()
 
         now = datetime.now(timezone.utc)
-        count = _recover_orphan_pending_tasks(db, now)
+        count = recover_orphan_pending_tasks(db, now)
         db.commit()
 
         assert count == 0
@@ -231,7 +231,7 @@ def test_cancelled_analysis_is_not_auto_resumed(
         db.commit()
         dispatcher = _bind_fake_dispatcher(monkeypatch)
 
-        assert _recover_timed_out_tasks(db, datetime.now(timezone.utc)) == 0
+        assert recover_timed_out_tasks(db, datetime.now(timezone.utc)) == 0
         assert len(dispatcher.dispatched_analyze_session) == 0
     finally:
         db.close()
@@ -273,7 +273,7 @@ def test_exhausted_recovery_budget_records_terminal_reason(
         db.commit()
         dispatcher = _bind_fake_dispatcher(monkeypatch)
 
-        assert _recover_timed_out_tasks(db, datetime.now(timezone.utc)) == 1
+        assert recover_timed_out_tasks(db, datetime.now(timezone.utc)) == 1
         db.commit()
 
         db.refresh(task_log)
@@ -317,7 +317,7 @@ def _make_source_with_files(db: Session, tmp_path, paused: bool = False):
     return source, present_file, missing_file
 
 
-def test_mark_missing_video_files_sweeps_enabled_local_sources(
+def testmark_missing_video_files_sweeps_enabled_local_sources(
     tmp_path, monkeypatch: pytest.MonkeyPatch, pg_db_factory: SessionFactory
 ) -> None:
     monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
@@ -326,7 +326,7 @@ def test_mark_missing_video_files_sweeps_enabled_local_sources(
     try:
         _, present_file, missing_file = _make_source_with_files(db, tmp_path)
 
-        marked = _mark_missing_video_files(db)
+        marked = mark_missing_video_files(db)
         db.commit()
         db.refresh(present_file)
         db.refresh(missing_file)
@@ -338,7 +338,7 @@ def test_mark_missing_video_files_sweeps_enabled_local_sources(
         db.close()
 
 
-def test_mark_missing_video_files_skips_paused_sources(
+def testmark_missing_video_files_skips_paused_sources(
     tmp_path, monkeypatch: pytest.MonkeyPatch, pg_db_factory: SessionFactory
 ) -> None:
     monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
@@ -347,7 +347,7 @@ def test_mark_missing_video_files_skips_paused_sources(
     try:
         _, _, missing_file = _make_source_with_files(db, tmp_path, paused=True)
 
-        marked = _mark_missing_video_files(db)
+        marked = mark_missing_video_files(db)
         db.commit()
         db.refresh(missing_file)
 

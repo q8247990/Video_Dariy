@@ -1,15 +1,11 @@
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-import src.api.deps as api_deps
-import src.db.session as db_session_module
 from src.api.v1.endpoints import onboarding, video_sources
 from src.core.config import settings
 from src.models.home_profile import HomeProfile
@@ -19,22 +15,13 @@ from src.models.video_source import VideoSource
 
 
 @pytest.fixture
-def client(pg_db: Session) -> TestClient:
-    app = FastAPI()
-    app.include_router(onboarding.router, prefix="/api/v1/onboarding")
-    app.include_router(video_sources.router, prefix="/api/v1/video-sources")
-
-    def _override_get_db():
-        yield pg_db
-
-    def _override_get_current_user() -> SimpleNamespace:
-        return SimpleNamespace(id=1, username="admin")
-
-    app.dependency_overrides[api_deps.get_db] = _override_get_db
-    app.dependency_overrides[db_session_module.get_db] = _override_get_db
-    app.dependency_overrides[api_deps.get_current_user] = _override_get_current_user
-
-    with TestClient(app) as test_client:
+def client(pg_db: Session, make_http_client) -> TestClient:
+    with make_http_client(
+        [
+            (onboarding.router, "/api/v1/onboarding"),
+            (video_sources.router, "/api/v1/video-sources"),
+        ],
+    ) as test_client:
         yield test_client
 
 

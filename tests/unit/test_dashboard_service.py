@@ -6,14 +6,10 @@ from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.dashboard import (
-    _build_event_summary,
-    _build_important_events,
-    _build_latest_daily_summary,
-)
+from src.services.dashboard import get_dashboard_overview
 
 
-def test_important_event_count_uses_high_only(pg_db: Session) -> None:
+def test_event_summary_counts_only_high_importance_in_24h(pg_db: Session) -> None:
     source = VideoSource(
         source_name="source-1",
         camera_name="客厅",
@@ -67,8 +63,9 @@ def test_important_event_count_uses_high_only(pg_db: Session) -> None:
     pg_db.add(no_importance_event)
     pg_db.commit()
 
-    summary = _build_event_summary(pg_db)
-    assert summary.important_event_count_24h == 1
+    overview = get_dashboard_overview(pg_db)
+
+    assert overview.event_summary.important_event_count_24h == 1
 
 
 def test_important_events_list_filters_to_high_only(pg_db: Session) -> None:
@@ -120,8 +117,9 @@ def test_important_events_list_filters_to_high_only(pg_db: Session) -> None:
     pg_db.add(event_medium)
     pg_db.commit()
 
-    important_events = _build_important_events(pg_db, "zh-CN")
+    overview = get_dashboard_overview(pg_db, locale="zh-CN")
 
+    important_events = overview.important_events
     assert len(important_events) == 2
     assert important_events[0].summary == "高优先级-较新"
     assert important_events[1].summary == "高优先级-较早"
@@ -141,8 +139,9 @@ def test_latest_daily_summary_returns_date_value(pg_db: Session) -> None:
     )
     pg_db.commit()
 
-    latest = _build_latest_daily_summary(pg_db)
+    overview = get_dashboard_overview(pg_db)
 
+    latest = overview.latest_daily_summary
     assert latest.exists is True
     assert str(latest.date) == "2026-03-13"
     assert latest.status == "success"

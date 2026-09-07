@@ -83,7 +83,7 @@ from src.services.pipeline_constants import TaskType
 from src.services.task_dispatch_control import create_pending_task_log
 
 #: Event type string emitted by the daily-summary webhook payload.
-#: Mirrors ``src.tasks.summarizer.WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED``
+#: Mirrors ``src.services.summarizer.constants.WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED``
 #: so the consumer-side subscription filter recognises it; the string
 #: is part of the public product contract and must not drift.
 DAILY_SUMMARY_WEBHOOK_EVENT_TYPE: str = "daily_summary_generated"

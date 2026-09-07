@@ -306,7 +306,6 @@ def emit_event(
 __all__ = [
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_MAX_PAYLOAD_DEPTH",
-    "DEFAULT_QUEUE",
     "JSONSafeValue",
     "OutboxCommand",
     "OutboxEvent",

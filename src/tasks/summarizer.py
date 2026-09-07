@@ -1,15 +1,18 @@
-"""Daily-summary Celery tasks - thin wrapper over the orchestration module.
+"""Daily-summary Celery tasks - thin wrappers over the orchestration module.
 
-Owns the two Celery task decorators and the ``task_db_session``
-envelope; the dispatch guard / claim + evidence / LLM phase / publish
-+ finalize logic lives in :mod:`src.tasks._summarizer_orchestration`.
-``generate_daily_summary_task`` binds the ``TaskLog`` and handles the
-top-level commit and ``TaskCancellationRequested`` envelope; the
-patched seam names (``_get_pipeline_orchestrator``, ``home_now``,
-``SERIAL_SPLIT_PROMPT_THRESHOLD``, ``celery_app``, ``TaskLog``) are
-re-exported below so ``monkeypatch.setattr(\"src.tasks.summarizer.X\",
-...)`` keeps landing (read dynamically by the orchestration via its
-seam).
+Owns the two Celery task decorators; the dispatch guard / claim +
+evidence / LLM phase / publish + finalize logic lives in
+:mod:`src.tasks._summarizer_orchestration`. ``generate_daily_summary_task``
+binds the ``TaskLog`` and handles the top-level commit and
+``TaskCancellationRequested`` envelope.
+
+This module deliberately exposes **only** the two tasks: the Celery
+registry names (``src.tasks.summarizer.dispatch_scheduled_daily_summary_task``
+/ ``src.tasks.summarizer.generate_daily_summary_task``) are the stable
+dispatch contracts referenced by the outbox registry and the celery
+dispatcher. Pipeline helpers live in
+:mod:`src.tasks._summarizer_orchestration` and are called directly
+from there.
 """
 
 from __future__ import annotations
@@ -18,19 +21,12 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
 from src.models.daily_summary import DailySummary
-from src.models.task_log import TaskLog
-from src.services.home_timezone import home_now as home_now
-from src.services.onboarding import DEFAULT_DAILY_SUMMARY_SCHEDULE
+from src.services.home_timezone import home_now
 from src.services.pipeline_constants import TaskType
-from src.services.summarizer import (  # noqa: F401 - re-exported for legacy test contract
-    SERIAL_SPLIT_PROMPT_THRESHOLD,
-    WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
-    get_home_timezone,
-)
+from src.services.summarizer import get_home_timezone
 from src.services.task_dispatch_control import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
@@ -38,24 +34,9 @@ from src.services.task_dispatch_control import (
     get_task_log_for_update,
 )
 from src.tasks._container import get_container
-from src.tasks._summarizer_orchestration import (
-    GenerationOutcome,  # noqa: F401 - re-exported for legacy test contract
-    run_daily_summary_generation,
-    run_dispatch_scheduled,
-)
+from src.tasks._summarizer_orchestration import run_daily_summary_generation, run_dispatch_scheduled
 
 logger = logging.getLogger(__name__)
-
-
-def _get_pipeline_orchestrator() -> PipelineOrchestrator:
-    """Build a fresh :class:`PipelineOrchestrator` from the composition root.
-
-    Re-exported for the legacy test contract; the orchestration reads
-    this dynamically through its seam so the
-    ``monkeypatch.setattr(\"src.tasks.summarizer._get_pipeline_orchestrator\",
-    ...)`` tests keep landing.
-    """
-    return PipelineOrchestrator(dispatcher=get_container().dispatcher)
 
 
 @celery_app.task(bind=True)  # type: ignore[untyped-decorator]
@@ -132,12 +113,6 @@ def generate_daily_summary_task(self: Any, target_date_str: Optional[str] = None
 
 
 __all__ = [
-    "DEFAULT_DAILY_SUMMARY_SCHEDULE",
-    "GenerationOutcome",
-    "SERIAL_SPLIT_PROMPT_THRESHOLD",
-    "TaskLog",
     "dispatch_scheduled_daily_summary_task",
     "generate_daily_summary_task",
-    "home_now",
-    "WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED",
 ]

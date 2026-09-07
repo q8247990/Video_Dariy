@@ -72,7 +72,7 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
-from src.tasks import _container, task_maintenance
+from src.tasks import _container
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -109,11 +109,9 @@ def _restore_container() -> None:
 def _bind_fake_dispatcher(monkeypatch: pytest.MonkeyPatch) -> FakeTaskDispatcher:
     dispatcher = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=dispatcher)
-    # Replace the legacy ``src.tasks.task_maintenance.get_container``
-    # monkeypatch surface used by the maintenance policies.
-    monkeypatch.setattr(task_maintenance, "get_container", lambda: container)
+    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
     monkeypatch.setattr(
-        task_maintenance, "celery_app", MagicMock(control=MagicMock(revoke=MagicMock()))
+        "src.core.celery_app.celery_app.control.revoke", MagicMock()
     )
     return dispatcher
 
@@ -609,7 +607,7 @@ def test_running_lease_recovery_returns_deterministic_count(
         )
         db.commit()
 
-        monkeypatch.setattr(task_maintenance, "celery_app", MagicMock())
+        monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
         count = recover_timed_out_tasks(db, now)
         db.commit()
         assert count == 3
@@ -635,7 +633,7 @@ def test_recovery_policy_claims_expired_lease_run(
         db.add(task_log)
         db.commit()
 
-        monkeypatch.setattr(task_maintenance, "celery_app", MagicMock())
+        monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
         assert recover_timed_out_tasks(db, now) == 1
         db.commit()
         db.refresh(task_log)
@@ -865,6 +863,7 @@ def test_heartbeat_aggregates_results_no_branching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``heartbeat`` aggregates deterministic counters from each policy module."""
+    import src.tasks._task_maintenance_orchestration as heartbeat_orchestration
     import src.tasks.task_maintenance as heartbeat_module
 
     captured: dict[str, Any] = {}
@@ -889,19 +888,27 @@ def test_heartbeat_aggregates_results_no_branching(
         captured["mark_missing_video_files"] = db
         return 7
 
-    monkeypatch.setattr(heartbeat_module, "dispatch_hot_builds", fake_dispatch_hot_builds)
-    monkeypatch.setattr(heartbeat_module, "recover_timed_out_tasks", fake_recover_timed_out_tasks)
     monkeypatch.setattr(
-        heartbeat_module, "recover_orphan_pending_tasks", fake_recover_orphan_pending_tasks
+        heartbeat_orchestration, "dispatch_hot_builds", fake_dispatch_hot_builds
     )
-    monkeypatch.setattr(heartbeat_module, "cleanup_old_task_logs", fake_cleanup_old_task_logs)
-    monkeypatch.setattr(heartbeat_module, "mark_missing_video_files", fake_mark_missing_video_files)
+    monkeypatch.setattr(
+        heartbeat_orchestration, "recover_timed_out_tasks", fake_recover_timed_out_tasks
+    )
+    monkeypatch.setattr(
+        heartbeat_orchestration, "recover_orphan_pending_tasks", fake_recover_orphan_pending_tasks
+    )
+    monkeypatch.setattr(
+        heartbeat_orchestration, "cleanup_old_task_logs", fake_cleanup_old_task_logs
+    )
+    monkeypatch.setattr(
+        heartbeat_orchestration, "mark_missing_video_files", fake_mark_missing_video_files
+    )
 
     mock_db = MagicMock()
     mock_task_db_session = MagicMock()
     mock_task_db_session.return_value.__enter__.return_value = mock_db
     mock_task_db_session.return_value.__exit__.return_value = False
-    monkeypatch.setattr(heartbeat_module, "task_db_session", mock_task_db_session)
+    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", mock_task_db_session)
 
     pinned_now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -910,7 +917,7 @@ def test_heartbeat_aggregates_results_no_branching(
         def now(cls, tz=None):  # type: ignore[override]
             return pinned_now
 
-    monkeypatch.setattr(heartbeat_module, "datetime", _FixedDatetime)
+    monkeypatch.setattr(heartbeat_orchestration, "datetime", _FixedDatetime)
 
     result = heartbeat_module.heartbeat()
 
@@ -935,6 +942,7 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``heartbeat`` only runs cleanup + missing-file sweep at ``now.minute == 0``."""
+    import src.tasks._task_maintenance_orchestration as heartbeat_orchestration
     import src.tasks.task_maintenance as heartbeat_module
 
     called: dict[str, int] = {
@@ -952,23 +960,29 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
 
         return _fn
 
-    monkeypatch.setattr(heartbeat_module, "dispatch_hot_builds", counter("dispatch_hot_builds"))
     monkeypatch.setattr(
-        heartbeat_module, "recover_timed_out_tasks", counter("recover_timed_out_tasks")
+        heartbeat_orchestration, "dispatch_hot_builds", counter("dispatch_hot_builds")
     )
     monkeypatch.setattr(
-        heartbeat_module, "recover_orphan_pending_tasks", counter("recover_orphan_pending_tasks")
+        heartbeat_orchestration, "recover_timed_out_tasks", counter("recover_timed_out_tasks")
     )
-    monkeypatch.setattr(heartbeat_module, "cleanup_old_task_logs", counter("cleanup_old_task_logs"))
     monkeypatch.setattr(
-        heartbeat_module, "mark_missing_video_files", counter("mark_missing_video_files")
+        heartbeat_orchestration,
+        "recover_orphan_pending_tasks",
+        counter("recover_orphan_pending_tasks"),
+    )
+    monkeypatch.setattr(
+        heartbeat_orchestration, "cleanup_old_task_logs", counter("cleanup_old_task_logs")
+    )
+    monkeypatch.setattr(
+        heartbeat_orchestration, "mark_missing_video_files", counter("mark_missing_video_files")
     )
 
     mock_db = MagicMock()
     mock_task_db_session = MagicMock()
     mock_task_db_session.return_value.__enter__.return_value = mock_db
     mock_task_db_session.return_value.__exit__.return_value = False
-    monkeypatch.setattr(heartbeat_module, "task_db_session", mock_task_db_session)
+    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", mock_task_db_session)
 
     pinned_now = datetime(2026, 9, 2, 12, 30, tzinfo=timezone.utc)
 
@@ -977,7 +991,7 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
         def now(cls, tz=None):  # type: ignore[override]
             return pinned_now
 
-    monkeypatch.setattr(heartbeat_module, "datetime", _FixedDatetime)
+    monkeypatch.setattr(heartbeat_orchestration, "datetime", _FixedDatetime)
     heartbeat_module.heartbeat()
     assert called["dispatch_hot_builds"] == 1
     assert called["recover_timed_out_tasks"] == 1

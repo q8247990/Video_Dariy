@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
@@ -44,7 +44,7 @@ class VideoFile(Base):
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     file_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     parse_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    parse_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    parse_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     file_missing: Mapped[bool] = mapped_column(default=False, nullable=False)
     missing_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 

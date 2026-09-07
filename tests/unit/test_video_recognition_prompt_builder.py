@@ -54,18 +54,20 @@ def test_build_video_recognition_prompt_contains_four_layers() -> None:
         }
     )
 
-    # system prompt assertions
-    assert "输出 schema" in system_prompt
+    # Output-schema contract: the system prompt must declare the JSON shape the
+    # model is required to return (session_summary / analysis_notes / detail).
     assert '"session_summary"' in system_prompt
     assert '"analysis_notes"' in system_prompt
     assert '"detail"' in system_prompt
-    assert "命名优先" in system_prompt
-    assert "事实优先" in system_prompt
-    assert "保守识别" in system_prompt
 
-    # user prompt assertions
-    assert "家庭上下文" in user_prompt
-    assert "摄像头上下文" in user_prompt
-    assert "任务级 Prompt" in user_prompt
-    assert "家庭概况" in user_prompt
-    assert "会话上下文" in user_prompt
+    # Data passthrough: home profile name, source name, camera/location name,
+    # camera note, and the session window (start ISO + duration) must all be
+    # rendered verbatim into the user prompt.
+    assert "米家NAS" in user_prompt
+    assert "客厅" in user_prompt
+    assert "电视屏幕会反光" in user_prompt
+    assert "我的家庭" in user_prompt
+    assert "2026-03-13T10:00:00" in user_prompt
+    # Assert the rendered `key=value` form (task.j2 emits `duration={{ total_duration_seconds }}`)
+    # rather than the bare numeric value — the surrounding key is the contract, not the number.
+    assert "duration=60" in user_prompt

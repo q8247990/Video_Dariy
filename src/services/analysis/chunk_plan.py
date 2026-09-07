@@ -137,12 +137,10 @@ def assemble_chunk_plan(
 ) -> ChunkPlan:
     """Fold pre-built chunks / sub-chunks into a :class:`ChunkPlan`.
 
-    Used by the slim analyzer task when the per-step
+    The analyzer orchestration issues the per-step
     ``build_session_video_chunks`` / ``build_chunk_sub_chunks`` calls
-    are issued from the task's own namespace so unit-test
-    ``monkeypatch.setattr("src.tasks.analyzer.X", ...)`` patches
-    still apply. ``chunks[i]`` and ``chunk_sub_chunks_list[i]`` are
-    paired 1:1.
+    from its own namespace and folds the result here.
+    ``chunks[i]`` and ``chunk_sub_chunks_list[i]`` are paired 1:1.
     """
     run_id = analysis_run_id_for_chunks(chunks)
     sub_chunks: list[SubChunkPlan] = []

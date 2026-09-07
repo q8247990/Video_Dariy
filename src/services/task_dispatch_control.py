@@ -43,15 +43,12 @@ from src.services.dispatch import (
     find_duplicate_active_task,
     get_task_log_for_update,
     is_singleton_task_running,
-    is_task_cancel_requested,
     record_deferred_hot_scan,
     renew_task_lease,
     supersede_active_hot_scan,
 )
-from src.services.dispatch.constants import TERMINAL_TASK_STATUSES
 
 __all__ = [
-    "TERMINAL_TASK_STATUSES",
     "TaskCancellationRequested",
     "bind_or_create_running_task_log",
     "build_dedupe_key",
@@ -63,7 +60,6 @@ __all__ = [
     "find_duplicate_active_task",
     "get_task_log_for_update",
     "is_singleton_task_running",
-    "is_task_cancel_requested",
     "record_deferred_hot_scan",
     "renew_task_lease",
     "supersede_active_hot_scan",

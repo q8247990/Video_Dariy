@@ -6,10 +6,6 @@ These types cross every stage boundary:
   hash dedupe (the discovery stage).
 * :class:`InsertedFile` — a persisted :class:`VideoFile` row plus
   its computed file-path hash (the dedupe stage).
-* :class:`ReducerPlan` / :class:`ReducerAppendAction` /
-  :class:`ReducerSessionToCreate` — the pure reducer output.
-  Re-exported from :mod:`src.services.session_build.reducer`
-  for callers that prefer the top-level ``types`` namespace.
 * :class:`SealedSessionInfo` / :class:`SessionBuildResult` — the
   hot/full runner return shape; ``SealedSessionInfo`` is what
   the analyzer dispatcher consumes (the slim Celery task
@@ -83,18 +79,6 @@ class InsertedFile:
 
 
 # ---------------------------------------------------------------------------
-# Reducer (re-exported for the ``types`` namespace)
-# ---------------------------------------------------------------------------
-
-from src.services.session_build.reducer import (  # noqa: E402  (intentional re-export)
-    EXTEND,
-    NEW_SESSION,
-    ReducerAppendAction,
-    ReducerPlan,
-    ReducerSessionToCreate,
-)
-
-# ---------------------------------------------------------------------------
 # Runner return shape
 # ---------------------------------------------------------------------------
 
@@ -104,7 +88,7 @@ class SealedSessionInfo:
     """One row of the analyzer-dispatch envelope.
 
     Consumed by the slim Celery task in
-    :func:`src.tasks.session_build._dispatch_analysis_for_sealed`,
+    :func:`src.tasks._session_build_orchestration._dispatch_analysis_for_sealed`,
     which loops over
     :attr:`SessionBuildResult.sealed_sessions` and calls the
     outbox dispatcher exactly once per row.
@@ -136,12 +120,7 @@ class SessionBuildResult:
 
 __all__ = [
     "DiscoveredFile",
-    "EXTEND",
     "InsertedFile",
-    "NEW_SESSION",
-    "ReducerAppendAction",
-    "ReducerPlan",
-    "ReducerSessionToCreate",
     "SealedSessionInfo",
     "SessionBuildResult",
 ]

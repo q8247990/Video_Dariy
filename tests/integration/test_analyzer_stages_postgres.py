@@ -1,5 +1,7 @@
 """PostgreSQL integration tests for the analysis-stage decomposition (Todo 18).
 
+白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+
 These tests exercise the public API of
 :mod:`src.services.analysis` against a real PostgreSQL instance
 (``postgres_migrated_engine``). They cover the behaviours the SQLite
@@ -277,31 +279,34 @@ def test_multi_chunk_midway_failure_resumes_remaining_chunks(
         def get_last_raw_response_text(self):
             return "raw"
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _task_session)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [
             SessionVideoChunk(0, 0, 180, ["/tmp/pg-0.mp4", "/tmp/pg-1.mp4", "/tmp/pg-2.mp4"])
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [
             SubChunk(0, index, index * 60, 60, [f"/tmp/pg-{index}.mp4"]) for index in range(3)
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: f"data:video/mp4;base64,{chunk.start_offset_seconds}",
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(int(response)),
     )
 
@@ -333,7 +338,7 @@ def test_multi_chunk_midway_failure_resumes_remaining_chunks(
             return response
 
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_RetryClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     result = analyze_session_task.run(session_id=session_id)
@@ -494,34 +499,39 @@ def test_deadlock_path_detected_and_converted_to_recovery(
         def get_last_raw_response_text(self):
             return "raw"
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _task_session)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [SessionVideoChunk(0, 0, 60, ["/tmp/pg.mp4"])],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [SubChunk(0, 0, 0, 60, ["/tmp/pg.mp4"])],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: "data:video/mp4;base64,AAA",
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(0),
     )
 
     def _deadlock_replace(db, session_id, events):
         raise OperationalError("INSERT INTO event_record ...", {}, _DeadlockOrig())
 
-    monkeypatch.setattr("src.tasks.analyzer._replace_session_events", _deadlock_replace)
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._replace_session_events", _deadlock_replace
+    )
 
     from src.services.analysis.recovery import is_deadlock_operational_error
 
@@ -623,33 +633,38 @@ def test_cancelled_during_external_call_rolls_back_cleanly(
         if cancel_calls["count"] > 4:
             raise TaskCancellationRequested("cancelled")
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _task_session)
-    monkeypatch.setattr("src.tasks.analyzer.ensure_task_not_cancelled", _cancel_after_first)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.ensure_task_not_cancelled", _cancel_after_first
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [
             SessionVideoChunk(0, 0, 120, ["/tmp/pg-a.mp4", "/tmp/pg-b.mp4"])
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [
             SubChunk(0, 0, 0, 60, ["/tmp/pg-a.mp4"]),
             SubChunk(0, 1, 60, 60, ["/tmp/pg-b.mp4"]),
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: f"data:video/mp4;base64,{chunk.start_offset_seconds}",
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(0),
     )
 
@@ -750,27 +765,30 @@ def test_no_long_checked_out_connection_during_llm_call(
         def get_last_raw_response_text(self):
             return "raw"
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _task_session)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [SessionVideoChunk(0, 0, 60, ["/tmp/pg.mp4"])],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [SubChunk(0, 0, 0, 60, ["/tmp/pg.mp4"])],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: "data:video/mp4;base64,AAA",
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_InstrumentedClient(), SimpleNamespace(id=None, provider_name="PG fake")),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(0),
     )
 

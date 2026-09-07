@@ -27,7 +27,7 @@ class LLMProvider(Base):
     is_default_vision: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_default_qa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_test_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    last_test_message: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    last_test_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_test_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     @validates("api_key")

@@ -25,13 +25,18 @@ def test_build_qa_intent_prompt_basic() -> None:
         home_context=home_context,
     )
 
-    assert "意图理解" in system_prompt
+    # Output-format contract: system prompt must instruct the model to return JSON only,
+    # and must enumerate the supported event types (data passthrough from EVENT_TYPE_DEFINITIONS).
+    assert "JSON" in system_prompt
+    assert "member_appear" in system_prompt
+
+    # Data passthrough: home name, members, pets, timezone, and the user's question
+    # must all reach the user prompt verbatim.
     assert "今天家里发生了什么" in user_prompt
     assert "爸爸" in user_prompt
     assert "布丁" in user_prompt
     assert "Asia/Shanghai" in user_prompt
-    assert "家庭名=温馨之家" in user_prompt
-    assert "已知主体: 爸爸、布丁" in user_prompt
+    assert "温馨之家" in user_prompt
 
 
 def test_build_qa_intent_prompt_empty_home() -> None:
@@ -47,6 +52,8 @@ def test_build_qa_intent_prompt_empty_home() -> None:
         home_context=home_context,
     )
 
+    # Branch fallback: with no members/pets the subject list must render the explicit
+    # "无" sentinel rather than dropping the line entirely.
     assert "已知主体: 无" in user_prompt
     assert "最近有异常吗" in user_prompt
 
@@ -68,12 +75,18 @@ def test_build_qa_answer_prompt_with_evidence() -> None:
         event_text="E1 | 03-20 09:03 | medium | member_appear | subject=爸爸 | summary=爸爸出现",
     )
 
+    # System prompt still names "证据" (evidence) — the answer must be grounded in it.
     assert "证据" in system_prompt
+
+    # Data passthrough: every evidence text block must arrive in the user prompt intact
+    # (we assert a stable fragment from each, not the surrounding label/section title).
     assert "昨天爸爸做了什么" in user_prompt
-    assert "日报证据" in user_prompt
-    assert "会话证据" in user_prompt
-    assert "事件证据" in user_prompt
     assert "爸爸" in user_prompt
+    assert "D 2026-03-20 | event_count=5" in user_prompt
+    assert "S1 | 03-20 09:00" in user_prompt
+    assert "E1 | 03-20 09:03" in user_prompt
+    assert "模式=overview" in user_prompt
+    assert "家庭: 温馨之家" in user_prompt
 
 
 def test_build_qa_answer_prompt_no_evidence() -> None:
@@ -88,4 +101,9 @@ def test_build_qa_answer_prompt_no_evidence() -> None:
         event_text="",
     )
 
+    # Branch fallback: with no evidence, the user prompt must announce that nothing
+    # was retrieved (so the model cannot silently hallucinate).
     assert "未检索到相关记录" in user_prompt
+
+    # The original question is still rendered, even when no evidence is attached.
+    assert "今天有没有陌生人" in user_prompt

@@ -159,11 +159,9 @@ def resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
         event_id_str = str(outcome.event.event_id)
         task_log.queue_task_id = event_id_str
     db.commit()
-    # Late import keeps the legacy ``src.tasks.task_maintenance.get_container``
-    # monkeypatch surface in ``tests/unit/test_task_maintenance.py`` working.
-    from src.tasks import task_maintenance
+    from src.tasks._container import get_container
 
-    task_maintenance.get_container().dispatcher.dispatch_analyze_session(
+    get_container().dispatcher.dispatch_analyze_session(
         db,
         AnalyzeSessionCommand(
             session_id=task_log.task_target_id,

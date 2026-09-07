@@ -1,5 +1,7 @@
 """PostgreSQL integration tests for the session-build pipeline decomposition (Todo 20).
 
+白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+
 These tests exercise the staged runner in
 :mod:`src.services.session_build.runner` against a real
 PostgreSQL schema migrated to the new head. They cover the
@@ -300,7 +302,7 @@ def test_pg_sealed_session_dispatches_exactly_one_outbox_analyze_command(
         sealed_sessions = result.sealed_sessions
         assert len(sealed_sessions) >= 1
 
-        from src.tasks.session_build import _dispatch_analysis_for_sealed
+        from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
 
         dispatched = _dispatch_analysis_for_sealed(db, sealed_sessions)
         db.commit()
@@ -350,7 +352,7 @@ def test_pg_dispatcher_partial_unique_index_rejects_second_analyze(
         assert result.sealed_sessions
         session_info = result.sealed_sessions[0]
 
-        from src.tasks.session_build import _dispatch_analysis_for_sealed
+        from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
 
         first = _dispatch_analysis_for_sealed(db, [session_info])
         db.commit()
@@ -556,7 +558,7 @@ def test_pg_outbox_partial_unique_index_serializes_sealed_session_dispatch(
         )
         db.commit()
 
-    from src.tasks.session_build import _dispatch_analysis_for_sealed
+    from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
 
     def _dispatch_once():
         with factory() as db:

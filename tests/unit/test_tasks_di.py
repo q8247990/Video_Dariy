@@ -28,7 +28,9 @@ from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeLLMGatewayFactory, FakeTaskDispatcher
 from src.application.pipeline.commands import AnalyzeSessionCommand
 from src.application.ports.task_dispatcher import TaskDispatcherPort
-from src.tasks import _container, session_build, task_maintenance
+from src.services.maintenance import dispatch_hot_builds
+from src.tasks import _container
+from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +54,7 @@ def test_session_build_dispatches_via_container() -> None:
 
     dispatcher = _bind(FakeTaskDispatcher())
     sealed = [MagicMock(session_id=11, priority="hot"), MagicMock(session_id=12, priority="full")]
-    session_build._dispatch_analysis_for_sealed(db=MagicMock(), sealed_sessions=sealed)
+    _dispatch_analysis_for_sealed(db=MagicMock(), sealed_sessions=sealed)
 
     assert [c.session_id for c in dispatcher.dispatched_analyze_session] == [11, 12]
     assert dispatcher.dispatched_analyze_session[0].priority == "hot"
@@ -69,7 +71,7 @@ def test_task_maintenance_dispatch_uses_container() -> None:
         MagicMock(id=1),
         MagicMock(id=2),
     ]
-    task_maintenance._dispatch_hot_builds(db)
+    dispatch_hot_builds(db)
 
     assert [c.source_id for c in dispatcher.dispatched_session_build] == [1, 2]
     assert [c.scan_mode for c in dispatcher.dispatched_session_build] == ["hot", "hot"]

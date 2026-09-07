@@ -20,11 +20,6 @@ behavioural contracts the SQLite unit-test suite cannot exercise:
 * the batched aggregate queries inside
   :func:`src.services.maintenance.running_lease_recovery.recover_timed_out_tasks`
   (two batched queries vs the pre-Wave-5 per-row SELECT pair).
-
-The legacy ``tests/integration/test_task_maintenance_postgres.py``
-continues to pin the original ``_recover_timed_out_tasks`` import
-path so the re-export from ``src.tasks.task_maintenance`` is
-verified to keep the original behaviour.
 """
 
 from __future__ import annotations
@@ -56,7 +51,6 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
-from src.tasks import task_maintenance
 from src.tasks.task_maintenance import heartbeat
 
 pytestmark = pytest.mark.postgres
@@ -93,15 +87,10 @@ def test_repeated_heartbeat_no_duplicate_or_state_corruption(
     postgres_migrated_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Running the heartbeat twice in a row does not double-dispatch or corrupt state."""
-    monkeypatch.setattr(task_maintenance, "celery_app", MagicMock())
-    monkeypatch.setattr(
-        "src.services.maintenance.hot_scheduling.task_maintenance",
-        task_maintenance,
-        raising=False,
-    )
+    monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
     factory = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(
-        "src.tasks.task_maintenance.task_db_session",
+        "src.tasks._task_maintenance_orchestration.task_db_session",
         lambda: _task_db_session(factory),
     )
 
@@ -137,10 +126,10 @@ def test_expired_lease_recovered_exactly_once(
     postgres_migrated_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The lease-expired RUNNING row is finalized to TIMEOUT exactly once across many recoveries."""
-    monkeypatch.setattr(task_maintenance, "celery_app", MagicMock())
+    monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
     factory = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(
-        "src.tasks.task_maintenance.task_db_session",
+        "src.tasks._task_maintenance_orchestration.task_db_session",
         lambda: _task_db_session(factory),
     )
 
@@ -207,17 +196,17 @@ def test_missing_scan_exception_does_not_pollute_other_stage_transactions(
     postgres_migrated_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A policy exception rolls back the whole heartbeat — no half-committed state."""
-    monkeypatch.setattr(task_maintenance, "celery_app", MagicMock())
+    monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
 
     def boom(db: Session) -> int:
         raise RuntimeError("disk gone")
 
     factory = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(
-        "src.tasks.task_maintenance.task_db_session",
+        "src.tasks._task_maintenance_orchestration.task_db_session",
         lambda: _task_db_session(factory),
     )
-    monkeypatch.setattr(task_maintenance, "mark_missing_video_files", boom)
+    monkeypatch.setattr("src.tasks._task_maintenance_orchestration.mark_missing_video_files", boom)
 
     pinned_now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -226,7 +215,7 @@ def test_missing_scan_exception_does_not_pollute_other_stage_transactions(
         def now(cls, tz=None):  # type: ignore[override]
             return pinned_now
 
-    monkeypatch.setattr(task_maintenance, "datetime", _FixedDatetime)
+    monkeypatch.setattr("src.tasks._task_maintenance_orchestration.datetime", _FixedDatetime)
 
     with Session(postgres_migrated_engine) as db:
         source = VideoSource(
@@ -336,11 +325,7 @@ def test_revoke_failure_does_not_corrupt_lease_state(
     def raising_revoke(*args: object, **kwargs: object) -> None:
         raise RuntimeError("broker offline")
 
-    monkeypatch.setattr(
-        task_maintenance,
-        "celery_app",
-        MagicMock(control=MagicMock(revoke=raising_revoke)),
-    )
+    monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", raising_revoke)
     monkeypatch.setattr(
         "src.services.maintenance.unleased_recovery.celery_app",
         MagicMock(control=MagicMock(revoke=raising_revoke)),
@@ -425,8 +410,8 @@ def test_lease_expired_analysis_recovery_writes_outbox_row(
 
     dispatcher = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=dispatcher)
-    monkeypatch.setattr(task_maintenance, "get_container", lambda: container)
-    monkeypatch.setattr(task_maintenance, "celery_app", MagicMock())
+    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
+    monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
 
     now = datetime.now(timezone.utc)
     with Session(postgres_migrated_engine) as db:

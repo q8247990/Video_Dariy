@@ -8,11 +8,6 @@ finalize, analyzer dispatch) to the orchestration module; the
 stages (discovery / dedupe / reducer / seal policy) all live in
 :mod:`src.services.session_build` so they can be unit-tested
 without a Celery broker.
-
-The re-exported names (``HOT_WINDOW_HOURS`` / ``_compute_full_scan_end``
-/ ``_dispatch_analysis_for_sealed``) preserve the monkey-patchable seam
-the existing test suite relies on: they resolve at
-``src.tasks.session_build.<name>`` unchanged.
 """
 
 from __future__ import annotations
@@ -21,13 +16,7 @@ from typing import Any
 
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
-from src.tasks._session_build_orchestration import (  # noqa: F401 - re-exported seam
-    HOT_WINDOW_HOURS,
-    _compute_full_scan_end,
-    _dispatch_analysis_for_sealed,
-    run_full_build,
-    run_hot_build,
-)
+from src.tasks._session_build_orchestration import run_full_build, run_hot_build
 
 
 @celery_app.task(bind=True, time_limit=3600)  # type: ignore[untyped-decorator]
@@ -46,10 +35,4 @@ def full_build_task(self: Any, source_id: int) -> dict[str, Any]:
         return run_full_build(db, source_id=source_id, queue_task_id=queue_task_id)
 
 
-__all__ = [
-    "HOT_WINDOW_HOURS",
-    "_compute_full_scan_end",
-    "_dispatch_analysis_for_sealed",
-    "full_build_task",
-    "hot_build_task",
-]
+__all__ = ["full_build_task", "hot_build_task"]

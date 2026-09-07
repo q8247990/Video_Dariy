@@ -106,5 +106,6 @@
   "media.physical_file_not_found": "Physical file not found on disk",
   "media.hls_manifest_not_found": "Session HLS manifest not found",
   "media.hls_read_failed": "Failed to read HLS manifest: {error}",
-  "media.merged_video_not_found": "Session merged video not found"
+  "media.merged_video_not_found": "Session merged video not found",
+  "media.range_not_satisfiable": "Requested byte range is not satisfiable"
 }

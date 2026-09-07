@@ -27,8 +27,8 @@ persistence layer (``checkpoint_writer`` / ``finalize``), and the
 external-call stage (``sub_chunk_runner``) never touches SQLAlchemy
 — the LLM / ffmpeg work happens without a checked-out DB
 connection. Prompt assembly is intentionally owned by the Celery
-orchestrator in :mod:`src.tasks.analyzer` because it imports the
-``src.application.prompt`` contracts / compiler; the
+orchestrator in :mod:`src.tasks._analyzer_orchestration` because it
+imports the ``src.application.prompt`` contracts / compiler; the
 ``src.services.analysis`` layer is forbidden from reaching up into
 ``src.application.*``.
 """

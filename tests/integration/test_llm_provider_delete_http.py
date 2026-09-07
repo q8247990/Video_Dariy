@@ -1,13 +1,9 @@
 from datetime import date
-from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-import src.api.deps as api_deps
-import src.db.session as db_session_module
 from src.api.v1.endpoints import llm_providers
 from src.models.chat_query_log import ChatQueryLog
 from src.models.daily_summary import DailySummary
@@ -16,21 +12,8 @@ from src.models.llm_usage_log import LLMUsageLog
 
 
 @pytest.fixture
-def client(pg_db: Session) -> TestClient:
-    app = FastAPI()
-    app.include_router(llm_providers.router, prefix="/api/v1/providers")
-
-    def _override_get_db():
-        yield pg_db
-
-    def _override_get_current_user() -> SimpleNamespace:
-        return SimpleNamespace(id=1, username="admin")
-
-    app.dependency_overrides[api_deps.get_db] = _override_get_db
-    app.dependency_overrides[db_session_module.get_db] = _override_get_db
-    app.dependency_overrides[api_deps.get_current_user] = _override_get_current_user
-
-    with TestClient(app) as test_client:
+def client(pg_db: Session, make_http_client) -> TestClient:
+    with make_http_client([(llm_providers.router, "/api/v1/providers")]) as test_client:
         yield test_client
 
 
@@ -59,9 +42,7 @@ def _build_provider(
     )
 
 
-def test_delete_provider_blocks_current_in_use_provider(
-    client: TestClient, pg_db: Session
-) -> None:
+def test_delete_provider_blocks_current_in_use_provider(client: TestClient, pg_db: Session) -> None:
     provider = _build_provider(name="vision-fallback", supports_vision=True, supports_qa=False)
     pg_db.add(provider)
     pg_db.commit()
