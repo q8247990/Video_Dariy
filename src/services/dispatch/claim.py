@@ -16,10 +16,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
-from src.models.task_log import TaskLog
+from src.models.task_log import ACTIVE_DEDUPE_INDEX_PREDICATE, TaskLog
 from src.services.dispatch.dedupe import (
     _ensure_dedupe_key,
     find_duplicate_active_task,
@@ -69,8 +70,7 @@ def create_pending_task_log(
             )
             .on_conflict_do_nothing(
                 index_elements=[TaskLog.dedupe_key],
-                index_where=TaskLog.dedupe_key.is_not(None)
-                & TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+                index_where=text(ACTIVE_DEDUPE_INDEX_PREDICATE),
             )
             .returning(TaskLog.id)
         )
