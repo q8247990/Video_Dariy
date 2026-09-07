@@ -451,30 +451,35 @@ Model descriptions:
 
 ### 7.1 Docker Compose Services
 
-`docker-compose.yml` defines the following services:
+`docker-compose.yml` defines the following services (4-container topology):
 
 - `postgres`
   - PostgreSQL 17
 - `redis`
   - Redis, serving as Celery broker and result backend
 - `backend`
-  - FastAPI + Uvicorn
-- `celery_worker`
-  - Executes scan, daily-report, webhook, and maintenance tasks on the general queue
-- `celery_vision_worker`
-  - Consumes `analysis_hot` and `analysis_full` with `concurrency=1`
-- `celery_beat`
-  - Scheduled dispatch of heartbeat and daily report tasks
+  - Hosts five processes via supervisord (see `supervisord.conf`):
+    - `api`: FastAPI + Uvicorn
+    - `worker`: consumes the `celery` queue (scan, daily report, webhook, maintenance), concurrency=2
+    - `vision-worker`: consumes `analysis_hot` / `analysis_full` with `concurrency=1`
+    - `beat`: scheduled dispatch of heartbeat and daily report tasks (single instance)
+    - `outbox-publisher`: transactional outbox publisher
 - `frontend`
   - Nginx hosting frontend static assets and proxying backend APIs
 
 ### 7.2 Container Startup Notes
 
 - Backend image is based on `python:3.10-slim`
-- `ffmpeg` is installed in the image
+- `ffmpeg` and `supervisor` are installed in the image
 - Frontend image uses a two-stage build: Node for building, Nginx for serving
-- `backend` depends on `postgres` and `redis` health checks
-- `celery_worker` / `celery_vision_worker` / `celery_beat` / `outbox_publisher` depend on the `backend` health check
+- `backend` depends on `postgres` and `redis` health checks; `frontend` depends on the
+  `backend` health check
+- Any process inside the `backend` container is auto-restarted by supervisord;
+  process-level health can be observed via `/metrics` (outbox lag, task recovery
+  counters) and `docker top hm_backend`
+- Restarting / recreating `backend` interrupts in-flight tasks: `acks_late` returns
+  messages to the queue, and analysis checkpoint-resume guarantees no data loss and
+  no double billing
 
 ### 7.3 Volume Mounts
 
@@ -583,8 +588,9 @@ policy and is blocked on retained event history.
   (`TaskLog + dedupe_key + singleton guard`), preventing concurrent scans of the same
   directory at the dispatch level.
 - Analysis tasks enter the `analysis_hot` / `analysis_full` queues by priority;
-  `celery_vision_worker` consumes them serially with concurrency=1, preventing parallel
-  analysis within the same queue at the execution level.
+  the `vision-worker` process (supervised inside the backend container) consumes them
+  serially with concurrency=1, preventing parallel analysis within the same queue at
+  the execution level.
 - The heartbeat task reclaims orphaned pending tasks and performs timeout recovery (lease
   recovery): runtime states left behind by a crashed process can be re-claimed by the
   heartbeat, which, combined with the atomic claim and analysis checkpoints, enables

@@ -88,15 +88,13 @@ After startup, go to "Settings → Model Connection" in the admin console and en
 
 ### Docker Compose Full-Stack Deployment (Recommended)
 
-`docker-compose.yml` includes the following services:
+`docker-compose.yml` includes the following services (4-container topology):
 
 | Service | Description |
 |---------|-------------|
 | postgres | Application database |
 | redis | Celery message broker |
-| backend | FastAPI backend |
-| celery_worker | Async task execution |
-| celery_beat | Scheduled task dispatch |
+| backend | FastAPI backend; supervisord runs uvicorn, two celery workers, beat, and the outbox publisher (see `supervisord.conf`) |
 | frontend | React frontend + Nginx reverse proxy |
 
 ```bash
@@ -349,7 +347,7 @@ Python version: 3.10
 # Reset scan/session/event/task data
 docker compose exec backend python -m src.reset_pipeline_data
 
-# Backend unit tests (661)
+# Backend unit tests (632)
 python3 -m pytest tests/unit -q
 
 # Backend integration tests (requires real PostgreSQL, DATABASE_URL)

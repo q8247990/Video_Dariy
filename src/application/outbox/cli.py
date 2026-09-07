@@ -2,7 +2,8 @@
 
 This module owns the production entry point for the
 :class:`~src.application.outbox.publisher.OutboxPublisher`. The CLI is
-what ``docker compose up outbox_publisher`` runs:
+what the ``outbox-publisher`` supervisord program inside the backend
+container runs:
 
 ```bash
 python -m src.application.outbox            # long-running loop
@@ -37,10 +38,9 @@ must still be able to drain the outbox. Coupling the publisher to
 Celery would make the whole outbox-dependent path inherit Celery's
 failure modes.
 
-The docker-compose service (``outbox_publisher``) is its own container;
-its ``healthcheck`` (Todo 23) imports the publisher module directly
-and the operational runbook (Todo 24) restarts it independently of the
-Celery worker / beat.
+The publisher runs as a standalone process under supervisord inside the
+backend container (``supervisord.conf``); supervisord restarts it
+independently of the Celery worker / beat.
 """
 
 from __future__ import annotations

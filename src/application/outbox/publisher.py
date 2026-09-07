@@ -95,7 +95,7 @@ Failure matrix (mirrors ADR §8)
   publisher does **not** skip / delete; supervisor emits the degraded
   metric.
 
-CLI entry (``cli.py``) and docker-compose service
+CLI entry (``cli.py``) and the supervised process
 ================================================
 
 This module is consumable in three ways:
@@ -106,8 +106,9 @@ This module is consumable in three ways:
 2. As a unit-test fixture — same shape, with a fake ``BrokerPort`` and
    a controlled clock.
 3. As a standalone CLI via :mod:`src.application.outbox.cli` (the
-   ``outbox_publisher`` docker-compose service). The CLI owns the
-   ``SessionLocal`` lifecycle and respects SIGTERM / SIGINT.
+   ``outbox-publisher`` supervisord program inside the backend
+   container). The CLI owns the ``SessionLocal`` lifecycle and
+   respects SIGTERM / SIGINT.
 """
 
 from __future__ import annotations

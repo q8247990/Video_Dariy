@@ -88,15 +88,13 @@ vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
 
 ### Docker Compose 全栈部署（推荐）
 
-`docker-compose.yml` 包含以下服务：
+`docker-compose.yml` 包含以下服务（4 容器拓扑）：
 
 | 服务 | 说明 |
 |------|------|
 | postgres | 业务数据库 |
 | redis | Celery 消息队列 |
-| backend | FastAPI 后端 |
-| celery_worker | 异步任务执行 |
-| celery_beat | 定时任务调度 |
+| backend | FastAPI 后端，supervisord 托管 uvicorn、两个 celery worker、beat 与 outbox publisher（见 `supervisord.conf`） |
 | frontend | React 前端 + Nginx 反代 |
 
 ```bash
@@ -348,7 +346,7 @@ Python 版本：3.10
 # 重置扫描/Session/事件/任务数据
 docker compose exec backend python -m src.reset_pipeline_data
 
-# 后端单元测试（661 项）
+# 后端单元测试（632 项）
 python3 -m pytest tests/unit -q
 
 # 后端集成测试（需真实 PostgreSQL，DATABASE_URL）

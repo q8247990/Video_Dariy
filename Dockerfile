@@ -41,6 +41,7 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
@@ -49,7 +50,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY alembic /app/alembic
 COPY alembic.ini /app/alembic.ini
 COPY src /app/src
+COPY supervisord.conf /app/supervisord.conf
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 单容器部署：supervisord 托管 uvicorn、两个 celery worker、celery beat
+# 与 outbox publisher 五个进程（详见 supervisord.conf）。
+CMD ["supervisord", "-n", "-c", "/app/supervisord.conf"]

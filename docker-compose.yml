@@ -2,6 +2,10 @@
 # SECRET_KEY, MEDIA_SIGNING_KEY, PROVIDER_KEY_ENCRYPTION_KEY (v1:<Fernet key> format),
 # DEFAULT_ADMIN_PASSWORD. This applies to the release/offline package too: its
 # streamlined docker-compose still requires the same secrets.
+#
+# 4-container topology: postgres / redis / backend / frontend.
+# The backend container hosts uvicorn, two celery workers, celery beat and the
+# outbox publisher via supervisord (see supervisord.conf).
 services:
   postgres:
     image: postgres:17-alpine
@@ -73,7 +77,6 @@ services:
       - ./data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test:
         [
@@ -88,116 +91,6 @@ services:
       resources:
         limits:
           cpus: "2.0"
-          memory: 2g
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    networks:
-      - app_bridge
-
-  celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: hm_celery_worker
-    restart: unless-stopped
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/home_monitor
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
-      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
-      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
-      MCP_TOKEN: ${MCP_TOKEN:-}
-      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-zh-CN}
-      VIDEO_ROOT_PATH: /data/videos
-      PLAYBACK_CACHE_ROOT: /data/hls
-      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    volumes:
-      - ./xiaomi_video:/data/videos
-      - ./data:/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: celery -A src.core.celery_app worker --loglevel=info -Q celery
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x and 'worker' in x for x in ps) else 1)\"",
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 2g
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    networks:
-      - app_bridge
-
-  celery_vision_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: hm_celery_vision_worker
-    restart: unless-stopped
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/home_monitor
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
-      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
-      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
-      MCP_TOKEN: ${MCP_TOKEN:-}
-      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-zh-CN}
-      VIDEO_ROOT_PATH: /data/videos
-      PLAYBACK_CACHE_ROOT: /data/hls
-      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    volumes:
-      - ./xiaomi_video:/data/videos
-      - ./data:/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: celery -A src.core.celery_app worker --loglevel=info -Q analysis_hot,analysis_full --concurrency=1
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x and 'worker' in x for x in ps) else 1)\"",
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
           memory: 4g
     logging:
       driver: json-file
@@ -206,100 +99,6 @@ services:
         max-file: "5"
     networks:
       - app_bridge
-
-  celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: hm_celery_beat
-    restart: unless-stopped
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/home_monitor
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
-      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
-      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
-      MCP_TOKEN: ${MCP_TOKEN:-}
-      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-zh-CN}
-      VIDEO_ROOT_PATH: /data/videos
-      PLAYBACK_CACHE_ROOT: /data/hls
-      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    volumes:
-      - ./xiaomi_video:/data/videos
-      - ./data:/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: celery -A src.core.celery_app beat --loglevel=info
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import os,sys; ps=[open('/proc/'+d+'/cmdline').read().replace(chr(0),' ') for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any('celery' in x and 'beat' in x for x in ps) else 1)\"",
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
-    networks:
-      - app_bridge
-
-  outbox_publisher:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: hm_outbox_publisher
-    restart: unless-stopped
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/home_monitor
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
-      MEDIA_SIGNING_KEY: ${MEDIA_SIGNING_KEY:?set MEDIA_SIGNING_KEY in .env}
-      PROVIDER_KEY_ENCRYPTION_KEY: ${PROVIDER_KEY_ENCRYPTION_KEY:?set PROVIDER_KEY_ENCRYPTION_KEY in .env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    volumes:
-      - ./xiaomi_video:/data/videos
-      - ./data:/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: python -m src.application.outbox
-    networks:
-      - app_bridge
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import os,sys; token='out'+'box'; ps=[open('/proc/'+d+'/cmdline').read() for d in os.listdir('/proc') if d.isdigit()]; sys.exit(0 if any(token in p for p in ps) else 1)\"",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
 
   frontend:
     build:

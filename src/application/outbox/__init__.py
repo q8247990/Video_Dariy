@@ -72,8 +72,8 @@ Submodules
     The ``python -m src.application.outbox`` entry point. Owns the
     ``SessionLocal`` lifecycle, the SIGTERM / SIGINT stop flag, and
     the optional ``--stats-file`` JSON snapshot. The
-    ``outbox_publisher`` docker-compose service runs this CLI; the
-    ``--once`` flag is the test entry point.
+    ``outbox-publisher`` supervisord program inside the backend
+    container runs this CLI; the ``--once`` flag is the test entry point.
 
 ``__main__``
     Re-exports :func:`src.application.outbox.cli.main` so

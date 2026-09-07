@@ -449,30 +449,32 @@ DailySummary 1 --- 1 summary_date
 
 ### 7.1 Docker Compose 服务
 
-`docker-compose.yml` 定义了以下服务：
+`docker-compose.yml` 定义了以下服务（4 容器拓扑）：
 
 - `postgres`
   - PostgreSQL 17
 - `redis`
   - Redis，作为 Celery broker 与 backend
 - `backend`
-  - FastAPI + Uvicorn
-- `celery_worker`
-  - 执行扫描、日报、Webhook 和维护等通用队列任务
-- `celery_vision_worker`
-  - 以 `concurrency=1` 消费 `analysis_hot` / `analysis_full` 队列
-- `celery_beat`
-  - 定时派发心跳与日报任务
+  - 通过 supervisord（见 `supervisord.conf`）托管 5 个进程：
+    - `api`：FastAPI + Uvicorn
+    - `worker`：消费 `celery` 队列（扫描、日报、Webhook、维护），concurrency=2
+    - `vision-worker`：以 `concurrency=1` 消费 `analysis_hot` / `analysis_full` 队列
+    - `beat`：定时派发心跳与日报任务（单实例）
+    - `outbox-publisher`：事务性 outbox 发布器
 - `frontend`
   - Nginx 托管前端静态资源并代理后端接口
 
 ### 7.2 容器启动要点
 
 - 后端镜像基于 `python:3.10-slim`
-- 镜像中安装 `ffmpeg`
+- 镜像中安装 `ffmpeg` 与 `supervisor`
 - 前端镜像为两阶段构建：Node 构建，Nginx 运行
-- `backend` 依赖 `postgres` 和 `redis` 健康检查
-- `celery_worker` / `celery_vision_worker` / `celery_beat` / `outbox_publisher` 依赖 `backend` 健康检查
+- `backend` 依赖 `postgres` 和 `redis` 健康检查；`frontend` 依赖 `backend` 健康检查
+- `backend` 容器内任一进程崩溃由 supervisord 自动拉起；进程级健康可用
+  `/metrics`（outbox 延迟、任务恢复计数）与 `docker top hm_backend` 观察
+- 重启 / 重建 `backend` 会中断进行中的任务：`acks_late` 使消息回队重投，
+  分析断点续跑保证不丢数据、不重复计费
 
 ### 7.3 挂载约定
 
@@ -582,8 +584,9 @@ Session 分析状态（`analysis_status`）主要包括：
 
 - 同一视频源同时只允许一类活跃扫描任务（`TaskLog + dedupe_key + singleton guard`），
   从派发层面避免并发扫描同一目录。
-- 分析任务按优先级进入 `analysis_hot` / `analysis_full` 队列；`celery_vision_worker`
-  以 concurrency=1 串行消费，从执行层面避免同一队列内的并行分析。
+- 分析任务按优先级进入 `analysis_hot` / `analysis_full` 队列；`vision-worker`
+  进程（backend 容器内由 supervisord 托管）以 concurrency=1 串行消费，从执行层面
+  避免同一队列内的并行分析。
 - 心跳任务会回收孤儿 pending 任务并做超时恢复（租约恢复）：进程崩溃后遗留的运行态可被
   心跳重新认领，配合原子抢占与分析断点实现断点续跑。
 
