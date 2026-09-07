@@ -5,25 +5,21 @@ opens a :func:`task_db_session` and delegates the entire
 orchestration (claim + plan + sub-chunk loop + finalize + failure
 handling) to this module so the task entry stays a ~100-line delegate.
 
-The names the existing tests monkeypatch at
-``src.tasks.analyzer.<name>`` (``task_db_session``,
+Every helper this module calls (``task_db_session``,
 ``build_session_video_chunks``, ``build_chunk_sub_chunks``,
 ``build_home_context``, ``_build_provider_client``,
 ``_replace_session_events``, ``ensure_task_not_cancelled``,
-``_build_prompts``, ``session_chunk_from_sub_chunk``,
-``build_chunk_video_data_url``, ``enforce_token_quota``,
-``parse_video_recognition_output``, ``record_token_usage``) are read
-dynamically through the task module via :func:`_seam`, so a
-``monkeypatch.setattr("src.tasks.analyzer.X", ...)`` in an existing
-test takes effect unchanged.
+``session_chunk_from_sub_chunk``, ``build_chunk_video_data_url``,
+``enforce_token_quota``, ``parse_video_recognition_output``,
+``record_token_usage``) is imported at module top level and called
+directly; tests that need to stub one of them monkeypatch the name in
+this module's namespace (``src.tasks._analyzer_orchestration.X``).
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any
-
-from sqlalchemy.orm import Session
 
 from src.application.prompt.compiler import compile_video_recognition_prompt
 from src.application.prompt.contracts import (
@@ -33,6 +29,7 @@ from src.application.prompt.contracts import (
     VideoSourcePromptContext,
 )
 from src.core.config import settings
+from src.db.session import task_db_session
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_source import VideoSource
@@ -55,6 +52,7 @@ from src.services.analysis import (
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
+from src.services.analysis.aggregator import _replace_session_events
 from src.services.analysis.chunk_plan import SubChunkPlan, assemble_chunk_plan
 from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
 from src.services.analysis.errors import RawResponseCapture
@@ -63,23 +61,28 @@ from src.services.analysis.finalize import (
     record_failed_transition,
     record_partial_failure_transition,
 )
+from src.services.analysis.provider import _build_provider_client
 from src.services.analysis.sub_chunk_runner import execute_sub_chunk
 from src.services.dispatch.cancel import TaskCancellationRequested
 from src.services.dispatch.lease import renew_task_lease
+from src.services.home_profile import build_home_context
 from src.services.llm_output_utils import truncate_text
+from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import SourceType
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
-from src.services.session_analysis_video import SessionVideoChunk, SubChunk
+from src.services.session_analysis_video import (
+    SessionVideoChunk,
+    SubChunk,
+    build_chunk_sub_chunks,
+    build_chunk_video_data_url,
+    build_session_video_chunks,
+    session_chunk_from_sub_chunk,
+)
+from src.services.task_dispatch_control import ensure_task_not_cancelled
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
+from src.services.video_analysis.output_parser import parse_video_recognition_output
 
 logger = logging.getLogger(__name__)
-
-
-def _seam() -> Any:
-    """Return :mod:`src.tasks.analyzer` (the patchable seam module)."""
-    import src.tasks.analyzer as _analyzer_module
-
-    return _analyzer_module
 
 
 def _resolve_ingest_type(source: VideoSource) -> str:
@@ -135,7 +138,6 @@ def _build_prompts(
 
 
 def run_session_analysis(
-    db: Session,
     *,
     self: Any,
     session_id: int,
@@ -144,114 +146,132 @@ def run_session_analysis(
 ) -> dict[str, Any]:
     """Claim, plan, run the sub-chunk loop, finalize; return the response dict.
 
-    Mirrors the legacy ``analyze_session_task`` body exactly - the
-    task wrapper only opens the session, builds ``queue_task_id`` and
-    calls this entry point.
+    Owns the whole pipeline lifetime, including the orchestration DB
+    session (``task_db_session``); the Celery task wrapper only builds
+    ``queue_task_id`` and calls this entry point.
     """
-    seam = _seam()
-    last_prompt_text: str | None = None
-    last_response_text: str | None = None
-    last_raw_response_text: str | None = None
+    with task_db_session() as db:
+        last_prompt_text: str | None = None
+        last_response_text: str | None = None
+        last_raw_response_text: str | None = None
 
-    chunks = seam.build_session_video_chunks(
-        db, session_id, chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS
-    )
-    chunk_sub_chunks_list = [
-        seam.build_chunk_sub_chunks(
-            chunk, db, sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS
+        chunks = build_session_video_chunks(
+            db, session_id, chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS
         )
-        for chunk in chunks
-    ]
-    plan = assemble_chunk_plan(
-        session_id=session_id,
-        chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
-        sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS,
-        chunks=chunks,
-        chunk_sub_chunks_list=chunk_sub_chunks_list,
-    )
-    claim, skip = claim_session_for_analysis(
-        db,
-        session_id=session_id,
-        priority=priority,
-        queue_task_id=queue_task_id,
-        analysis_run_id=plan.analysis_run_id,
-    )
-    if claim is None and skip is None:
-        return finalize_stale_message()
-    if claim is None:
-        assert skip is not None
-        task_log = (
-            db.query(TaskLog)
-            .filter_by(task_target_id=session_id, task_type="session_analysis")
-            .order_by(TaskLog.id.desc())
-            .first()
-        )
-        assert task_log is not None
-        return finalize_skip(
-            db,
-            task_log=task_log,
-            session_id=session_id,
-            outcome=skip,
-            priority=priority,
-        )
-    home_context = seam.build_home_context(db)
-    client, provider = seam._build_provider_client(db)
-    success_return: dict[str, Any]
-
-    try:
-        loop_result = _run_sub_chunk_loop(
-            db=db,
-            self=self,
-            claim=claim,
-            plan=plan,
-            chunk_sub_chunks_list=chunk_sub_chunks_list,
-            home_context=home_context,
-            client=client,
-            provider=provider,
-            priority=priority,
-        )
-        if isinstance(loop_result, dict):
-            return loop_result
-        sub_chunk_count, parse_modes, late_worker = loop_result
-        if late_worker:
-            return {"late_worker": True, "session_id": session_id}
-        try:
-            success_return = finalize_session_success(
-                db,
-                claim=claim.to_guards(),
-                session=claim.session,
-                task_log=claim.task_log,
-                analysis_run_id=plan.analysis_run_id,
-                chunk_count=len(plan.chunks),
-                sub_chunk_count=sub_chunk_count,
-                priority=priority,
-                raw_mp4_num_frames=RAW_MP4_NUM_FRAMES,
-                chunk_seconds=plan.chunk_seconds,
-                sub_chunk_seconds=plan.sub_chunk_seconds,
-                parse_modes=parse_modes,
-                replace_session_events_fn=seam._replace_session_events,
+        chunk_sub_chunks_list = [
+            build_chunk_sub_chunks(
+                chunk, db, sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS
             )
+            for chunk in chunks
+        ]
+        plan = assemble_chunk_plan(
+            session_id=session_id,
+            chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
+            sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS,
+            chunks=chunks,
+            chunk_sub_chunks_list=chunk_sub_chunks_list,
+        )
+        claim, skip = claim_session_for_analysis(
+            db,
+            session_id=session_id,
+            priority=priority,
+            queue_task_id=queue_task_id,
+            analysis_run_id=plan.analysis_run_id,
+        )
+        if claim is None and skip is None:
+            return finalize_stale_message()
+        if claim is None:
+            assert skip is not None
+            task_log = (
+                db.query(TaskLog)
+                .filter_by(task_target_id=session_id, task_type="session_analysis")
+                .order_by(TaskLog.id.desc())
+                .first()
+            )
+            assert task_log is not None
+            return finalize_skip(
+                db,
+                task_log=task_log,
+                session_id=session_id,
+                outcome=skip,
+                priority=priority,
+            )
+        try:
+            home_context = build_home_context(db)
+            client, provider = _build_provider_client(db)
         except Exception as exc:
-            raw_text = getattr(client, "get_last_raw_response_text", lambda: None)()
-            if raw_text:
-                last_raw_response_text = raw_text
-            last_response_text = last_raw_response_text or last_response_text
+            # The claim (line above) already flipped the TaskLog to RUNNING;
+            # a failure here (e.g. provider API-key decryption) must still
+            # finalize it to FAILED or the row is stranded as a zombie
+            # "running" (no finished_at/message) and the session stays
+            # analyzing forever.
             _handle_top_level_failure(
                 db,
                 self=self,
                 claim=claim,
                 exc=exc,
-                last_prompt_text=last_prompt_text,
-                last_response_text=last_response_text,
-                last_raw_response_text=last_raw_response_text,
+                last_prompt_text=None,
+                last_response_text=None,
+                last_raw_response_text=None,
                 priority=priority,
             )
             raise
-    finally:
-        close = getattr(client, "close", None)
-        if close is not None:
-            close()
-    return success_return
+        success_return: dict[str, Any]
+
+        try:
+            loop_result = _run_sub_chunk_loop(
+                db=db,
+                self=self,
+                claim=claim,
+                plan=plan,
+                chunk_sub_chunks_list=chunk_sub_chunks_list,
+                home_context=home_context,
+                client=client,
+                provider=provider,
+                priority=priority,
+            )
+            if isinstance(loop_result, dict):
+                return loop_result
+            sub_chunk_count, parse_modes, late_worker = loop_result
+            if late_worker:
+                return {"late_worker": True, "session_id": session_id}
+            try:
+                success_return = finalize_session_success(
+                    db,
+                    claim=claim.to_guards(),
+                    session=claim.session,
+                    task_log=claim.task_log,
+                    analysis_run_id=plan.analysis_run_id,
+                    chunk_count=len(plan.chunks),
+                    sub_chunk_count=sub_chunk_count,
+                    priority=priority,
+                    raw_mp4_num_frames=RAW_MP4_NUM_FRAMES,
+                    chunk_seconds=plan.chunk_seconds,
+                    sub_chunk_seconds=plan.sub_chunk_seconds,
+                    parse_modes=parse_modes,
+                    replace_session_events_fn=_replace_session_events,
+                )
+            except Exception as exc:
+                raw_text = getattr(client, "get_last_raw_response_text", lambda: None)()
+                if raw_text:
+                    last_raw_response_text = raw_text
+                last_response_text = last_raw_response_text or last_response_text
+                _handle_top_level_failure(
+                    db,
+                    self=self,
+                    claim=claim,
+                    exc=exc,
+                    last_prompt_text=last_prompt_text,
+                    last_response_text=last_response_text,
+                    last_raw_response_text=last_raw_response_text,
+                    priority=priority,
+                )
+                raise
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                close()
+        return success_return
 
 
 def _run_sub_chunk_loop(
@@ -282,12 +302,10 @@ def _run_sub_chunk_loop(
     transaction (released between the pre / post stages so the LLM
     HTTP call happens with **no** checked-out connection).
 
-    All monkey-patchable helper names are read through the patchable
-    seam module (``src.tasks.analyzer``) so the existing test suite's
-    ``monkeypatch.setattr("src.tasks.analyzer.X", ...)`` keeps taking
-    effect unchanged.
+    Helper names are module-level imports, so tests that need to stub
+    one monkeypatch it in this module's namespace
+    (``src.tasks._analyzer_orchestration.X``).
     """
-    seam = _seam()
     guards = claim.to_guards()
     sub_chunk_count = 0
     parse_modes: list[str] = []
@@ -299,20 +317,20 @@ def _run_sub_chunk_loop(
         # after the claim succeeds (before any chunk work) so a cancel
         # request that arrived during the claim is honoured even when
         # only one sub-chunk would otherwise have been processed.
-        seam.ensure_task_not_cancelled(
+        ensure_task_not_cancelled(
             db,
             claim.task_log.id,
             default_message=f"Analysis cancelled for session {claim.session.id}",
         )
         for chunk in plan.chunks:
-            seam.ensure_task_not_cancelled(
+            ensure_task_not_cancelled(
                 db,
                 claim.task_log.id,
                 default_message=f"Analysis cancelled for session {claim.session.id}",
             )
             chunk_sub_chunks = chunk_sub_chunks_list[chunk.chunk_index]
             for sub_chunk_dto in chunk_sub_chunks:
-                seam.ensure_task_not_cancelled(
+                ensure_task_not_cancelled(
                     db,
                     claim.task_log.id,
                     default_message=(
@@ -327,17 +345,17 @@ def _run_sub_chunk_loop(
                     duration_seconds=sub_chunk_dto.duration_seconds,
                     file_paths=tuple(sub_chunk_dto.file_paths),
                 )
-                system_prompt, user_prompt = seam._build_prompts(
+                system_prompt, user_prompt = _build_prompts(
                     claim.source,
                     home_context,
                     claim.session,
                     sub_chunk_dto,
                 )
                 last_prompt_text = user_prompt
-                projected_chunk = seam.session_chunk_from_sub_chunk(
+                projected_chunk = session_chunk_from_sub_chunk(
                     sub_chunk_dto, parent_chunk_index=chunk.chunk_index
                 )
-                video_data_url = seam.build_chunk_video_data_url(projected_chunk)
+                video_data_url = build_chunk_video_data_url(projected_chunk)
                 extra_body = build_sub_chunk_extra_body()
                 prepared, result = _run_one_sub_chunk(
                     db=db,
@@ -364,7 +382,7 @@ def _run_sub_chunk_loop(
         # Post-loop cancel fence: a cancel that arrives between the
         # last sub-chunk's commit and the completion query must still
         # roll the session back to ``SEALED`` rather than to ``PARTIAL``.
-        seam.ensure_task_not_cancelled(
+        ensure_task_not_cancelled(
             db,
             claim.task_log.id,
             default_message=f"Analysis cancelled for session {claim.session.id}",
@@ -546,8 +564,7 @@ def _run_one_sub_chunk(
     vision provider — the resumed run only re-charges the failed
     sub-chunks.
     """
-    seam = _seam()
-    with seam.task_db_session() as pre_db:
+    with task_db_session() as pre_db:
         checkpoint = get_or_create_checkpoint(
             pre_db,
             session_id=claim.session.id,
@@ -566,7 +583,7 @@ def _run_one_sub_chunk(
                 lease_owner=claim.task_log.lease_owner or "",
             )
             renew_task_lease(pre_db, claim.task_log.id, claim.task_log.lease_owner or "")
-            seam.enforce_token_quota(pre_db, provider)
+            enforce_token_quota(pre_db, provider)
         pre_db.commit()
         checkpoint_id = checkpoint.id
         prepared = _PreparedSubChunk(
@@ -594,7 +611,7 @@ def _run_one_sub_chunk(
             user_prompt=user_prompt,
             video_data_url=video_data_url,
             extra_body=extra_body,
-            response_parser=seam.parse_video_recognition_output,
+            response_parser=parse_video_recognition_output,
         )
     except Exception as exc:
         # If the LLM call or the parser raised, capture the raw
@@ -609,7 +626,7 @@ def _run_one_sub_chunk(
             raise
         raise RawResponseCapture(exc, raw_text) from exc
 
-    with seam.task_db_session() as post_db:
+    with task_db_session() as post_db:
         post_db_checkpoint = (
             post_db.query(SessionAnalysisCheckpoint)
             .filter(SessionAnalysisCheckpoint.id == checkpoint_id)
@@ -630,7 +647,7 @@ def _run_one_sub_chunk(
             checkpoint=post_db_checkpoint,
             session_id=claim.session.id,
             usage=result.usage,
-            record_token_usage_fn=seam.record_token_usage,
+            record_token_usage_fn=record_token_usage,
         )
         renew_task_lease(post_db, claim.task_log.id, claim.task_log.lease_owner or "")
         post_db.commit()

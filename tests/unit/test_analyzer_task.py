@@ -12,14 +12,16 @@ from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.analysis.checkpoint_writer import _checkpoint_for_work
 from src.services.pipeline_constants import TaskStatus
+from src.services.provider_key_crypto import ProviderKeyDecryptionError
 from src.services.session_analysis_video import SessionVideoChunk, SubChunk
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks.analyzer import _checkpoint_for_work, analyze_session_task
+from src.tasks.analyzer import analyze_session_task
 
 SessionFactory = Callable[[], Session]
 
@@ -99,9 +101,9 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
         finally:
             db.close()
 
-    monkeypatch.setattr("src.tasks.analyzer.task_db_session", _fake_task_db_session)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _fake_task_db_session)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_session_video_chunks",
+        "src.tasks._analyzer_orchestration.build_session_video_chunks",
         lambda db, session_id, chunk_seconds: [
             SessionVideoChunk(
                 chunk_index=0,
@@ -112,17 +114,20 @@ def _mock_common(monkeypatch, session_factory, response_text: str = "{}") -> Non
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_video_data_url",
+        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
         lambda chunk: "data:video/mp4;base64,AAAA",
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=1, provider_name="mock-provider")),
     )
-    monkeypatch.setattr("src.tasks.analyzer.build_home_context", lambda db: {})
-    monkeypatch.setattr("src.tasks.analyzer.enforce_token_quota", lambda db, provider: None)
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
     monkeypatch.setattr(
-        "src.tasks.analyzer.record_token_usage",
+        "src.tasks._analyzer_orchestration.enforce_token_quota",
+        lambda db, provider: None,
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.record_token_usage",
         lambda db, provider_id, provider_name_snapshot, scene, usage, **kwargs: None,
     )
 
@@ -174,7 +179,7 @@ def _mock_three_sub_chunks(monkeypatch, session_factory, responses: list[str]) -
 
     _mock_common(monkeypatch, session_factory)
     monkeypatch.setattr(
-        "src.tasks.analyzer.build_chunk_sub_chunks",
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
         lambda chunk, db, sub_chunk_seconds: [
             SubChunk(
                 chunk_index=0,
@@ -187,15 +192,15 @@ def _mock_three_sub_chunks(monkeypatch, session_factory, responses: list[str]) -
         ],
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.session_chunk_from_sub_chunk",
+        "src.tasks._analyzer_orchestration.session_chunk_from_sub_chunk",
         lambda sub_chunk, parent_chunk_index: sub_chunk,
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_provider_client",
+        "src.tasks._analyzer_orchestration._build_provider_client",
         lambda db: (_FakeClient(), SimpleNamespace(id=1, provider_name="mock-provider")),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response: _recognition_result(int(response)),
     )
     return calls
@@ -359,7 +364,9 @@ def test_analyze_session_cancelled_mid_run_partial_not_served(
 
             raise TaskCancellationRequested("cancelled")
 
-    monkeypatch.setattr("src.tasks.analyzer.ensure_task_not_cancelled", _cancel_after_first)
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.ensure_task_not_cancelled", _cancel_after_first
+    )
     result = analyze_session_task.run(session_id=session_id)
 
     verify_db = session_factory()
@@ -385,7 +392,7 @@ def test_analyze_session_replaces_old_events(monkeypatch, pg_db_factory: Session
 
     _mock_common(monkeypatch, session_factory)
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response_text: RecognitionResultDTO(
             session_summary=SessionSummaryDTO(
                 summary_text="new summary",
@@ -439,7 +446,7 @@ def test_analyze_session_empty_result_clears_old_events(
 
     _mock_common(monkeypatch, session_factory)
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response_text: RecognitionResultDTO(
             session_summary=SessionSummaryDTO(
                 summary_text="no event",
@@ -480,7 +487,7 @@ def test_analyze_session_failure_keeps_old_events(
 
     _mock_common(monkeypatch, session_factory)
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response_text: (_ for _ in ()).throw(RuntimeError("parse failed")),
     )
 
@@ -514,10 +521,11 @@ def test_analyze_session_failure_logs_prompt_and_raw_response(
 
     _mock_common(monkeypatch, session_factory)
     monkeypatch.setattr(
-        "src.tasks.analyzer._build_prompts", lambda *_: ("system", "final prompt text")
+        "src.tasks._analyzer_orchestration._build_prompts",
+        lambda *_: ("system", "final prompt text"),
     )
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response_text: (_ for _ in ()).throw(RuntimeError("parse failed")),
     )
 
@@ -542,7 +550,7 @@ def test_analyze_session_deadlock_retries_with_exponential_backoff(
 
     _mock_common(monkeypatch, session_factory)
     monkeypatch.setattr(
-        "src.tasks.analyzer.parse_video_recognition_output",
+        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
         lambda response_text: RecognitionResultDTO(
             session_summary=SessionSummaryDTO(
                 summary_text="deadlock summary",
@@ -577,7 +585,7 @@ def test_analyze_session_deadlock_retries_with_exponential_backoff(
             return "deadlock detected"
 
     monkeypatch.setattr(
-        "src.tasks.analyzer._replace_session_events",
+        "src.tasks._analyzer_orchestration._replace_session_events",
         lambda db, session_id, events: (_ for _ in ()).throw(
             OperationalError("INSERT INTO event_record ...", {}, _DeadlockOrig())
         ),
@@ -692,5 +700,59 @@ def test_analyze_session_honors_cancel_requested(
         assert session.analysis_status == "sealed"
         assert len(events) == 1
         assert events[0].summary == "keep me"
+    finally:
+        verify_db.close()
+
+
+def test_provider_build_failure_finalizes_task_log_failed(
+    monkeypatch, pg_db_factory: SessionFactory
+) -> None:
+    """A failure during provider-client build (e.g. API-key decryption) must
+    finalize the TaskLog to FAILED, not strand it as a zombie ``running`` row
+    with no ``finished_at``/``message``."""
+    session_factory = pg_db_factory
+    db = session_factory()
+    try:
+        _, session_id = _seed_source_and_session(db)
+        db.commit()
+    finally:
+        db.close()
+
+    _mock_common(monkeypatch, session_factory)
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration._build_provider_client",
+        lambda db: (_ for _ in ()).throw(ProviderKeyDecryptionError("cannot decrypt")),
+    )
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
+        lambda chunk, db, sub_chunk_seconds: [
+            SubChunk(
+                chunk_index=0,
+                sub_chunk_index=0,
+                start_offset_seconds=0,
+                duration_seconds=60,
+                file_paths=["/tmp/mock.mp4"],
+            )
+        ],
+    )
+
+    with pytest.raises(ProviderKeyDecryptionError):
+        analyze_session_task.run(session_id=session_id, priority="hot")
+
+    verify_db = session_factory()
+    try:
+        task_log = (
+            verify_db.query(TaskLog)
+            .filter(
+                TaskLog.task_target_id == session_id,
+                TaskLog.task_type == "session_analysis",
+            )
+            .one()
+        )
+        session = verify_db.query(VideoSession).filter(VideoSession.id == session_id).one()
+        assert task_log.status == TaskStatus.FAILED
+        assert task_log.finished_at is not None
+        assert task_log.message is not None
+        assert session.analysis_status == "failed"
     finally:
         verify_db.close()
