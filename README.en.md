@@ -84,6 +84,13 @@ After startup, go to "Settings → Model Connection" in the admin console and en
 - **Ollama**: Does not support the `video` parameter; cannot be used for video analysis.
 - **Bailian Platform**: Uploading videos longer than 1 minute requires a publicly accessible URL, which is not currently supported.
 
+### Further Reading
+
+- [Best Practices for Local Multimodal LLM Deployment (Dual 3090 × Qwen3.8-27B)](llm-best-practices-en.md) — A
+  full record of the measured experience and pitfall list, from dual-3090 PCIe P2P driver patches and
+  ReBAR VBIOS flashing, through vLLM deployment parameters, to the video chunking strategy (60s
+  sub-chunks + `num_frames=120`). Useful when setting up a local inference environment.
+
 ## Deployment
 
 ### Docker Compose Full-Stack Deployment (Recommended)

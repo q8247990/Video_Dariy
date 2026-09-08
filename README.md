@@ -84,6 +84,12 @@ vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
 - **Ollama**：不支持 video 参数，无法用于视频分析
 - **百炼平台**：上传超过 1 分钟的视频需要公网可访问 URL，当前不支持
 
+### 深入阅读
+
+- [本地多模态 LLM 部署最佳实践（双 3090 × Qwen3.8-27B）](llm-best-practices-zh.md) — 完整记录从
+  双 3090 PCIe P2P 驱动补丁、ReBAR VBIOS 刷写到 vLLM 部署参数、视频切片策略（60s sub-chunk +
+  `num_frames=120`）的实测经验与坑清单，适合在自建本地推理环境时参考。
+
 ## 部署方式
 
 ### Docker Compose 全栈部署（推荐）
