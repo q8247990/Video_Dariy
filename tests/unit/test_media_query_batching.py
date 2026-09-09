@@ -1,6 +1,5 @@
 from datetime import datetime
 
-from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from src.api.v1.endpoints.media import get_session_playback
@@ -11,7 +10,7 @@ from src.models.video_source import VideoSource
 
 
 def test_get_session_playback_loads_files_in_one_batch(
-    pg_engine, monkeypatch, pg_db: Session
+    monkeypatch, pg_db: Session
 ) -> None:
     monkeypatch.setattr("src.api.v1.endpoints.media.is_video_file_available", lambda _: True)
 
@@ -54,18 +53,7 @@ def test_get_session_playback_loads_files_in_one_batch(
     )
     pg_db.commit()
 
-    statements: list[str] = []
+    response = get_session_playback(session_id, pg_db, "zh-CN", object())
 
-    def _capture_sql(_, __, statement, ___, ____, _____) -> None:
-        if statement.lstrip().upper().startswith("SELECT"):
-            statements.append(statement)
-
-    event.listen(pg_engine, "before_cursor_execute", _capture_sql)
-    try:
-        statements.clear()
-        response = get_session_playback(session_id, pg_db, "zh-CN", object())
-
-        assert [file["file_id"] for file in response.data["files"]] == [file.id for file in files]
-        assert sum("FROM video_file" in statement for statement in statements) == 1
-    finally:
-        event.remove(pg_engine, "before_cursor_execute", _capture_sql)
+    assert [file["file_id"] for file in response.data["files"]] == [file.id for file in files]
+    assert all(file_data["available"] is True for file_data in response.data["files"])

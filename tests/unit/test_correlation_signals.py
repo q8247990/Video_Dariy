@@ -8,15 +8,18 @@ signal to prove the worker-side chain: a single ``event_id`` becomes the
 ``correlation_id`` on the task's structured log lines, matching the same
 id the API dispatch log and the publisher log already carry.
 
-It does not need a real Celery worker; it drives the registered signal
-handlers directly.
+Importing :mod:`src.core.celery_app` triggers the signal-registration
+side effect at module load time (see :func:`_wire_correlation_signals`),
+so the tests do not need to reach into the private helper — they fire
+the registered ``task_prerun`` / ``task_postrun`` signals directly and
+assert on the public :func:`get_correlation_id` boundary.
 """
 
 from __future__ import annotations
 
 from celery.signals import task_postrun, task_prerun
 
-from src.core.celery_app import _wire_correlation_signals
+from src.core import celery_app  # noqa: F401  (side effect: wires signals)
 from src.core.logging_config import (
     CORRELATION_CONTEXT,
     get_correlation_id,
@@ -25,7 +28,6 @@ from src.core.logging_config import (
 
 
 def test_task_prerun_signal_sets_correlation_from_task_id() -> None:
-    _wire_correlation_signals()
     set_correlation_id(None)
     task_prerun.send(sender=None, task_id="evt-abc-123")
     try:
@@ -36,7 +38,6 @@ def test_task_prerun_signal_sets_correlation_from_task_id() -> None:
 
 
 def test_task_prerun_with_empty_task_id_leaves_correlation_none() -> None:
-    _wire_correlation_signals()
     set_correlation_id(None)
     task_prerun.send(sender=None, task_id="")
     assert get_correlation_id() is None

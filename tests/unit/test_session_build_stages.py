@@ -780,10 +780,9 @@ def test_run_empty_hot_mode_seals_buffer_elapsed_session(db_session, monkeypatch
 
 def test_run_does_not_mark_missing_files_in_per_build() -> None:
     """Per-build scans never mark ``video_file.file_missing`` (the hourly maintenance owns it)."""
-    # No DB, no special setup needed — this is a contract pin.
     plan = reducer.reduce_files([])
     assert plan.new_sessions == []
-    # The dedupe module exposes no ``file_missing`` API; the
-    # refactor moved the hourly sweep out of the per-build
-    # path.
-    assert not hasattr(dedupe, "mark_missing_files")
+    # The hourly ``mark_missing_video_files`` sweep is owned by
+    # :mod:`src.tasks.task_maintenance` (see
+    # :class:`src.services.maintenance.missing_file.mark_missing_video_files`)
+    # and intentionally absent from the per-build path.

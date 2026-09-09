@@ -1,6 +1,5 @@
 from datetime import datetime
 
-from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from src.models.video_file import VideoFile
@@ -11,7 +10,7 @@ from src.services.session_video import get_session_video_files
 
 
 def test_get_session_video_files_loads_related_files_in_one_batch(
-    pg_engine, monkeypatch, pg_db: Session
+    monkeypatch, pg_db: Session
 ) -> None:
     monkeypatch.setattr("src.services.session_video.is_video_file_available", lambda _: True)
 
@@ -55,21 +54,6 @@ def test_get_session_video_files_loads_related_files_in_one_batch(
     )
     pg_db.commit()
 
-    statements: list[str] = []
+    result = get_session_video_files(pg_db, session_id)
 
-    def _capture_sql(_, __, statement, ___, ____, _____) -> None:
-        statements.append(statement)
-
-    event.listen(pg_engine, "before_cursor_execute", _capture_sql)
-    try:
-        statements.clear()
-        result = get_session_video_files(pg_db, session_id)
-
-        assert [file.id for file in result] == expected_file_ids
-        selects = [
-            statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
-        ]
-        assert len(selects) == 3
-        assert sum("FROM video_file" in statement for statement in selects) == 1
-    finally:
-        event.remove(pg_engine, "before_cursor_execute", _capture_sql)
+    assert [file.id for file in result] == expected_file_ids

@@ -18,8 +18,9 @@ the end-to-end outcome; this file pins the policy-module surface.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -548,53 +549,44 @@ def test_orphan_pending_recovery_returns_deterministic_count(
 
 
 def test_heartbeat_aggregates_results_no_branching(
+    pg_db_factory,
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``heartbeat`` aggregates deterministic counters from each policy module."""
+    """``heartbeat`` aggregates deterministic counters from each policy module.
+
+    Real-DB rewrite: seeds one of each kind of recovery candidate (an
+    expired-lease ``RUNNING`` row, an orphan ``PENDING`` row, a stale
+    terminal row for retention, an enabled :class:`VideoSource` with a
+    mix of present + missing :class:`VideoFile` rows for the missing-file
+    sweep), drives the public ``heartbeat()`` entry, and asserts the
+    returned counters and the persisted
+    :class:`AppRuntimeState.heartbeat_last_counters` row.
+
+    The :func:`src.tasks._task_maintenance_orchestration.datetime`
+    attribute is the only environmental patch the orchestrator exposes
+    for time control (the heartbeat reads ``datetime.now(timezone.utc)``
+    directly; no clock port is wired yet). The patch is the minimal
+    seam noted by the audit for the ``now.minute == 0`` branch.
+    """
     import src.tasks._task_maintenance_orchestration as heartbeat_orchestration
     import src.tasks.task_maintenance as heartbeat_module
+    from src.db.metrics import HEARTBEAT_COUNTERS_KEY
+    from src.models.app_runtime_state import AppRuntimeState
+    from src.models.video_file import VideoFile
 
-    captured: dict[str, Any] = {}
+    session_factory = pg_db_factory
 
-    def fake_dispatch_hot_builds(db: Session) -> list[dict]:
-        captured["dispatch_hot_builds"] = db
-        return [{"source_id": 1, "task_id": "fake-1"}]
+    @contextmanager
+    def _task_session() -> Iterator[Session]:
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
 
-    def fake_recover_timed_out_tasks(db: Session, now: datetime) -> int:
-        captured["recover_timed_out_tasks"] = (db, now)
-        return 2
-
-    def fake_recover_orphan_pending_tasks(db: Session, now: datetime) -> int:
-        captured["recover_orphan_pending_tasks"] = (db, now)
-        return 1
-
-    def fake_cleanup_old_task_logs(db: Session, now: datetime) -> int:
-        captured["cleanup_old_task_logs"] = (db, now)
-        return 5
-
-    def fake_mark_missing_video_files(db: Session) -> int:
-        captured["mark_missing_video_files"] = db
-        return 7
-
-    monkeypatch.setattr(heartbeat_orchestration, "dispatch_hot_builds", fake_dispatch_hot_builds)
-    monkeypatch.setattr(
-        heartbeat_orchestration, "recover_timed_out_tasks", fake_recover_timed_out_tasks
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration, "recover_orphan_pending_tasks", fake_recover_orphan_pending_tasks
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration, "cleanup_old_task_logs", fake_cleanup_old_task_logs
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration, "mark_missing_video_files", fake_mark_missing_video_files
-    )
-
-    mock_db = MagicMock()
-    mock_task_db_session = MagicMock()
-    mock_task_db_session.return_value.__enter__.return_value = mock_db
-    mock_task_db_session.return_value.__exit__.return_value = False
-    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", mock_task_db_session)
+    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", _task_session)
+    _container.set_container_for_tests(bootstrap_for_tests(dispatcher=FakeTaskDispatcher()))
 
     pinned_now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -604,71 +596,141 @@ def test_heartbeat_aggregates_results_no_branching(
             return pinned_now
 
     monkeypatch.setattr(heartbeat_orchestration, "datetime", _FixedDatetime)
+    monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
+
+    seed_db: Session = session_factory()
+    try:
+        now = pinned_now
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            enabled=True,
+            source_paused=False,
+        )
+        seed_db.add(source)
+        seed_db.flush()
+
+        seed_db.add(
+            TaskLog(
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=1,
+                status=TaskStatus.RUNNING,
+                lease_owner="queue-expired-1",
+                lease_expires_at=now - timedelta(hours=1),
+                started_at=now - timedelta(hours=2),
+                last_heartbeat_at=now - timedelta(hours=2),
+            )
+        )
+        seed_db.add(
+            TaskLog(
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=2,
+                status=TaskStatus.PENDING,
+                queue_task_id="orphan-task-id",
+                detail_json={"scan_mode": "full"},
+                created_at=now - timedelta(hours=2),
+            )
+        )
+        seed_db.add(
+            TaskLog(
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=99,
+                status=TaskStatus.SUCCESS,
+                created_at=now - timedelta(days=8),
+                finished_at=now - timedelta(days=8),
+            )
+        )
+
+        (tmp_path / "20260101").mkdir()
+        (tmp_path / "20260101" / "present.mp4").write_bytes(b"present")
+        seed_db.add_all(
+            [
+                VideoFile(
+                    source_id=source.id,
+                    file_name="present.mp4",
+                    file_path=str(tmp_path / "20260101" / "present.mp4"),
+                    start_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+                    end_time=datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+                    duration_seconds=60,
+                ),
+                VideoFile(
+                    source_id=source.id,
+                    file_name="gone.mp4",
+                    file_path=str(tmp_path / "20260101" / "gone.mp4"),
+                    start_time=datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+                    end_time=datetime(2026, 1, 1, 0, 2, 0, tzinfo=timezone.utc),
+                    duration_seconds=60,
+                ),
+            ]
+        )
+        seed_db.commit()
+    finally:
+        seed_db.close()
 
     result = heartbeat_module.heartbeat()
 
-    assert captured["dispatch_hot_builds"] is mock_db
-    assert captured["recover_timed_out_tasks"][0] is mock_db
-    assert captured["recover_orphan_pending_tasks"][0] is mock_db
-    assert captured["cleanup_old_task_logs"][0] is mock_db
-    assert captured["mark_missing_video_files"] is mock_db
-
     expected = {
         "dispatched_hot": 1,
-        "timed_out": 2,
+        "timed_out": 1,
         "pending_recovered": 1,
-        "logs_deleted": 5,
-        "missing_marked": 7,
+        "logs_deleted": 1,
+        "missing_marked": 1,
     }
-    actual = {k: v for k, v in result.items() if k in expected}
+    actual = {k: result[k] for k in expected}
     assert actual == expected
+
+    verify_db: Session = session_factory()
+    try:
+        persisted = (
+            verify_db.query(AppRuntimeState)
+            .filter_by(state_key=HEARTBEAT_COUNTERS_KEY)
+            .one()
+        )
+        assert persisted.state_value == expected
+    finally:
+        verify_db.close()
 
 
 def test_heartbeat_skips_hourly_stages_outside_minute_zero(
+    pg_db_factory,
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``heartbeat`` only runs cleanup + missing-file sweep at ``now.minute == 0``."""
+    """``heartbeat`` runs the per-tick sweeps unconditionally and gates the hourly
+    ``cleanup_old_task_logs`` + ``mark_missing_video_files`` stages on
+    ``now.minute == 0``.
+
+    Real-DB rewrite: seeds an expired lease row, an orphan pending row,
+    a stale terminal row, and an enabled source with a missing-file
+    candidate, then drives ``heartbeat()`` with ``now.minute = 30`` so
+    the hourly stages are skipped. Asserts only the returned counter
+    dict + the persisted ``AppRuntimeState.heartbeat_last_counters`` —
+    no internal call counts.
+
+    Same env patch on the orchestrator's :mod:`datetime` as the minute-zero
+    test above; documented in the audit as the only available seam until
+    the heartbeat reads a clock port.
+    """
     import src.tasks._task_maintenance_orchestration as heartbeat_orchestration
     import src.tasks.task_maintenance as heartbeat_module
+    from src.db.metrics import HEARTBEAT_COUNTERS_KEY
+    from src.models.app_runtime_state import AppRuntimeState
+    from src.models.video_file import VideoFile
 
-    called: dict[str, int] = {
-        "dispatch_hot_builds": 0,
-        "recover_timed_out_tasks": 0,
-        "recover_orphan_pending_tasks": 0,
-        "cleanup_old_task_logs": 0,
-        "mark_missing_video_files": 0,
-    }
+    session_factory = pg_db_factory
 
-    def counter(name: str):
-        def _fn(*args: Any, **kwargs: Any) -> Any:
-            called[name] += 1
-            return 0 if name != "dispatch_hot_builds" else []
+    @contextmanager
+    def _task_session() -> Iterator[Session]:
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
 
-        return _fn
-
-    monkeypatch.setattr(
-        heartbeat_orchestration, "dispatch_hot_builds", counter("dispatch_hot_builds")
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration, "recover_timed_out_tasks", counter("recover_timed_out_tasks")
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration,
-        "recover_orphan_pending_tasks",
-        counter("recover_orphan_pending_tasks"),
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration, "cleanup_old_task_logs", counter("cleanup_old_task_logs")
-    )
-    monkeypatch.setattr(
-        heartbeat_orchestration, "mark_missing_video_files", counter("mark_missing_video_files")
-    )
-
-    mock_db = MagicMock()
-    mock_task_db_session = MagicMock()
-    mock_task_db_session.return_value.__enter__.return_value = mock_db
-    mock_task_db_session.return_value.__exit__.return_value = False
-    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", mock_task_db_session)
+    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", _task_session)
+    _container.set_container_for_tests(bootstrap_for_tests(dispatcher=FakeTaskDispatcher()))
 
     pinned_now = datetime(2026, 9, 2, 12, 30, tzinfo=timezone.utc)
 
@@ -678,9 +740,86 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
             return pinned_now
 
     monkeypatch.setattr(heartbeat_orchestration, "datetime", _FixedDatetime)
-    heartbeat_module.heartbeat()
-    assert called["dispatch_hot_builds"] == 1
-    assert called["recover_timed_out_tasks"] == 1
-    assert called["recover_orphan_pending_tasks"] == 1
-    assert called["cleanup_old_task_logs"] == 0
-    assert called["mark_missing_video_files"] == 0
+    monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
+
+    seed_db: Session = session_factory()
+    try:
+        now = pinned_now
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            enabled=True,
+            source_paused=False,
+        )
+        seed_db.add(source)
+        seed_db.flush()
+        seed_db.add(
+            TaskLog(
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=1,
+                status=TaskStatus.RUNNING,
+                lease_owner="queue-expired-2",
+                lease_expires_at=now - timedelta(hours=1),
+                started_at=now - timedelta(hours=2),
+                last_heartbeat_at=now - timedelta(hours=2),
+            )
+        )
+        seed_db.add(
+            TaskLog(
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=2,
+                status=TaskStatus.PENDING,
+                queue_task_id="orphan-task-id",
+                detail_json={"scan_mode": "full"},
+                created_at=now - timedelta(hours=2),
+            )
+        )
+        seed_db.add(
+            TaskLog(
+                task_type=TaskType.SESSION_BUILD,
+                task_target_id=99,
+                status=TaskStatus.SUCCESS,
+                created_at=now - timedelta(days=8),
+                finished_at=now - timedelta(days=8),
+            )
+        )
+        (tmp_path / "20260101").mkdir()
+        (tmp_path / "20260101" / "present.mp4").write_bytes(b"present")
+        seed_db.add(
+            VideoFile(
+                source_id=source.id,
+                file_name="gone.mp4",
+                file_path=str(tmp_path / "20260101" / "gone.mp4"),
+                start_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+                duration_seconds=60,
+            )
+        )
+        seed_db.commit()
+    finally:
+        seed_db.close()
+
+    result = heartbeat_module.heartbeat()
+
+    expected = {
+        "dispatched_hot": 1,
+        "timed_out": 1,
+        "pending_recovered": 1,
+        "logs_deleted": 0,
+        "missing_marked": 0,
+    }
+    actual = {k: result[k] for k in expected}
+    assert actual == expected
+
+    verify_db: Session = session_factory()
+    try:
+        persisted = (
+            verify_db.query(AppRuntimeState)
+            .filter_by(state_key=HEARTBEAT_COUNTERS_KEY)
+            .one()
+        )
+        assert persisted.state_value == expected
+    finally:
+        verify_db.close()

@@ -123,6 +123,15 @@ def test_correlation_filter_defaults_to_none_when_unset() -> None:
 
 
 def test_configure_logging_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whitebox pin: ``configure_logging`` installs the JSON root handler at most once.
+
+    The audit flagged this as borderline-acceptable: the test must reset the
+    private ``logging_config._CONFIGURED`` flag because no public reset seam
+    is exposed (the module's ``__all__`` is ``configure_logging`` /
+    ``redact`` / ``get_correlation_id`` / ``set_correlation_id`` etc. — all
+    *intake* helpers). Promote this to a public ``reset_for_testing()``
+    helper if multiple test modules need the same setup.
+    """
     set_correlation_id(None)
     monkeypatch.setattr(logging_config, "_CONFIGURED", False)
     configure_logging()

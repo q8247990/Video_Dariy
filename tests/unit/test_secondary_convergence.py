@@ -11,10 +11,18 @@ Covers the Wave-6 splits that keep each concern independently testable:
 
 from datetime import datetime, timedelta
 
+import pytest
 from sqlalchemy.orm import Session
 
 from src.api.error_status import BusinessCode, status_for_response_code
+from src.application.bootstrap import bootstrap_for_tests
+from src.application.bootstrap_fakes import (
+    FakeLLMGateway,
+    FakeLLMGatewayFactory,
+)
 from src.application.qa.schemas import QARequest
+from src.application.qa.service import QAService
+from src.models.chat_query_log import ChatQueryLog
 from src.models.llm_provider import LLMProvider
 
 
@@ -243,32 +251,84 @@ def test_dashboard_query_and_presenter_are_separate(pg_db: Session) -> None:
     assert important_events[0].camera_name == "客厅"
 
 
-def test_qa_service_routes_to_legacy_strategy_when_no_tool_calling(
-    pg_db: Session, monkeypatch
-) -> None:
-    import src.application.qa.service as service_module
-    from src.application.qa.schemas import QAResult
+class _ScriptedGateway(FakeLLMGateway):
+    """``FakeLLMGateway`` that returns scripted responses in declared order.
 
+    Each subclass override of :meth:`chat_completion` /
+    :meth:`chat_completion_with_tools` consumes the next ``replies`` /
+    ``tool_call_payloads`` entry. The agent strategy needs a content
+    reply from :meth:`chat_completion_with_tools` (to populate
+    ``answer_text``); the legacy strategy needs two content replies —
+    one for the intent parse and one for the final answer.
+    """
+
+    def __init__(
+        self,
+        *,
+        tool_call_payloads: list[tuple[str | None, list[dict] | None]] | None = None,
+        supports_tool_calling: bool = False,
+    ) -> None:
+        super().__init__(supports_tool_calling=supports_tool_calling)
+        self._tool_call_payloads = list(tool_call_payloads or [])
+
+    def chat_completion_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> tuple[str | None, list[dict] | None]:
+        self.tool_calls.append({"messages": messages, "tools": tools})
+        if self._tool_call_payloads:
+            return self._tool_call_payloads.pop(0)
+        return (None, None)
+
+
+def _make_factory(
+    *,
+    tool_call_payloads: list[tuple[str | None, list[dict] | None]] | None = None,
+    content_replies: list[str | None] | None = None,
+    supports_tool_calling: bool = False,
+) -> FakeLLMGatewayFactory:
+    """Build a factory whose first gateway is wired to scripted responses."""
+
+    factory = FakeLLMGatewayFactory(supports_tool_calling=supports_tool_calling)
+
+    def _build(**_kwargs: object) -> FakeLLMGateway:
+        gateway = _ScriptedGateway(
+            tool_call_payloads=list(tool_call_payloads or []),
+            supports_tool_calling=supports_tool_calling,
+        )
+        if content_replies is not None:
+            gateway.replies = list(content_replies)
+        factory.gateways.append(gateway)
+        return gateway
+
+    factory.build = _build  # type: ignore[method-assign]
+    return factory
+
+
+def test_qa_service_routes_to_legacy_strategy_when_no_tool_calling(
+    pg_db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``QAService.answer`` routes to the legacy strategy when the gateway reports
+    ``supports_tool_calling=False`` and records the parsed condition JSON.
+    """
     pg_db.add(_build_provider(name="qa", supports_qa=True, is_default_qa=True))
     pg_db.commit()
 
-    class FakeLegacy:
-        def __init__(self, db, gateway, provider):
-            self.provider = provider
-
-        def execute(self, question, request):
-            return QAResult(question=question, answer_text="legacy")
-
-    class FakeAgent:
-        def __init__(self, db, gateway, provider):
-            raise AssertionError("agent strategy should not be built")
-
-    monkeypatch.setattr(service_module, "LegacyQAStrategy", FakeLegacy)
-    monkeypatch.setattr(service_module, "AgentQAStrategy", FakeAgent)
-
-    service = service_module.QAService(
-        pg_db, llm_factory=type("F", (), {"build": lambda *a, **k: FakeGateway()})()
+    factory = _make_factory(
+        # Intent parse consumes the first reply (None keeps the parser's
+        # fallback path intact); the second reply drives the final answer.
+        content_replies=[None, "legacy"],
+        supports_tool_calling=False,
     )
+    container = bootstrap_for_tests(llm_factory=factory)
+    monkeypatch.setattr(
+        "src.tasks._container.get_container", lambda: container
+    )
+
+    service = QAService(pg_db, llm_factory=factory)
     result = service.answer(
         QARequest(
             question="昨天发生了什么？",
@@ -279,52 +339,33 @@ def test_qa_service_routes_to_legacy_strategy_when_no_tool_calling(
     assert result.answer_text == "legacy"
 
 
-class FakeGateway:
-    supports_tool_calling = False
-
-    def close(self):
-        pass
-
-
-def test_qa_service_routes_to_agent_strategy_when_tool_calling(pg_db: Session, monkeypatch) -> None:
-    import src.application.qa.service as service_module
-    from src.application.qa.schemas import QAResult
-
+def test_qa_service_routes_to_agent_strategy_when_tool_calling(
+    pg_db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``QAService.answer`` routes to the agent strategy when ``supports_tool_calling=True``,
+    persists ``ChatQueryLog`` with ``parsed_condition_json["mode"] == "agent"``.
+    """
     pg_db.add(_build_provider(name="qa", supports_qa=True, is_default_qa=True))
     pg_db.commit()
 
-    class FakeAgent:
-        def __init__(self, db, gateway, provider):
-            self.provider = provider
+    factory = _make_factory(
+        tool_call_payloads=[("agent", None)],
+        supports_tool_calling=True,
+    )
+    container = bootstrap_for_tests(llm_factory=factory)
+    monkeypatch.setattr(
+        "src.tasks._container.get_container", lambda: container
+    )
 
-        def execute(self, question, request):
-            return QAResult(question=question, answer_text="agent")
-
-    class FakeLegacy:
-        def __init__(self, db, gateway, provider):
-            raise AssertionError("legacy strategy should not be built")
-
-    monkeypatch.setattr(service_module, "AgentQAStrategy", FakeAgent)
-    monkeypatch.setattr(service_module, "LegacyQAStrategy", FakeLegacy)
-
-    class ToolCallingGateway(FakeGateway):
-        supports_tool_calling = True
-
-    factory = type("F", (), {"build": lambda *a, **k: ToolCallingGateway()})()
-    service = service_module.QAService(pg_db, llm_factory=factory)
+    service = QAService(pg_db, llm_factory=factory)
     result = service.answer(
         QARequest(
             question="昨天发生了什么？",
             now=datetime(2026, 3, 10, 8, 0, 0),
-            write_query_log=False,
+            write_query_log=True,
         )
     )
     assert result.answer_text == "agent"
 
-
-def test_daily_summaries_exposes_patchable_orchestrator_seam() -> None:
-    from src.api.v1.endpoints import daily_summaries
-
-    orchestrator = daily_summaries._pipeline_orchestrator
-    assert daily_summaries.get_orchestrator() is orchestrator
-    assert callable(orchestrator.dispatch_generate_daily_summary)
+    log = pg_db.query(ChatQueryLog).filter(ChatQueryLog.user_question == "昨天发生了什么？").one()
+    assert log.parsed_condition_json["mode"] == "agent"
