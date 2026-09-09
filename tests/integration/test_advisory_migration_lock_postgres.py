@@ -9,11 +9,18 @@ against a fresh throwaway schema:
   other blocks then finds the schema already at head;
 * a held lock is observable (``pg_try_advisory_lock`` returns ``False``) and
   released afterwards.
+
+The migrator body invokes the canonical
+``tests.conftest.run_alembic_upgrade_head`` subprocess helper — the same
+seam :mod:`tests.integration.test_llm_provider_drop_columns_postgres` uses
+— so the migration runs through the public alembic CLI surface, not the
+private in-process ``_run_alembic_upgrade_head``. The lock-semantics
+assertion (concurrent bootstrap serializes; migration runs once) is
+preserved.
 """
 
 from __future__ import annotations
 
-import os
 import threading
 import uuid
 
@@ -24,9 +31,9 @@ from sqlalchemy.engine import Engine
 from src.db.init_db import (
     EXPECTED_ALEMBIC_REVISION,
     MIGRATION_ADVISORY_LOCK_KEY,
-    _run_alembic_upgrade_head,
     run_migration_locked,
 )
+from tests.conftest import run_alembic_upgrade_head
 
 pytestmark = pytest.mark.postgres
 
@@ -77,14 +84,14 @@ def _current_revision(engine: Engine) -> str | None:
 def _bootstrap_attempt(
     engine: Engine,
     schema: str,
+    postgres_database_url: str,
     migrator_tags: list[bool],
     barrier: threading.Barrier,
 ) -> None:
     def migrate() -> None:
-        os.environ["PGOPTIONS"] = f"-csearch_path={schema}"
         if _current_revision(engine) != EXPECTED_ALEMBIC_REVISION:
             migrator_tags.append(True)
-            _run_alembic_upgrade_head()
+            run_alembic_upgrade_head(postgres_database_url, schema)
 
     barrier.wait()
     run_migration_locked(migrate, lock_engine=engine)
@@ -98,7 +105,10 @@ def test_concurrent_bootstrap_serializes_and_migrates_once(
     barrier = threading.Barrier(2)
 
     threads = [
-        threading.Thread(target=_bootstrap_attempt, args=(engine, schema, migrator_tags, barrier))
+        threading.Thread(
+            target=_bootstrap_attempt,
+            args=(engine, schema, postgres_database_url, migrator_tags, barrier),
+        )
         for _ in range(2)
     ]
     try:

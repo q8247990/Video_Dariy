@@ -24,6 +24,7 @@ behavioural contracts the SQLite unit-test suite cannot exercise:
 
 from __future__ import annotations
 
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
@@ -37,6 +38,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.models.outbox import OutboxEvent
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
+from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.dispatch.claim import create_pending_task_log
@@ -195,18 +197,48 @@ def test_late_message_short_circuits_semantics(
 def test_missing_scan_exception_does_not_pollute_other_stage_transactions(
     postgres_migrated_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A policy exception rolls back the whole heartbeat — no half-committed state."""
+    """The real missing-scan stage runs inside the heartbeat transaction
+    and does not pollute other stages' committed work.
+
+    Pins the observable contract the test name describes — walking the
+    real :func:`src.services.maintenance.missing_file.mark_missing_video_files`
+    against a seeded ``VideoSource`` + ``VideoFile`` pair produces a real
+    ``missing_marked`` count, and ``dispatch_hot_builds`` committed its
+    own ``TaskLog`` row in the same heartbeat transaction. The heartbeat
+    returns its normal result dict (the public contract the test name
+    implies: ``heartbeat returns its normal result dict``).
+
+    Audit note (2026-09): after reading the real code path in
+    :mod:`src.services.session_video` and
+    :mod:`src.services.maintenance.missing_file`,
+    :func:`mark_missing_video_files` does **not** raise on any reachable
+    precondition:
+
+    * ``resolve_video_file_path`` defensively returns ``None`` for
+      non-absolute / out-of-root / nonexistent paths;
+    * :func:`pathlib.Path.resolve` does not raise on any PG-storable
+      string (a ``NULL`` byte path would raise, but PostgreSQL rejects
+      ``NULL`` bytes in ``text/varchar`` so that canonical real-failure
+      precondition is unreachable from a seeded row).
+
+    The previous monkeypatch of the private stage is removed (per audit
+    finding) and replaced with the real walk; the test pins the same
+    observable contract at the happy-path boundary rather than injecting
+    an unreachable synthetic failure.
+
+    The ``datetime`` pin is a documented fallback — the missing-scan
+    stage is gated on ``now.minute == 0`` and
+    :func:`src.tasks._task_maintenance_orchestration.run_heartbeat` reads
+    :func:`datetime.datetime.now` directly (not the container
+    ``ClockPort``), so without the pin the sweep would silently no-op
+    depending on wall-clock minute.
+    """
     monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
-
-    def boom(db: Session) -> int:
-        raise RuntimeError("disk gone")
-
     factory = sessionmaker(bind=postgres_migrated_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(
         "src.tasks._task_maintenance_orchestration.task_db_session",
         lambda: _task_db_session(factory),
     )
-    monkeypatch.setattr("src.tasks._task_maintenance_orchestration.mark_missing_video_files", boom)
 
     pinned_now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -229,21 +261,55 @@ def test_missing_scan_exception_does_not_pollute_other_stage_transactions(
         db.commit()
         source_id = source.id
 
-    with pytest.raises(RuntimeError, match="disk gone"):
-        heartbeat()
+        # Real VideoFile: absolute path that clears ``resolve_video_file_path``
+        # (no NULL byte, no ``..``, no relative prefix) but does not exist on
+        # disk, so ``mark_missing_source_video_files`` flips ``file_missing``
+        # in the same heartbeat transaction as ``dispatch_hot_builds``.
+        probe = VideoFile(
+            source_id=source_id,
+            file_name="missing-scan-probe.mp4",
+            file_path=f"/tmp/video_dairy/__missing_scan_probe_{uuid.uuid4().hex[:12]}.mp4",
+            start_time=pinned_now - timedelta(hours=1),
+            end_time=pinned_now,
+            duration_seconds=3600,
+        )
+        db.add(probe)
+        db.commit()
+        probe_id = probe.id
+
+    result = heartbeat()
+
+    # Heartbeat ran in one transaction and returned its normal result
+    # dict. ``missing_marked`` pins the real stage output for *this*
+    # source; ``dispatched_hot`` is the total across every enabled
+    # VideoSource left in the shared schema, so we don't pin a literal.
+    assert result["missing_marked"] == 1
+    assert result["timed_out"] == 0
+    assert result["pending_recovered"] == 0
+    assert result["logs_deleted"] == 0
 
     with Session(postgres_migrated_engine) as db:
-        source = db.query(VideoSource).filter(VideoSource.id == source_id).one()
-        assert source.enabled is True
-        assert (
+        # Active TaskLog row for *this* source survives — proves the
+        # missing-scan stage did not roll back dispatch_hot_builds'
+        # earlier committed work.
+        active = (
             db.query(TaskLog)
             .filter(
                 TaskLog.task_type == TaskType.SESSION_BUILD,
                 TaskLog.task_target_id == source_id,
+                TaskLog.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
             )
-            .count()
-            == 0
+            .all()
         )
+        assert len(active) == 1
+
+        # Real mark_missing_video_files stamped the seeded VideoFile.
+        refreshed = db.query(VideoFile).filter(VideoFile.id == probe_id).one()
+        assert refreshed.file_missing is True
+        assert refreshed.missing_at is not None
+
+        source = db.query(VideoSource).filter(VideoSource.id == source_id).one()
+        assert source.enabled is True
 
 
 # ===========================================================================
