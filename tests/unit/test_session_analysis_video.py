@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+import pytest
+from sqlalchemy.orm import Session
 
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
+from src.models.video_source import VideoSource
 from src.services.session_analysis_video import (
     SessionVideoChunk,
     SubChunk,
@@ -17,70 +18,72 @@ from src.services.session_analysis_video import (
 )
 
 
-def _new_db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    VideoSession.__table__.create(bind=engine)
-    VideoFile.__table__.create(bind=engine)
-    VideoSessionFileRel.__table__.create(bind=engine)
-    local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    return local_session()
+@pytest.fixture()
+def db_session(pg_db: Session) -> Session:
+    """Single session against the project-wide ``pg_db`` fixture (PostgreSQL)."""
+    return pg_db
 
 
-def test_build_session_video_chunks_split_by_10_minutes() -> None:
-    db = _new_db_session()
-    try:
-        session = VideoSession(
-            source_id=1,
-            session_start_time=datetime(2026, 3, 14, 9, 0, 0),
-            session_end_time=datetime(2026, 3, 14, 9, 25, 0),
-            total_duration_seconds=1500,
-            analysis_status="pending",
+def test_build_session_video_chunks_split_by_10_minutes(db_session: Session) -> None:
+    db = db_session
+    source = VideoSource(
+        source_name="chunk-test",
+        camera_name="cam",
+        location_name="loc",
+        source_type="local_directory",
+    )
+    db.add(source)
+    db.flush()
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=datetime(2026, 3, 14, 9, 0, 0),
+        session_end_time=datetime(2026, 3, 14, 9, 25, 0),
+        total_duration_seconds=1500,
+        analysis_status="pending",
+    )
+    db.add(session)
+    db.flush()
+
+    base = datetime(2026, 3, 14, 9, 0, 0)
+    for index in range(25):
+        start_time = base + timedelta(minutes=index)
+        end_time = start_time + timedelta(minutes=1)
+        vf = VideoFile(
+            source_id=source.id,
+            file_name=f"{index:04d}.mp4",
+            file_path=f"/tmp/{index:04d}.mp4",
+            storage_type="local_file",
+            file_format="mp4",
+            start_time=start_time,
+            end_time=end_time,
+            duration_seconds=60,
+            parse_status="parsed",
         )
-        db.add(session)
+        db.add(vf)
         db.flush()
-
-        base = datetime(2026, 3, 14, 9, 0, 0)
-        for index in range(25):
-            start_time = base + timedelta(minutes=index)
-            end_time = start_time + timedelta(minutes=1)
-            vf = VideoFile(
-                source_id=1,
-                file_name=f"{index:04d}.mp4",
-                file_path=f"/tmp/{index:04d}.mp4",
-                storage_type="local_file",
-                file_format="mp4",
-                start_time=start_time,
-                end_time=end_time,
-                duration_seconds=60,
-                parse_status="parsed",
+        db.add(
+            VideoSessionFileRel(
+                session_id=session.id,
+                video_file_id=vf.id,
+                sort_index=index,
             )
-            db.add(vf)
-            db.flush()
-            db.add(
-                VideoSessionFileRel(
-                    session_id=session.id,
-                    video_file_id=vf.id,
-                    sort_index=index,
-                )
-            )
-        db.commit()
+        )
+    db.commit()
 
-        chunks = build_session_video_chunks(db, session.id, chunk_seconds=600)
+    chunks = build_session_video_chunks(db, session.id, chunk_seconds=600)
 
-        assert len(chunks) == 3
-        assert chunks[0].start_offset_seconds == 0
-        assert chunks[0].duration_seconds == 600
-        assert len(chunks[0].file_paths) == 10
+    assert len(chunks) == 3
+    assert chunks[0].start_offset_seconds == 0
+    assert chunks[0].duration_seconds == 600
+    assert len(chunks[0].file_paths) == 10
 
-        assert chunks[1].start_offset_seconds == 600
-        assert chunks[1].duration_seconds == 600
-        assert len(chunks[1].file_paths) == 10
+    assert chunks[1].start_offset_seconds == 600
+    assert chunks[1].duration_seconds == 600
+    assert len(chunks[1].file_paths) == 10
 
-        assert chunks[2].start_offset_seconds == 1200
-        assert chunks[2].duration_seconds == 300
-        assert len(chunks[2].file_paths) == 5
-    finally:
-        db.close()
+    assert chunks[2].start_offset_seconds == 1200
+    assert chunks[2].duration_seconds == 300
+    assert len(chunks[2].file_paths) == 5
 
 
 def test_concat_video_delegates_to_run_ffmpeg_concat(monkeypatch) -> None:
@@ -173,51 +176,56 @@ def test_build_chunk_sub_chunks_falls_back_to_60s_when_durations_missing() -> No
     assert sub_chunks[1].duration_seconds == 300
 
 
-def test_build_session_video_chunks_populates_file_durations() -> None:
-    db = _new_db_session()
-    try:
-        session = VideoSession(
-            source_id=1,
-            session_start_time=datetime(2026, 3, 14, 9, 0, 0),
-            session_end_time=datetime(2026, 3, 14, 9, 2, 0),
-            total_duration_seconds=120,
-            analysis_status="pending",
+def test_build_session_video_chunks_populates_file_durations(db_session: Session) -> None:
+    db = db_session
+    source = VideoSource(
+        source_name="chunk-test",
+        camera_name="cam",
+        location_name="loc",
+        source_type="local_directory",
+    )
+    db.add(source)
+    db.flush()
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=datetime(2026, 3, 14, 9, 0, 0),
+        session_end_time=datetime(2026, 3, 14, 9, 2, 0),
+        total_duration_seconds=120,
+        analysis_status="pending",
+    )
+    db.add(session)
+    db.flush()
+
+    base = datetime(2026, 3, 14, 9, 0, 0)
+    for index in range(2):
+        start_time = base + timedelta(minutes=index)
+        end_time = start_time + timedelta(minutes=1)
+        vf = VideoFile(
+            source_id=source.id,
+            file_name=f"{index:04d}.mp4",
+            file_path=f"/tmp/{index:04d}.mp4",
+            storage_type="local_file",
+            file_format="mp4",
+            start_time=start_time,
+            end_time=end_time,
+            duration_seconds=60,
+            parse_status="parsed",
         )
-        db.add(session)
+        db.add(vf)
         db.flush()
-
-        base = datetime(2026, 3, 14, 9, 0, 0)
-        for index in range(2):
-            start_time = base + timedelta(minutes=index)
-            end_time = start_time + timedelta(minutes=1)
-            vf = VideoFile(
-                source_id=1,
-                file_name=f"{index:04d}.mp4",
-                file_path=f"/tmp/{index:04d}.mp4",
-                storage_type="local_file",
-                file_format="mp4",
-                start_time=start_time,
-                end_time=end_time,
-                duration_seconds=60,
-                parse_status="parsed",
+        db.add(
+            VideoSessionFileRel(
+                session_id=session.id,
+                video_file_id=vf.id,
+                sort_index=index,
             )
-            db.add(vf)
-            db.flush()
-            db.add(
-                VideoSessionFileRel(
-                    session_id=session.id,
-                    video_file_id=vf.id,
-                    sort_index=index,
-                )
-            )
-        db.commit()
+        )
+    db.commit()
 
-        chunks = build_session_video_chunks(db, session.id, chunk_seconds=600)
+    chunks = build_session_video_chunks(db, session.id, chunk_seconds=600)
 
-        assert len(chunks) == 1
-        assert chunks[0].file_durations == [60, 60]
-    finally:
-        db.close()
+    assert len(chunks) == 1
+    assert chunks[0].file_durations == [60, 60]
 
 
 def test_session_chunk_from_sub_chunk_projects_correctly() -> None:
