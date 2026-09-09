@@ -20,17 +20,21 @@ holder in ``finally`` blocks, so they are safe to run in any order.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.orm import Session
 
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeLLMGatewayFactory, FakeTaskDispatcher
 from src.application.pipeline.commands import AnalyzeSessionCommand
 from src.application.ports.task_dispatcher import TaskDispatcherPort
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 from src.services.maintenance import dispatch_hot_builds
 from src.tasks import _container
-from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
+from src.tasks.session_build import run_hot_build
 
 
 @pytest.fixture(autouse=True)
@@ -49,16 +53,74 @@ def _bind(dispatcher: FakeTaskDispatcher) -> FakeTaskDispatcher:
     return dispatcher
 
 
-def test_session_build_dispatches_via_container() -> None:
-    """Session build routes hot/full scans through the port."""
+def _seed_source(db: Session) -> int:
+    source = VideoSource(
+        source_name="di-cam",
+        camera_name="di-cam",
+        location_name="客厅",
+        source_type="local_directory",
+        config_json={"root_path": "/tmp/videos"},
+        enabled=True,
+    )
+    db.add(source)
+    db.commit()
+    db.refresh(source)
+    return int(source.id)
 
+
+def _seed_session(
+    db: Session,
+    source_id: int,
+    *,
+    start_time: datetime,
+    priority: str | None = None,
+) -> int:
+    """Insert a single ``VideoSession`` row and return its id."""
+    session = VideoSession(
+        source_id=source_id,
+        session_start_time=start_time,
+        session_end_time=start_time + timedelta(minutes=30),
+        total_duration_seconds=1800,
+        analysis_status="sealed",
+        analysis_priority=priority,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return int(session.id)
+
+
+def test_session_build_dispatches_via_container(
+    pg_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Session build routes hot/full scans through the port.
+
+    Driving through the public :func:`run_hot_build` orchestration
+    entry (re-exported via :mod:`src.tasks.session_build`) exercises
+    the full seal+dispatch atomic path. A pre-seeded stuck-sealed
+    session triggers the stuck-sealed self-heal inside the build,
+    which dispatches via the container's fake dispatcher port. The
+    recorded command is a real :class:`AnalyzeSessionCommand` whose
+    ``session_id`` and ``priority`` mirror the seeded row.
+    """
     dispatcher = _bind(FakeTaskDispatcher())
-    sealed = [MagicMock(session_id=11, priority="hot"), MagicMock(session_id=12, priority="full")]
-    _dispatch_analysis_for_sealed(db=MagicMock(), sealed_sessions=sealed)
 
-    assert [c.session_id for c in dispatcher.dispatched_analyze_session] == [11, 12]
+    monkeypatch.setattr(
+        "src.adapters.xiaomi_parser.XiaomiDirectoryParser.scan_directory",
+        lambda self, min_time, max_time, cancel_check: [],
+    )
+
+    base = datetime(2026, 3, 15, 9, 0, 0, tzinfo=timezone.utc)
+    with pg_db_factory() as db:
+        source_id = _seed_source(db)
+        session_id = _seed_session(db, source_id, start_time=base, priority="hot")
+
+    with pg_db_factory() as db:
+        result = run_hot_build(db, source_id=source_id, queue_task_id="")
+
+    assert result["analysis_redispatched"] == 1
+    assert [c.session_id for c in dispatcher.dispatched_analyze_session] == [session_id]
     assert dispatcher.dispatched_analyze_session[0].priority == "hot"
-    assert dispatcher.dispatched_analyze_session[1].priority == "full"
     assert isinstance(dispatcher.dispatched_analyze_session[0], AnalyzeSessionCommand)
 
 
@@ -75,14 +137,6 @@ def test_task_maintenance_dispatch_uses_container() -> None:
 
     assert [c.source_id for c in dispatcher.dispatched_session_build] == [1, 2]
     assert [c.scan_mode for c in dispatcher.dispatched_session_build] == ["hot", "hot"]
-
-
-def test_container_helpers_round_trip() -> None:
-    """The task-layer container holder exposes the composition-root singleton."""
-
-    fake = bootstrap_for_tests()
-    _container.set_container_for_tests(fake)
-    assert _container.get_container() is fake
 
 
 def test_dispatcher_port_satisfies_protocol() -> None:

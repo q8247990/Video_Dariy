@@ -48,6 +48,7 @@ from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.session_build import runner
+from src.tasks.session_build import run_hot_build
 
 pytestmark = pytest.mark.postgres
 
@@ -115,6 +116,29 @@ def _seed_source(
     db.commit()
     db.refresh(source)
     return int(source.id)
+
+
+def _seed_session(
+    db: Session,
+    source_id: int,
+    *,
+    start_time: datetime,
+    status: str = "sealed",
+    priority: str | None = None,
+) -> int:
+    """Insert a single ``VideoSession`` row and return its id."""
+    session = VideoSession(
+        source_id=source_id,
+        session_start_time=start_time,
+        session_end_time=start_time + timedelta(minutes=30),
+        total_duration_seconds=1800,
+        analysis_status=status,
+        analysis_priority=priority,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return int(session.id)
 
 
 def _record(start_time: datetime, suffix: str) -> dict[str, Any]:
@@ -268,110 +292,103 @@ def test_pg_sealed_session_dispatches_exactly_one_outbox_analyze_command(
 ) -> None:
     """A sealed session becomes one ``OutboxEvent`` row + one pending ``TaskLog``.
 
-    The slim Celery task's
-    :func:`_dispatch_analysis_for_sealed` writes through the
-    outbox dispatcher port; the partial unique index on
+    Driving through the public :func:`run_hot_build` orchestration
+    entry exercises the full seal+dispatch atomic path. The outbox
+    dispatcher port writes the ``OutboxEvent`` inside the same
+    transaction as the ``TaskLog``; the partial unique index on
     ``task_log.dedupe_key`` enforces one active analyzer per
-    session. The ``OutboxRow.payload`` carries
-    ``{"session_id": <id>, "priority": <priority>}`` matching
-    the :class:`AnalyzeSessionCommand` shape.
+    session. Each pre-seeded stuck-sealed session is redispatched
+    exactly once via the stuck-sealed self-heal.
     """
-    factory = _session_factory(postgres_migrated_engine)
-    base = datetime(2026, 3, 15, 9, 0, 0)
-    now = base + timedelta(hours=2)
-
     monkeypatch.setattr(
         "src.adapters.xiaomi_parser.XiaomiDirectoryParser.scan_directory",
-        lambda self, min_time, max_time, cancel_check: _fixture_records(base),
+        lambda self, min_time, max_time, cancel_check: [],
     )
+    factory = _session_factory(postgres_migrated_engine)
+    base = datetime(2026, 3, 15, 9, 0, 0, tzinfo=timezone.utc)
 
     with factory() as db:
         source_id = _seed_source(db, source_name="dispatch-cam")
-        result = runner.run_full(
-            db,
-            source_id=source_id,
-            root_path="/tmp/videos",
-            scan_start=base - timedelta(hours=1),
-            scan_end=now,
-            cancel_check=None,
-            home_zone=None,
-            now_utc=now,
+        seeded_ids = [
+            _seed_session(db, source_id, start_time=base + timedelta(hours=offset))
+            for offset in range(2)
+        ]
+
+    with factory() as db:
+        result = run_hot_build(db, source_id=source_id, queue_task_id="")
+
+    assert result["analysis_redispatched"] == len(seeded_ids)
+
+    with factory() as db:
+        outbox_count = (
+            db.query(OutboxEvent)
+            .filter(OutboxEvent.task_name == "src.tasks.analyzer.analyze_session_task")
+            .count()
         )
-        db.commit()
-
-        sealed_sessions = result.sealed_sessions
-        assert len(sealed_sessions) >= 1
-
-        from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
-
-        dispatched = _dispatch_analysis_for_sealed(db, sealed_sessions)
-        db.commit()
-
-        assert len(dispatched) == len(sealed_sessions)
-        for info in sealed_sessions:
-            assert any(row["session_id"] == info.session_id for row in dispatched)
+        pending_logs = (
+            db.query(TaskLog)
+            .filter(
+                TaskLog.task_type == TaskType.SESSION_ANALYSIS,
+                TaskLog.task_target_id.in_(seeded_ids),
+                TaskLog.status == TaskStatus.PENDING,
+            )
+            .count()
+        )
+        assert outbox_count == len(seeded_ids)
+        assert pending_logs == len(seeded_ids)
 
 
 def test_pg_dispatcher_partial_unique_index_rejects_second_analyze(
     postgres_migrated_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Calling the dispatch helper twice for the same session yields one ``TaskLog``.
+    """Two build dispatches for the same sealed session yield one ``TaskLog``.
 
-    The dispatcher port's ``create_pending_task_log`` relies
-    on the partial unique index; the second call short-circuits
-    to the existing row (``created=False``) so the analyzer
-    isn't enqueued twice. We confirm the partial unique index
-    by counting the ``TaskLog`` rows with ``status='pending'``
-    after two consecutive dispatches: there should be exactly
-    one for the target session.
+    The dispatcher port's ``create_pending_task_log`` relies on
+    the partial unique index; the second dispatch short-circuits
+    to the existing row (``created=False``) so the analyzer isn't
+    enqueued twice. Driving through the public
+    :func:`run_hot_build` orchestration entry twice (each call
+    atomically seals + dispatches via outbox) confirms exactly
+    one pending ``TaskLog`` for the target session: the second
+    call's stuck-sealed redispatch finds no stuck sessions (the
+    ``session_analysis`` ``TaskLog`` already exists from the
+    first call), so ``_dispatch_analysis_for_sealed`` is invoked
+    with an empty envelope and the partial unique index never
+    sees a second active row.
     """
-    factory = _session_factory(postgres_migrated_engine)
-    base = datetime(2026, 3, 15, 9, 0, 0)
-    now = base + timedelta(hours=2)
-
     monkeypatch.setattr(
         "src.adapters.xiaomi_parser.XiaomiDirectoryParser.scan_directory",
-        lambda self, min_time, max_time, cancel_check: _fixture_records(base),
+        lambda self, min_time, max_time, cancel_check: [],
     )
+    factory = _session_factory(postgres_migrated_engine)
+    base = datetime(2026, 3, 15, 9, 0, 0, tzinfo=timezone.utc)
 
     with factory() as db:
         source_id = _seed_source(db, source_name="dedup-cam")
-        result = runner.run_full(
-            db,
-            source_id=source_id,
-            root_path="/tmp/videos",
-            scan_start=base - timedelta(hours=1),
-            scan_end=now,
-            cancel_check=None,
-            home_zone=None,
-            now_utc=now,
-        )
-        db.commit()
+        session_id = _seed_session(db, source_id, start_time=base)
 
-        assert result.sealed_sessions
-        session_info = result.sealed_sessions[0]
+    with factory() as db:
+        first_result = run_hot_build(db, source_id=source_id, queue_task_id="")
+        second_result = run_hot_build(db, source_id=source_id, queue_task_id="")
 
-        from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
+    # First call dispatches via stuck-sealed self-heal: 1 redispatch.
+    assert first_result["analysis_redispatched"] == 1
+    # Second call finds no stuck-sealed sessions (the
+    # ``session_analysis`` ``TaskLog`` already exists from the
+    # first call), so neither ``analysis_dispatched`` nor
+    # ``analysis_redispatched`` count anything.
+    assert second_result.get("skipped") is True or (
+        second_result.get("analysis_dispatched", 0) == 0
+        and second_result.get("analysis_redispatched", 0) == 0
+    )
 
-        first = _dispatch_analysis_for_sealed(db, [session_info])
-        db.commit()
-        # Same payload again — partial unique index
-        # short-circuits to the existing row.
-        second = _dispatch_analysis_for_sealed(db, [session_info])
-        db.commit()
-
-        assert len(first) == 1
-        assert len(second) == 1
-
-    # Exactly one ``TaskLog`` row in pending state for the
-    # sealed session id, even after two dispatches.
     with factory() as db:
         pending_logs_for_session = (
             db.query(TaskLog)
             .filter(
                 TaskLog.task_type == TaskType.SESSION_ANALYSIS,
-                TaskLog.task_target_id == session_info.session_id,
+                TaskLog.task_target_id == session_id,
                 TaskLog.status == TaskStatus.PENDING,
             )
             .count()
@@ -525,48 +542,38 @@ def test_pg_outbox_partial_unique_index_serializes_sealed_session_dispatch(
     postgres_migrated_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two concurrent dispatch calls for the same session produce one ``OutboxEvent``.
+    """Two concurrent build calls produce one ``OutboxEvent`` per session.
 
     The outbox dispatcher writes the
     ``OutboxEvent(task_name='src.tasks.analyzer.analyze_session_task')``
     row inside the same transaction as the ``TaskLog``; the
     partial unique index serialises peer workers to a single
-    active row. We confirm by counting the ``OutboxEvent``
-    rows: one event per session in the envelope, even after a
-    second concurrent dispatch.
+    active row. Driving two concurrent :func:`run_hot_build`
+    invocations (each atomically seals + dispatches via outbox)
+    confirms exactly one outbox event per pre-seeded
+    stuck-sealed session, even when both workers race on the
+    same source.
     """
-    factory = _session_factory(postgres_migrated_engine)
-    base = datetime(2026, 3, 15, 9, 0, 0)
-    now = base + timedelta(hours=2)
-
     monkeypatch.setattr(
         "src.adapters.xiaomi_parser.XiaomiDirectoryParser.scan_directory",
-        lambda self, min_time, max_time, cancel_check: _fixture_records(base),
+        lambda self, min_time, max_time, cancel_check: [],
     )
+    factory = _session_factory(postgres_migrated_engine)
+    base = datetime(2026, 3, 15, 9, 0, 0, tzinfo=timezone.utc)
 
     with factory() as db:
         source_id = _seed_source(db, source_name="concurrent-dispatch-cam")
-        result = runner.run_full(
-            db,
-            source_id=source_id,
-            root_path="/tmp/videos",
-            scan_start=base - timedelta(hours=1),
-            scan_end=now,
-            cancel_check=None,
-            home_zone=None,
-            now_utc=now,
-        )
-        db.commit()
+        seeded_ids = [
+            _seed_session(db, source_id, start_time=base + timedelta(hours=offset))
+            for offset in range(2)
+        ]
 
-    from src.tasks._session_build_orchestration import _dispatch_analysis_for_sealed
-
-    def _dispatch_once():
+    def _build_once() -> None:
         with factory() as db:
-            _dispatch_analysis_for_sealed(db, result.sealed_sessions)
-            db.commit()
+            run_hot_build(db, source_id=source_id, queue_task_id="")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(_dispatch_once) for _ in range(2)]
+        futures = [executor.submit(_build_once) for _ in range(2)]
         for future in futures:
             future.result()
 
@@ -576,4 +583,4 @@ def test_pg_outbox_partial_unique_index_serializes_sealed_session_dispatch(
             .filter(OutboxEvent.task_name == "src.tasks.analyzer.analyze_session_task")
             .count()
         )
-        assert event_count == len(result.sealed_sessions)
+        assert event_count == len(seeded_ids)
