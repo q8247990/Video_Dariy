@@ -62,12 +62,11 @@ def test_build_video_source_status_core_metrics(pg_db: Session) -> None:
         .first()
     )
     assert first_file is not None
-    pg_db.add(
-        VideoSessionFileRel(session_id=session.id, video_file_id=first_file.id, sort_index=0)
-    )
+    pg_db.add(VideoSessionFileRel(session_id=session.id, video_file_id=first_file.id, sort_index=0))
     pg_db.commit()
 
     result = build_video_source_status(db=pg_db, source_id=source.id)
+
     # PG ``timestamptz`` round-trips a tz-aware datetime (Asia/Shanghai
     # in this environment); strip the tz before equality comparison.
     def _naive(value: datetime) -> datetime:
@@ -147,6 +146,50 @@ def test_build_video_source_status_analyzing_from_tasks_or_sessions(pg_db: Sessi
 
     session_result = build_video_source_status(db=pg_db, source_id=source.id)
     assert session_result["analysis_state"] == "analyzing"
+
+
+def test_build_video_source_status_seconds_fallback_when_duration_missing(
+    pg_db: Session,
+) -> None:
+    source = VideoSource(
+        source_name="书房",
+        camera_name="Cam4",
+        location_name="书房",
+        source_type="local_directory",
+        config_json={"root_path": "/data/videos/cam4"},
+        enabled=True,
+    )
+    pg_db.add(source)
+    pg_db.flush()
+
+    pg_db.add(
+        VideoFile(
+            source_id=source.id,
+            file_name="f1.mp4",
+            file_path="/data/videos/cam4/f1.mp4",
+            start_time=datetime(2026, 3, 10, 8, 0, 0),
+            end_time=datetime(2026, 3, 10, 8, 10, 0),
+            duration_seconds=None,
+        )
+    )
+    pg_db.flush()
+
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=datetime(2026, 3, 10, 8, 0, 0),
+        session_end_time=datetime(2026, 3, 10, 8, 10, 0),
+        total_duration_seconds=600,
+        analysis_status=SessionAnalysisStatus.SUCCESS,
+    )
+    pg_db.add(session)
+    pg_db.flush()
+    file_row = pg_db.query(VideoFile).filter(VideoFile.source_id == source.id).first()
+    assert file_row is not None
+    pg_db.add(VideoSessionFileRel(session_id=session.id, video_file_id=file_row.id, sort_index=0))
+    pg_db.commit()
+
+    result = build_video_source_status(db=pg_db, source_id=source.id)
+    assert result["analyzed_coverage_percent"] == 100.0
 
 
 def test_build_video_sources_status_map_for_ten_sources(pg_db: Session) -> None:

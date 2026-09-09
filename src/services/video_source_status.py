@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
-from typing import Optional, cast
+from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import Case, and_, case, func
 from sqlalchemy.orm import Session
 
 from src.models.task_log import TaskLog
@@ -22,18 +22,18 @@ def build_video_sources_status_map(db: Session, source_ids: list[int]) -> dict[i
         return {}
 
     now = datetime.now(timezone.utc)
-    video_ranges = _query_video_time_range_map(db, unique_ids)
+    video_metrics = _query_video_file_metrics_map(db, unique_ids)
     analyzed_ranges = _query_analyzed_time_range_map(db, unique_ids)
-    total_file_seconds_map = _query_total_file_seconds_map(db, unique_ids)
     analyzed_file_seconds_map = _query_analyzed_file_seconds_map(db, unique_ids)
-    analysis_state_map = _query_analysis_state_map(db, unique_ids)
-    full_build_running_map = _query_full_build_running_map(db, unique_ids)
+    full_build_running_map, running_build_map = _query_session_build_task_map(db, unique_ids)
+    analysis_state_map = _query_analysis_state_map(db, unique_ids, running_build_map)
 
     status_map: dict[int, dict] = {}
     for source_id in unique_ids:
-        video_earliest_time, video_latest_time = video_ranges.get(source_id, (None, None))
+        video_earliest_time, video_latest_time, total_file_seconds = video_metrics.get(
+            source_id, (None, None, 0.0)
+        )
         analyzed_earliest_time, analyzed_latest_time = analyzed_ranges.get(source_id, (None, None))
-        total_file_seconds = total_file_seconds_map.get(source_id, 0.0)
         analyzed_file_seconds = analyzed_file_seconds_map.get(source_id, 0.0)
 
         status_map[source_id] = {
@@ -55,10 +55,17 @@ def build_video_sources_status_map(db: Session, source_ids: list[int]) -> dict[i
     return status_map
 
 
-def _query_full_build_running_map(db: Session, source_ids: list[int]) -> dict[int, bool]:
-    """Check if a full build task is running for each source."""
+def _query_session_build_task_map(
+    db: Session,
+    source_ids: list[int],
+) -> tuple[dict[int, bool], dict[int, bool]]:
+    """一次查询 task_log，返回 (全量构建运行中, 构建任务运行中) 两个映射。
+
+    两条查询此前都是 ``task_type=SESSION_BUILD`` 且状态在
+    (PENDING, RUNNING) 的 task_log 扫描，合并为一次。
+    """
     rows = (
-        db.query(TaskLog)
+        db.query(TaskLog.task_target_id, TaskLog.status, TaskLog.detail_json)
         .filter(
             TaskLog.task_type == TaskType.SESSION_BUILD,
             TaskLog.task_target_id.in_(source_ids),
@@ -66,33 +73,66 @@ def _query_full_build_running_map(db: Session, source_ids: list[int]) -> dict[in
         )
         .all()
     )
-    result: dict[int, bool] = {}
-    for row in rows:
-        if row.task_target_id is None:
+    full_build_running: dict[int, bool] = {}
+    running_build: dict[int, bool] = {}
+    for target_id, status, detail_json in rows:
+        if target_id is None:
             continue
-        detail = row.detail_json if isinstance(row.detail_json, dict) else {}
+        source_id = int(target_id)
+        detail = detail_json if isinstance(detail_json, dict) else {}
         if detail.get("scan_mode") == "full":
-            result[int(row.task_target_id)] = True
-    return result
+            full_build_running[source_id] = True
+        if status == TaskStatus.RUNNING:
+            running_build[source_id] = True
+    return full_build_running, running_build
 
 
-def _query_video_time_range_map(
+def _file_seconds_expr() -> Case:
+    """单文件秒数的 SQL 表达式，语义与原 Python 版 ``_resolve_file_seconds`` 一致：
+
+    - ``duration_seconds`` 非空时取 ``max(duration_seconds, 0)``
+    - 否则回退为 ``max(end_time - start_time, 0)``（秒）
+    - 均不可用时为 0
+
+    注意：PostgreSQL 不支持 ``extract(field, expr)`` 逗号语法，
+    因此使用 ``date_part('epoch', ...)`` 将 interval 转为秒。
+    """
+    return case(
+        (
+            VideoFile.duration_seconds.isnot(None),
+            func.greatest(VideoFile.duration_seconds, 0),
+        ),
+        (
+            and_(VideoFile.start_time.isnot(None), VideoFile.end_time.isnot(None)),
+            func.greatest(func.date_part("epoch", VideoFile.end_time - VideoFile.start_time), 0),
+        ),
+        else_=0,
+    )
+
+
+def _query_video_file_metrics_map(
     db: Session,
     source_ids: list[int],
-) -> dict[int, tuple[Optional[datetime], Optional[datetime]]]:
+) -> dict[int, tuple[Optional[datetime], Optional[datetime], float]]:
+    """一次查询 video_file：时间范围 + 总时长（秒数求和由 SQL 完成）。"""
     rows = (
         db.query(
             VideoFile.source_id,
             func.min(VideoFile.start_time).label("video_earliest_time"),
             func.max(VideoFile.end_time).label("video_latest_time"),
+            func.sum(_file_seconds_expr()).label("total_file_seconds"),
         )
         .filter(VideoFile.source_id.in_(source_ids))
         .group_by(VideoFile.source_id)
         .all()
     )
-    result: dict[int, tuple[Optional[datetime], Optional[datetime]]] = {}
+    result: dict[int, tuple[Optional[datetime], Optional[datetime], float]] = {}
     for row in rows:
-        result[int(row.source_id)] = (row.video_earliest_time, row.video_latest_time)
+        result[int(row.source_id)] = (
+            row.video_earliest_time,
+            row.video_latest_time,
+            float(row.total_file_seconds or 0.0),
+        )
     return result
 
 
@@ -119,32 +159,8 @@ def _query_analyzed_time_range_map(
     return result
 
 
-def _query_total_file_seconds_map(
-    db: Session,
-    source_ids: list[int],
-) -> dict[int, float]:
-    rows = (
-        db.query(
-            VideoFile.source_id,
-            VideoFile.duration_seconds,
-            VideoFile.start_time,
-            VideoFile.end_time,
-        )
-        .filter(VideoFile.source_id.in_(source_ids))
-        .all()
-    )
-    totals: dict[int, float] = {}
-    for row in rows:
-        source_id = int(row.source_id)
-        totals[source_id] = totals.get(source_id, 0.0) + _resolve_file_seconds(
-            row.duration_seconds,
-            row.start_time,
-            row.end_time,
-        )
-    return totals
-
-
 def _query_analyzed_file_seconds_map(db: Session, source_ids: list[int]) -> dict[int, float]:
+    """已完成分析文件（去重）的总时长，秒数求和由 SQL 完成。"""
     success_file_subquery = (
         db.query(VideoSessionFileRel.video_file_id.label("video_file_id"))
         .join(VideoSession, VideoSession.id == VideoSessionFileRel.session_id)
@@ -159,36 +175,18 @@ def _query_analyzed_file_seconds_map(db: Session, source_ids: list[int]) -> dict
     rows = (
         db.query(
             VideoFile.source_id,
-            VideoFile.duration_seconds,
-            VideoFile.start_time,
-            VideoFile.end_time,
+            func.sum(_file_seconds_expr()).label("analyzed_file_seconds"),
         )
         .join(success_file_subquery, success_file_subquery.c.video_file_id == VideoFile.id)
         .filter(VideoFile.source_id.in_(source_ids))
+        .group_by(VideoFile.source_id)
         .all()
     )
 
     totals: dict[int, float] = {}
     for row in rows:
-        source_id = int(row.source_id)
-        totals[source_id] = totals.get(source_id, 0.0) + _resolve_file_seconds(
-            row.duration_seconds,
-            row.start_time,
-            row.end_time,
-        )
+        totals[int(row.source_id)] = float(row.analyzed_file_seconds or 0.0)
     return totals
-
-
-def _resolve_file_seconds(
-    duration_seconds: int | float | None,
-    start_time: Optional[datetime],
-    end_time: Optional[datetime],
-) -> float:
-    if duration_seconds is not None:
-        return float(max(duration_seconds, 0))
-    if start_time is None or end_time is None:
-        return 0.0
-    return max(0.0, (end_time - start_time).total_seconds())
 
 
 def _calculate_analyzed_coverage_percent(
@@ -213,7 +211,12 @@ def _minutes_since_last_new_video(
     return int(delta_seconds // 60)
 
 
-def _query_analysis_state_map(db: Session, source_ids: list[int]) -> dict[int, str]:
+def _query_analysis_state_map(
+    db: Session,
+    source_ids: list[int],
+    running_build_map: dict[int, bool],
+) -> dict[int, str]:
+    """状态优先级：paused > 构建任务 RUNNING（调用方一次查询提供）> session ANALYZING > stopped。"""
     states: dict[int, str] = {}
 
     paused_rows = (
@@ -224,23 +227,9 @@ def _query_analysis_state_map(db: Session, source_ids: list[int]) -> dict[int, s
     for row in paused_rows:
         states[int(row[0])] = "paused"
 
-    pending_ids = [source_id for source_id in source_ids if source_id not in states]
-    if pending_ids:
-        running_rows = (
-            db.query(TaskLog.task_target_id)
-            .filter(
-                TaskLog.task_target_id.in_(pending_ids),
-                TaskLog.task_type == TaskType.SESSION_BUILD,
-                TaskLog.status == TaskStatus.RUNNING,
-            )
-            .all()
-        )
-        for row in running_rows:  # type: ignore[assignment]
-            target_id = cast(int | None, row[0])
-            if target_id is None:
-                continue
-            source_id = int(target_id)
-            states.setdefault(source_id, "analyzing")
+    for source_id in source_ids:
+        if source_id not in states and running_build_map.get(source_id, False):
+            states[source_id] = "analyzing"
 
     pending_ids = [source_id for source_id in source_ids if source_id not in states]
     if pending_ids:
