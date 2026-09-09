@@ -33,9 +33,7 @@ def _subscribe(db: Session, *, count: int) -> list[int]:
         WebhookConfig(
             name=f"hook-{i}",
             url=f"https://hook-{i}.example/hook",
-            event_subscriptions_json=[
-                {"event": "daily_summary_generated", "version": "1.0"}
-            ],
+            event_subscriptions_json=[{"event": "daily_summary_generated", "version": "1.0"}],
             enabled=True,
         )
         for i in range(1, count + 1)
@@ -124,9 +122,7 @@ def test_send_webhook_task_targeted_skip_reasons(
         hook = WebhookConfig(
             name="disabled",
             url="https://disabled.example/hook",
-            event_subscriptions_json=[
-                {"event": "daily_summary_generated", "version": "1.0"}
-            ],
+            event_subscriptions_json=[{"event": "daily_summary_generated", "version": "1.0"}],
             enabled=False,
         )
         pg_db.add(hook)

@@ -554,9 +554,7 @@ def test_generate_daily_summary_honors_cancel_requested(db_session_factory, monk
 
     verify_db = db_session_factory()
     try:
-        task_log = (
-            verify_db.query(TaskLog).filter_by(queue_task_id="cancel-summary-task").one()
-        )
+        task_log = verify_db.query(TaskLog).filter_by(queue_task_id="cancel-summary-task").one()
         summary = (
             verify_db.query(DailySummary)
             .filter(DailySummary.summary_date == datetime(2026, 3, 13).date())
@@ -587,17 +585,13 @@ def test_generate_daily_summary_enrolls_one_outbox_per_subscriber(
                 WebhookConfig(
                     name="hook-one",
                     url="https://example.com/hook-one",
-                    event_subscriptions_json=[
-                        {"event": "daily_summary_generated", "version": ""}
-                    ],
+                    event_subscriptions_json=[{"event": "daily_summary_generated", "version": ""}],
                     enabled=True,
                 ),
                 WebhookConfig(
                     name="hook-two",
                     url="https://example.com/hook-two",
-                    event_subscriptions_json=[
-                        {"event": "daily_summary_generated", "version": ""}
-                    ],
+                    event_subscriptions_json=[{"event": "daily_summary_generated", "version": ""}],
                     enabled=True,
                 ),
             ]

@@ -165,9 +165,7 @@ def test_publish_succeeds_atomically_with_no_subscribers(pg_db: Session) -> None
     assert outcome.attempt_status == DailySummaryAttemptStatus.SUCCEEDED
     assert outcome.webhook_event_ids == []
 
-    summary = (
-        pg_db.query(DailySummary).filter(DailySummary.summary_date == date(2026, 9, 2)).one()
-    )
+    summary = pg_db.query(DailySummary).filter(DailySummary.summary_date == date(2026, 9, 2)).one()
     assert summary.id == outcome.summary_id
     assert summary.overall_summary == "今日整体平稳。"
     assert summary.event_count == 3
@@ -223,9 +221,7 @@ def test_publish_upserts_existing_summary_for_same_date(pg_db: Session) -> None:
     # Same row id — the upsert is keyed on ``summary_date``.
     assert second_outcome.summary_id == first_id
 
-    rows = (
-        pg_db.query(DailySummary).filter(DailySummary.summary_date == date(2026, 9, 2)).all()
-    )
+    rows = pg_db.query(DailySummary).filter(DailySummary.summary_date == date(2026, 9, 2)).all()
     assert len(rows) == 1
     assert rows[0].id == first_id
     assert rows[0].overall_summary == "已更新。"
@@ -307,9 +303,7 @@ def test_publish_with_empty_events_count_still_succeeds(pg_db: Session) -> None:
     )
     pg_db.commit()
 
-    summary = (
-        pg_db.query(DailySummary).filter(DailySummary.summary_date == date(2026, 9, 2)).one()
-    )
+    summary = pg_db.query(DailySummary).filter(DailySummary.summary_date == date(2026, 9, 2)).one()
     assert summary.event_count == 0
     # Stable fallback text fills in when the caller passes empty.
     assert summary.overall_summary == EMPTY_DAY_FALLBACK_TEXT

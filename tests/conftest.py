@@ -203,9 +203,7 @@ def postgres_real_schema() -> str:
 
 
 @pytest.fixture(scope="session")
-def postgres_real_engine(
-    postgres_database_url: str, postgres_real_schema: str
-) -> Iterator[Engine]:
+def postgres_real_engine(postgres_database_url: str, postgres_real_schema: str) -> Iterator[Engine]:
     """已跑过 alembic upgrade head 的一次性 schema engine，专供真提交测试。
 
     与 ``postgres_engine`` 复用相同创建/清理逻辑，但落在独立的

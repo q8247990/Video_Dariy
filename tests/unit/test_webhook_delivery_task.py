@@ -6,9 +6,7 @@ from src.services.webhook_payload import build_webhook_event_payload
 from src.tasks import webhook as webhook_task
 
 
-def test_webhook_task_persists_independent_delivery_outcomes(
-    pg_db: Session, monkeypatch
-) -> None:
+def test_webhook_task_persists_independent_delivery_outcomes(pg_db: Session, monkeypatch) -> None:
     pg_db.add_all(
         [
             WebhookConfig(

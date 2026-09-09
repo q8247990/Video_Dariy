@@ -96,14 +96,20 @@ def test_outbox_metrics_empty_pool_has_null_lag(engine) -> None:
 
 def test_task_recovery_metrics_counts_recovered_and_heartbeat(engine) -> None:
     with Session(bind=engine) as session:
-        session.add(TaskLog(task_type="session_analysis", status="timeout",
-                            retry_count=0, recovery_attempt=2))
-        session.add(TaskLog(task_type="session_build", status="success",
-                            retry_count=0, recovery_attempt=0))
-        session.add(AppRuntimeState(
-            state_key="heartbeat_last_counters",
-            state_value={"timed_out": 3, "pending_recovered": 5},
-        ))
+        session.add(
+            TaskLog(
+                task_type="session_analysis", status="timeout", retry_count=0, recovery_attempt=2
+            )
+        )
+        session.add(
+            TaskLog(task_type="session_build", status="success", retry_count=0, recovery_attempt=0)
+        )
+        session.add(
+            AppRuntimeState(
+                state_key="heartbeat_last_counters",
+                state_value={"timed_out": 3, "pending_recovered": 5},
+            )
+        )
         session.commit()
 
     metrics = task_recovery_metrics(engine)
@@ -140,24 +146,31 @@ def test_checkpoint_progress_reports_running_analysis(engine) -> None:
         session.add(video_session)
         session.flush()
         video_session_id = video_session.id
-        session.add(TaskLog(
-            task_type="session_analysis", status="running",
-            task_target_id=video_session_id, retry_count=0, recovery_attempt=0,
-        ))
+        session.add(
+            TaskLog(
+                task_type="session_analysis",
+                status="running",
+                task_target_id=video_session_id,
+                retry_count=0,
+                recovery_attempt=0,
+            )
+        )
         for state, idx in (("success", 0), ("success", 1), ("pending", 2)):
-            session.add(SessionAnalysisCheckpoint(
-                session_id=video_session_id,
-                analysis_run_id="run-1",
-                chunk_index=0,
-                sub_chunk_index=idx,
-                start_offset_seconds=0,
-                input_fingerprint="fp",
-                state=state,
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-                attempt_count=0,
-            ))
+            session.add(
+                SessionAnalysisCheckpoint(
+                    session_id=video_session_id,
+                    analysis_run_id="run-1",
+                    chunk_index=0,
+                    sub_chunk_index=idx,
+                    start_offset_seconds=0,
+                    input_fingerprint="fp",
+                    state=state,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    attempt_count=0,
+                )
+            )
         session.commit()
 
     progress = checkpoint_progress(engine)

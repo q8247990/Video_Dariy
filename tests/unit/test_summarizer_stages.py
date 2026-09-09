@@ -450,9 +450,7 @@ def test_mark_running_then_failed_preserves_prior_summary(
     """Failure terminal transition does NOT touch ``daily_summary``."""
     repo = DailySummaryAttemptRepository(pg_db)
     task_log = _seed_task_log(pg_db)
-    attempt = _seed_running_attempt(
-        pg_db, task_log_id=int(task_log.id), target=date(2026, 3, 13)
-    )
+    attempt = _seed_running_attempt(pg_db, task_log_id=int(task_log.id), target=date(2026, 3, 13))
 
     pg_db.add(
         DailySummary(
@@ -482,9 +480,7 @@ def test_mark_running_then_failed_preserves_prior_summary(
 def test_mark_cancelled_preserves_prior_summary(pg_db: Session) -> None:
     repo = DailySummaryAttemptRepository(pg_db)
     task_log = _seed_task_log(pg_db)
-    attempt = _seed_running_attempt(
-        pg_db, task_log_id=int(task_log.id), target=date(2026, 3, 13)
-    )
+    attempt = _seed_running_attempt(pg_db, task_log_id=int(task_log.id), target=date(2026, 3, 13))
 
     pg_db.add(
         DailySummary(

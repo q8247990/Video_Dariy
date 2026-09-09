@@ -286,9 +286,7 @@ class FakeGateway:
         pass
 
 
-def test_qa_service_routes_to_agent_strategy_when_tool_calling(
-    pg_db: Session, monkeypatch
-) -> None:
+def test_qa_service_routes_to_agent_strategy_when_tool_calling(pg_db: Session, monkeypatch) -> None:
     import src.application.qa.service as service_module
     from src.application.qa.schemas import QAResult
 

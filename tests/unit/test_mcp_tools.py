@@ -117,9 +117,7 @@ def test_call_tool_search_and_media_paths(pg_db: Session) -> None:
     )
     pg_db.add(video_file)
     pg_db.flush()
-    pg_db.add(
-        VideoSessionFileRel(session_id=session_id, video_file_id=video_file.id, sort_index=1)
-    )
+    pg_db.add(VideoSessionFileRel(session_id=session_id, video_file_id=video_file.id, sort_index=1))
     pg_db.commit()
 
     search_result = call_tool(
@@ -160,9 +158,9 @@ def test_call_tool_search_and_media_paths(pg_db: Session) -> None:
     # PG timestamptz round-trips a tz-aware ISO string (``+08:00``
     # suffix); the SQLite path returned a naive string. Match the
     # wall-clock prefix so the assertion is stable across dialects.
-    assert sessions_result["structuredContent"]["sessions"][0][
-        "session_start_time"
-    ].startswith("2026-02-26T15:10:00")
+    assert sessions_result["structuredContent"]["sessions"][0]["session_start_time"].startswith(
+        "2026-02-26T15:10:00"
+    )
     assert availability_result["structuredContent"]["video_sources"][0]["name"] == "source-1"
 
 

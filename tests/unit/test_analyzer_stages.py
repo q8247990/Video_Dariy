@@ -229,9 +229,7 @@ def test_chunk_plan_computes_expected_offsets_and_fingerprints(pg_db: Session) -
     be stable across repeated calls and the per-sub-chunk fingerprint
     must change when the input changes.
     """
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
 
     plan_first = build_chunk_plan(
         pg_db,
@@ -373,9 +371,7 @@ def test_checkpoint_write_requires_matching_run_id_and_generation(
     """A checkpoint write with matching ``analysis_run_id`` +
     ``generation`` + ``lease_owner`` succeeds and persists the
     success row."""
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
     task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-1")
     guards = _build_guards(task_log)
 
@@ -434,9 +430,7 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
     the bumped generation. The previous worker's :class:`ClaimGuards`
     must be rejected so it cannot write.
     """
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
     task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-stale")
 
     stale_guards = _build_guards(task_log)
@@ -510,9 +504,7 @@ def test_late_worker_cannot_write_checkpoint_or_event(
     written either (the events table is owned by the new worker via
     the canonical finalize path).
     """
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
     task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-old")
     stale_guards = _build_guards(task_log)
 
@@ -570,9 +562,7 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
     """A LLM / parse exception leaves the checkpoint in ``state=error`` and
     finalises the TaskLog as ``FAILED`` so the orchestrator can decide
     between PARTIAL (resume) and FAILED (give up)."""
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
     task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-fail")
     guards = _build_guards(task_log)
 
@@ -651,9 +641,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
     ``state=error`` so the orchestrator's :func:`mark_checkpoint_processing`
     can flip it back to ``processing`` (via ``RESUMABLE_STATES``) and
     retry only the failed sub-chunks."""
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
     task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-resume")
     guards = _build_guards(task_log)
 
@@ -760,9 +748,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
 def test_write_token_usage_persists_llm_usage_log(pg_db: Session, monkeypatch) -> None:
     """The checkpoint writer can persist the LLMUsageLog row bound to the
     checkpoint via the existing ``record_token_usage`` helper."""
-    _, session_id = _seed_source_with_video_files(
-        pg_db, file_count=3, file_duration_seconds=60
-    )
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
     task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-tok")
     guards = _build_guards(task_log)
 

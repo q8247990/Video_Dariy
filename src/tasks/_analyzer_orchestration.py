@@ -159,9 +159,7 @@ def run_session_analysis(
             db, session_id, chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS
         )
         chunk_sub_chunks_list = [
-            build_chunk_sub_chunks(
-                chunk, db, sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS
-            )
+            build_chunk_sub_chunks(chunk, db, sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS)
             for chunk in chunks
         ]
         plan = assemble_chunk_plan(
