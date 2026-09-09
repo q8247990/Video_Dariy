@@ -12,15 +12,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from src.application.qa.agent import _extract_reference_ids
 from src.application.qa.agent_strategy import AgentQAStrategy
 from src.application.qa.schemas import QARequest
-from src.db.base import Base
 from src.models.chat_query_log import ChatQueryLog
 from src.models.event_record import EventRecord
+from src.models.llm_provider import LLMProvider
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 
@@ -58,7 +57,7 @@ def test_extract_reference_ids_tolerates_invalid_payloads() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AgentQAStrategy 引用透出集成测试（SQLite + fake gateway）
+# AgentQAStrategy 引用透出集成测试（PostgreSQL + fake gateway）
 # ---------------------------------------------------------------------------
 
 
@@ -81,7 +80,7 @@ _TIME_ARGS = {
 class FakeToolGateway:
     """第一轮并行调用 search_events + get_sessions，第二轮返回最终回答。
 
-    工具结果由真实的 ``execute_tool`` 对 SQLite 数据产生（全链路验证）。
+    工具结果由真实的 ``execute_tool`` 对 PostgreSQL 数据产生（全链路验证）。
     """
 
     def __init__(self) -> None:
@@ -112,7 +111,6 @@ class FakeToolGateway:
 
 
 class FakeProvider:
-    id = 99
     provider_name = "fake-qa"
     api_base_url = "http://localhost/v1"
     api_key = ""
@@ -124,17 +122,21 @@ class FakeProvider:
     extra_config_json = {}
 
 
+def _fake_provider(provider_id: int) -> FakeProvider:
+    """``chat_query_log.provider_id`` 是 ``llm_provider`` 外键，id 必须指向真实行。"""
+    provider = FakeProvider()
+    provider.id = provider_id
+    return provider
+
+
 @pytest.fixture()
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-    with factory() as session:
-        yield session
+def db_session(pg_db: Session) -> Session:
+    """Single session against the project-wide ``pg_db`` fixture (PostgreSQL)."""
+    return pg_db
 
 
-def _seed_data(db: Session) -> tuple[int, int]:
-    """建 source/session/event，返回 (event_id, session_id)。"""
+def _seed_data(db: Session) -> tuple[int, int, int]:
+    """建 source/provider/session/event，返回 (event_id, session_id, provider_id)。"""
     now = datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
     source = VideoSource(
         source_name="test-source",
@@ -143,6 +145,15 @@ def _seed_data(db: Session) -> tuple[int, int]:
         source_type="local_directory",
     )
     db.add(source)
+    db.flush()
+    provider = LLMProvider(
+        provider_name="fake-qa",
+        api_base_url="http://localhost/v1",
+        api_key="",
+        model_name="fake",
+        supports_tool_calling=True,
+    )
+    db.add(provider)
     db.flush()
     session = VideoSession(
         source_id=source.id,
@@ -168,14 +179,14 @@ def _seed_data(db: Session) -> tuple[int, int]:
     )
     db.add(event)
     db.commit()
-    return event.id, session.id
+    return event.id, session.id, provider.id
 
 
 def test_agent_strategy_exposes_referenced_events_and_sessions(db_session: Session) -> None:
-    event_id, session_id = _seed_data(db_session)
+    event_id, session_id, provider_id = _seed_data(db_session)
     gateway = FakeToolGateway()
 
-    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=FakeProvider)
+    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=_fake_provider(provider_id))
     result = strategy.execute(
         "上午10点发生了什么",
         QARequest(
@@ -210,7 +221,7 @@ def test_agent_strategy_skips_missing_ids_in_references(
 ) -> None:
     import src.application.qa.agent as agent_module
 
-    event_id, session_id = _seed_data(db_session)
+    event_id, session_id, provider_id = _seed_data(db_session)
 
     def fake_execute_tool(db: Session, tool_name: str, arguments: dict[str, Any]) -> str:
         if tool_name == "search_events":
@@ -226,7 +237,7 @@ def test_agent_strategy_skips_missing_ids_in_references(
     monkeypatch.setattr(agent_module, "execute_tool", fake_execute_tool)
     gateway = FakeToolGateway()
 
-    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=FakeProvider)
+    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=_fake_provider(provider_id))
     result = strategy.execute(
         "上午10点发生了什么",
         QARequest(
@@ -253,10 +264,10 @@ def test_agent_strategy_no_tool_calls_yields_empty_references(db_session: Sessio
         ) -> tuple[str, list[dict[str, Any]]]:
             return "无工具回答", []
 
-    _seed_data(db_session)
+    _, _, provider_id = _seed_data(db_session)
     gateway = NoToolGateway()
 
-    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=FakeProvider)
+    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=_fake_provider(provider_id))
     result = strategy.execute(
         "随便问问",
         QARequest(
