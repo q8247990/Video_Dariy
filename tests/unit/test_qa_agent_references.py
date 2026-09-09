@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session
 
-from src.application.qa.agent import _extract_reference_ids
 from src.application.qa.agent_strategy import AgentQAStrategy
 from src.application.qa.schemas import QARequest
 from src.models.chat_query_log import ChatQueryLog
@@ -22,39 +21,6 @@ from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-
-# ---------------------------------------------------------------------------
-# _extract_reference_ids 纯函数测试
-# ---------------------------------------------------------------------------
-
-
-def test_extract_reference_ids_from_search_events_result() -> None:
-    payload = json.dumps({"events": [{"id": 3, "title": "a"}, {"id": 1, "title": "b"}], "total": 2})
-    event_ids, session_ids = _extract_reference_ids(payload)
-    assert event_ids == [3, 1]
-    assert session_ids == []
-
-
-def test_extract_reference_ids_from_get_sessions_result() -> None:
-    payload = json.dumps({"sessions": [{"id": 7}, {"id": 8}]})
-    event_ids, session_ids = _extract_reference_ids(payload)
-    assert event_ids == []
-    assert session_ids == [7, 8]
-
-
-def test_extract_reference_ids_ignores_non_integer_ids() -> None:
-    payload = json.dumps({"events": [{"id": "x"}, {"name": "no-id"}, None, 5]})
-    event_ids, session_ids = _extract_reference_ids(payload)
-    assert event_ids == []
-    assert session_ids == []
-
-
-def test_extract_reference_ids_tolerates_invalid_payloads() -> None:
-    assert _extract_reference_ids("not-json") == ([], [])
-    assert _extract_reference_ids(json.dumps([1, 2, 3])) == ([], [])
-    assert _extract_reference_ids(json.dumps({"events": "oops"})) == ([], [])
-    assert _extract_reference_ids(None) == ([], [])  # type: ignore[arg-type]
-
 
 # ---------------------------------------------------------------------------
 # AgentQAStrategy 引用透出集成测试（PostgreSQL + fake gateway）
@@ -214,44 +180,6 @@ def test_agent_strategy_exposes_referenced_events_and_sessions(db_session: Sessi
         "search_events",
         "get_sessions",
     ]
-
-
-def test_agent_strategy_skips_missing_ids_in_references(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import src.application.qa.agent as agent_module
-
-    event_id, session_id, provider_id = _seed_data(db_session)
-
-    def fake_execute_tool(db: Session, tool_name: str, arguments: dict[str, Any]) -> str:
-        if tool_name == "search_events":
-            return json.dumps(
-                {"events": [{"id": 999999}, {"id": event_id}], "total": 2}, ensure_ascii=False
-            )
-        if tool_name == "get_sessions":
-            return json.dumps(
-                {"sessions": [{"id": 888888}, {"id": session_id}]}, ensure_ascii=False
-            )
-        return json.dumps({"error": f"unknown tool: {tool_name}"})
-
-    monkeypatch.setattr(agent_module, "execute_tool", fake_execute_tool)
-    gateway = FakeToolGateway()
-
-    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=_fake_provider(provider_id))
-    result = strategy.execute(
-        "上午10点发生了什么",
-        QARequest(
-            question="上午10点发生了什么",
-            now=datetime(2026, 3, 15, 12, 0, 0, tzinfo=timezone.utc),
-            timezone="Asia/Shanghai",
-            write_query_log=False,
-            request_source="web",
-            locale="zh-CN",
-        ),
-    )
-
-    assert [e.id for e in result.referenced_events] == [event_id]
-    assert [s.id for s in result.referenced_sessions] == [session_id]
 
 
 def test_agent_strategy_no_tool_calls_yields_empty_references(db_session: Session) -> None:

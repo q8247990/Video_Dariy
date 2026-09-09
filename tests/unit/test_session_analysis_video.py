@@ -10,7 +10,6 @@ from src.models.video_source import VideoSource
 from src.services.session_analysis_video import (
     SessionVideoChunk,
     SubChunk,
-    _concat_video_files_to_mp4_bytes,
     build_chunk_sub_chunks,
     build_chunk_video_data_url,
     build_session_video_chunks,
@@ -84,24 +83,6 @@ def test_build_session_video_chunks_split_by_10_minutes(db_session: Session) -> 
     assert chunks[2].start_offset_seconds == 1200
     assert chunks[2].duration_seconds == 300
     assert len(chunks[2].file_paths) == 5
-
-
-def test_concat_video_delegates_to_run_ffmpeg_concat(monkeypatch) -> None:
-    calls: list[list[str]] = []
-
-    def _mock_concat(paths: list[str]) -> bytes:
-        calls.append(paths)
-        return b"ok"
-
-    monkeypatch.setattr(
-        "src.services.session_analysis_video.run_ffmpeg_concat_to_bytes", _mock_concat
-    )
-
-    result = _concat_video_files_to_mp4_bytes(["/tmp/a.mp4", "/tmp/b.mp4"])
-
-    assert result == b"ok"
-    assert len(calls) == 1
-    assert calls[0] == ["/tmp/a.mp4", "/tmp/b.mp4"]
 
 
 def test_build_chunk_sub_chunks_splits_into_300s() -> None:

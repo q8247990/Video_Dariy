@@ -54,11 +54,6 @@ def _reset_outbox_state() -> None:
     OutboxCommandRegistry.reset_for_testing()
 
 
-def _reset_outbox_state() -> None:
-    outbox_contracts._reset_emitted_event_ids_for_testing()
-    OutboxCommandRegistry.reset_for_testing()
-
-
 # ---------------------------------------------------------------------------
 # Atomicity: TaskLog + OutboxEvent in one transaction
 # ---------------------------------------------------------------------------
