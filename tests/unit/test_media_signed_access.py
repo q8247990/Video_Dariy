@@ -1,14 +1,13 @@
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from urllib.parse import urlsplit
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
 import src.api.deps as api_deps
 from src.api.v1.endpoints import media
@@ -16,34 +15,38 @@ from src.core.config import settings
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
+from src.models.video_source import VideoSource
 from src.services.media_signing import MediaCapability, MediaSigningService
 
 
 @pytest.fixture
-def db() -> Session:
-    engine = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    VideoSession.__table__.create(bind=engine)
-    VideoFile.__table__.create(bind=engine)
-    VideoSessionFileRel.__table__.create(bind=engine)
-    local_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = local_session()
-    try:
-        yield session
-    finally:
-        session.close()
+def db_session(pg_db: Session) -> Session:
+    """Single session against the project-wide ``pg_db`` fixture (PostgreSQL)."""
+    return pg_db
 
 
 @pytest.fixture
-def client(db: Session) -> TestClient:
+def media_workspace(tmp_path: Path) -> Iterator[Path]:
+    """临时切换 ``PLAYBACK_CACHE_ROOT`` 与 ``VIDEO_ROOT_PATH`` 到隔离目录。"""
+    with TemporaryDirectory() as cache_root:
+        old_cache_root = settings.PLAYBACK_CACHE_ROOT
+        old_video_root = settings.VIDEO_ROOT_PATH
+        settings.PLAYBACK_CACHE_ROOT = cache_root
+        settings.VIDEO_ROOT_PATH = str(tmp_path)
+        try:
+            yield tmp_path
+        finally:
+            settings.PLAYBACK_CACHE_ROOT = old_cache_root
+            settings.VIDEO_ROOT_PATH = old_video_root
+
+
+@pytest.fixture
+def client(pg_db: Session) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(media.router, prefix="/api/v1/media")
 
-    def _override_get_db():
-        yield db
+    def _override_get_db() -> Iterator[Session]:
+        yield pg_db
 
     def _override_get_current_user() -> SimpleNamespace:
         return SimpleNamespace(id=1, username="admin")
@@ -55,8 +58,16 @@ def client(db: Session) -> TestClient:
 
 
 def _seed_playable_session(db: Session, video_path: Path) -> tuple[int, int]:
+    source = VideoSource(
+        source_name="signed-media",
+        camera_name="cam",
+        location_name="loc",
+        source_type="local_directory",
+    )
+    db.add(source)
+    db.flush()
     session = VideoSession(
-        source_id=1,
+        source_id=source.id,
         session_start_time=datetime(2026, 3, 14, 8, 0, 0),
         session_end_time=datetime(2026, 3, 14, 8, 1, 0),
         total_duration_seconds=60,
@@ -65,7 +76,7 @@ def _seed_playable_session(db: Session, video_path: Path) -> tuple[int, int]:
     db.add(session)
     db.flush()
     video_file = VideoFile(
-        source_id=1,
+        source_id=source.id,
         file_name="0800.mp4",
         file_path=str(video_path),
         storage_type="local_file",
@@ -82,68 +93,35 @@ def _seed_playable_session(db: Session, video_path: Path) -> tuple[int, int]:
     return session.id, video_file.id
 
 
-def test_media_routes_require_scoped_signed_capabilities_and_preserve_ranges(
-    client: TestClient, db: Session, tmp_path: Path
+def test_media_stream_serves_in_bounds_range_and_rejects_cross_resource(
+    client: TestClient, db_session: Session, media_workspace: Path
 ) -> None:
-    old_video_root = settings.VIDEO_ROOT_PATH
-    settings.VIDEO_ROOT_PATH = str(tmp_path)
-    video_path = tmp_path / "clip.mp4"
-    try:
-        video_path.write_bytes(b"abcdefghij")
-        session_id, file_id = _seed_playable_session(db, video_path)
+    """in-bounds Range 返回 206 片段；签名能力越界到其他 file 时拒绝。
 
-        unsigned = client.get(f"/api/v1/media/files/{file_id}/stream")
-        playback = client.get(f"/api/v1/media/sessions/{session_id}/playback")
-
-        assert unsigned.status_code == 401
-        assert playback.status_code == 200
-        playback_data = playback.json()["data"]
-        file_url = playback_data["files"][0]["stream_url"]
-        manifest_url = playback_data["hls_url"]
-        ranged = client.get(f"/api/v1{file_url}", headers={"Range": "bytes=3-6"})
-        manifest = client.get(f"/api/v1{manifest_url}")
-
-        assert ranged.status_code == 206
-        assert ranged.content == b"defg"
-        assert ranged.headers["cache-control"] == "no-store"
-        assert manifest.status_code == 200
-        assert manifest.headers["cache-control"] == "no-store"
-        segment_url = next(
-            line for line in manifest.text.splitlines() if line.startswith("/api/v1/media/files/")
-        )
-        segment = client.get(segment_url)
-        cross_resource = client.get(
-            f"/api/v1{file_url.replace(f'/{file_id}/', f'/{file_id + 1}/')}"
-        )
-
-        assert segment.status_code == 200
-        assert segment.content == b"abcdefghij"
-        assert cross_resource.status_code == 403
-    finally:
-        settings.VIDEO_ROOT_PATH = old_video_root
-
-
-def test_hls_manifest_url_contains_a_signed_query_capability(
-    client: TestClient, db: Session, tmp_path: Path
-) -> None:
-    video_path = tmp_path / "clip.mp4"
+    未签名 401、签名 URL 签发、manifest no-store 等契约由
+    ``tests/integration/test_media_hls_http.py`` 覆盖，此处不重复。
+    """
+    video_path = media_workspace / "clip.mp4"
     video_path.write_bytes(b"abcdefghij")
-    session_id, _ = _seed_playable_session(db, video_path)
+    session_id, file_id = _seed_playable_session(db_session, video_path)
 
     playback = client.get(f"/api/v1/media/sessions/{session_id}/playback")
-    hls_url = playback.json()["data"]["hls_url"]
-    parsed = urlsplit(hls_url)
+    file_url = playback.json()["data"]["files"][0]["stream_url"]
 
-    assert parsed.path == f"/media/sessions/{session_id}/hls/index.m3u8"
-    assert parsed.query.startswith("token=")
+    ranged = client.get(f"/api/v1{file_url}", headers={"Range": "bytes=3-6"})
+    cross_resource = client.get(f"/api/v1{file_url.replace(f'/{file_id}/', f'/{file_id + 1}/')}")
+
+    assert ranged.status_code == 206
+    assert ranged.content == b"defg"
+    assert cross_resource.status_code == 403
 
 
 def test_signed_media_rejects_tampered_and_cross_session_segment_tokens(
-    client: TestClient, db: Session, tmp_path: Path
+    client: TestClient, db_session: Session, media_workspace: Path
 ) -> None:
-    video_path = tmp_path / "clip.mp4"
+    video_path = media_workspace / "clip.mp4"
     video_path.write_bytes(b"abcdefghij")
-    session_id, file_id = _seed_playable_session(db, video_path)
+    session_id, file_id = _seed_playable_session(db_session, video_path)
     capability = MediaCapability(
         resource_kind="file",
         resource_id=file_id,
@@ -174,8 +152,8 @@ def test_signed_media_rejects_tampered_and_cross_session_segment_tokens(
 )
 def test_range_headers_have_documented_http_contract(
     client: TestClient,
-    db: Session,
-    tmp_path: Path,
+    db_session: Session,
+    media_workspace: Path,
     range_header: str,
     expected_status: int,
     expected_body: bytes | None,
@@ -189,22 +167,17 @@ def test_range_headers_have_documented_http_contract(
     ``bytes=-N`` 是合法的 suffix range（文件末尾 N 字节）：``bytes=-3`` 返回
     末尾 3 字节；``bytes=-100`` 请求超过文件长度，返回整个 10 字节文件。
     """
-    old_video_root = settings.VIDEO_ROOT_PATH
-    settings.VIDEO_ROOT_PATH = str(tmp_path)
-    video_path = tmp_path / "clip.mp4"
-    try:
-        video_path.write_bytes(b"abcdefghij")
-        _, file_id = _seed_playable_session(db, video_path)
+    video_path = media_workspace / "clip.mp4"
+    video_path.write_bytes(b"abcdefghij")
+    session_id, file_id = _seed_playable_session(db_session, video_path)
 
-        playback = client.get("/api/v1/media/sessions/1/playback")
-        file_url = playback.json()["data"]["files"][0]["stream_url"]
+    playback = client.get(f"/api/v1/media/sessions/{session_id}/playback")
+    file_url = playback.json()["data"]["files"][0]["stream_url"]
 
-        response = client.get(f"/api/v1{file_url}", headers={"Range": range_header})
+    response = client.get(f"/api/v1{file_url}", headers={"Range": range_header})
 
-        assert response.status_code == expected_status
-        if expected_status == 206:
-            assert response.content == expected_body
-        else:
-            assert response.headers["content-range"] == "bytes */10"
-    finally:
-        settings.VIDEO_ROOT_PATH = old_video_root
+    assert response.status_code == expected_status
+    if expected_status == 206:
+        assert response.content == expected_body
+    else:
+        assert response.headers["content-range"] == "bytes */10"
