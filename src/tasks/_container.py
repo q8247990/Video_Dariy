@@ -25,10 +25,21 @@ infrastructure dependency.
 from __future__ import annotations
 
 from src.application.bootstrap import Container, bootstrap_production
+from src.services.analysis.ports import AnalysisPorts, build_analysis_ports
 
 # Module-level composition-root singleton. Mirrors ``src/api/deps.py`` and
 # ``src/mcp/tools.py`` so all three entry points share one wiring pattern.
 _container: Container = bootstrap_production()
+
+# Module-level analyzer-pipeline ports holder. The task layer reads the
+# :class:`~src.services.analysis.ports.AnalysisPorts` bundle through
+# :func:`get_analysis_ports`; production code paths take the ``None``
+# default
+# (lazy-resolved via :func:`build_analysis_ports`) and tests inject a
+# scripted fake through :func:`set_analysis_ports_for_tests`. The holder is
+# ``None`` until first access — keeping the module load-time graph free of
+# the underlying service / aggregator imports.
+_analysis_ports: AnalysisPorts | None = None
 
 
 def get_container() -> Container:
@@ -57,8 +68,49 @@ def reset_container_for_tests() -> None:
     _container = bootstrap_production()
 
 
+def get_analysis_ports() -> AnalysisPorts:
+    """Return the analyzer-pipeline ports bundle for Celery task modules.
+
+    Resolves to a fresh :func:`build_analysis_ports` instance on every
+    cold call, then caches the result so repeated invocations within a
+    single worker process pay no extra import cost.
+    """
+
+    global _analysis_ports
+    if _analysis_ports is None:
+        _analysis_ports = build_analysis_ports()
+    return _analysis_ports
+
+
+def set_analysis_ports_for_tests(ports: AnalysisPorts) -> None:
+    """Replace the analyzer-pipeline ports holder (test-only escape hatch).
+
+    Mirrors :func:`set_container_for_tests`: production code never calls
+    this; tests use it so the analyzer orchestration runs against a
+    scripted :class:`AnalysisPorts` instead of monkey-patching the
+    individual helper names in :mod:`src.tasks._analyzer_orchestration`.
+    """
+
+    global _analysis_ports
+    _analysis_ports = ports
+
+
+def reset_analysis_ports_for_tests() -> None:
+    """Restore the analyzer-pipeline ports holder to ``None``.
+
+    The next call to :func:`get_analysis_ports` will rebuild the
+    production wiring via :func:`build_analysis_ports`.
+    """
+
+    global _analysis_ports
+    _analysis_ports = None
+
+
 __all__ = [
+    "get_analysis_ports",
     "get_container",
+    "reset_analysis_ports_for_tests",
     "reset_container_for_tests",
+    "set_analysis_ports_for_tests",
     "set_container_for_tests",
 ]

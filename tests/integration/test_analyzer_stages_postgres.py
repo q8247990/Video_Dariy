@@ -1,39 +1,31 @@
-"""PostgreSQL integration tests for the analysis-stage decomposition (Todo 18).
+"""PostgreSQL integration tests for the analyzer pipeline (Todo "测试边界收敛" first wave).
 
-白盒测试：直接调用内部 stage 函数/类，断言绑定实现细节，随实现重构，不作为接口契约回归基线。
+These tests exercise the public :func:`analyze_session_task` Celery
+entry against a real PostgreSQL instance (``postgres_migrated_engine``)
+and a scripted
+:class:`~src.application.ports.llm_gateway.LLMGatewayFactoryPort`
+injected through the task-layer container holder
+(:func:`src.tasks._container.set_container_for_tests`). The analyzer
+pipeline's media-layout helpers are wired through
+:class:`~src.application.bootstrap_fakes.FakeAnalysisPorts`.
 
-These tests exercise the public API of
-:mod:`src.services.analysis` against a real PostgreSQL instance
-(``postgres_migrated_engine``). They cover the behaviours the SQLite
-unit tests cannot:
+The only allowed monkey-patches against ``src`` internals are:
 
-* multi-chunk midway failure + resume only recharges the remaining
-  sub-chunks (not the successes);
-* a recovery worker's take-over is enforced by the fence; the old
-  worker's commit is rejected so no :class ``EventRecord`` is created;
-* a PG deadlock (SQLSTATE ``40P01``) is classified as a recovery
-  signal and the analyzer rolls the session back to ``SEALED`` for the
-  retry;
-* a cancellation that arrives during the external call rolls the
-  session back to ``SEALED`` (not ``PARTIAL``) — the
-  ``force=True`` flag in :func:`transition_session` is required for
-  this system-initiated rollback;
-* the slim Celery task does not hold a checked-out DB connection
-  during the LLM HTTP call (the ``post_db``/``pre_db`` pattern
-  closes the transaction before the gateway call).
-
-The deadlock test uses an in-process PG ``OperationalError`` with
-``pgcode='40P01'`` rather than waiting on a real lock race — this is
-what the analyzer actually sees on the wire and matches the
-:class:`~sqlalchemy.exc.OperationalError` classifier in
-:mod:`src.services.analysis.recovery`.
+* :func:`src.tasks._analyzer_orchestration.task_db_session` (DB-env
+  seam) — replaced once per test with a context manager that opens a
+  Session against the migrated engine;
+* ``analyze_session_task.retry`` (Celery runtime port for deadlock
+  injection);
+* ``outbox_contracts._reset_emitted_event_ids_for_testing`` (authorized
+  test hook — listed for completeness even though no test in this file
+  uses it).
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from typing import Any, Iterator
 
 import pytest
 from sqlalchemy import text as sql_text
@@ -41,18 +33,23 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from src.application.bootstrap import bootstrap_for_tests
+from src.application.bootstrap_fakes import (
+    FakeAnalysisPorts,
+    ScriptedVisionGateway,
+    ScriptedVisionGatewayFactory,
+)
 from src.models.event_record import EventRecord
+from src.models.llm_provider import LLMProvider
 from src.models.llm_usage_log import LLMUsageLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.analysis import (
-    ClaimGuards,
     LateWorkerFencingError,
     build_sub_chunk_extra_body,
     build_sub_chunk_video_url,
-    get_or_create_checkpoint,
     write_sub_chunk_checkpoint,
 )
 from src.services.analysis.chunk_plan import SubChunkPlan
@@ -61,12 +58,12 @@ from src.services.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
-from src.services.session_analysis_video import SessionVideoChunk, SubChunk
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
+from src.tasks import _analyzer_orchestration, _container  # noqa: F401
 from src.tasks.analyzer import analyze_session_task
 
 pytestmark = pytest.mark.postgres
@@ -79,16 +76,8 @@ pytestmark = pytest.mark.postgres
 
 @pytest.fixture(autouse=True)
 def _truncate_analysis_tables(postgres_migrated_engine: Engine) -> None:
-    """Truncate every table the analyzer touches, in FK-respecting order.
+    """Truncate every table the analyzer touches, in FK-respecting order."""
 
-    The :class:`~src.models.event_record.EventRecord` table FKs into
-    :class:`~src.models.video_session.VideoSession` which itself FKs
-    into :class:`~src.models.video_source.VideoSource`. The
-    ``session_analysis_checkpoint`` table FKs into
-    ``video_session``. ``task_log`` is the only top-level table with
-    no parent; ``llm_usage_log`` FKs into ``task_log`` /
-    ``video_session`` / ``llm_provider`` (the last is not touched).
-    """
     with postgres_migrated_engine.begin() as conn:
         conn.execute(sql_text("TRUNCATE TABLE llm_usage_log RESTART IDENTITY CASCADE"))
         conn.execute(
@@ -99,12 +88,79 @@ def _truncate_analysis_tables(postgres_migrated_engine: Engine) -> None:
         conn.execute(sql_text("TRUNCATE TABLE task_log RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE video_session RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE video_source RESTART IDENTITY CASCADE"))
+        conn.execute(sql_text("TRUNCATE TABLE llm_provider RESTART IDENTITY CASCADE"))
 
 
-def _new_source(db: Session) -> VideoSource:
+@pytest.fixture
+def analyzer_db(postgres_migrated_engine: Engine) -> Iterator[Session]:
+    """Function-scoped session bound to the migrated engine for the
+    base-action wiring.
+    """
+
+    db = Session(bind=postgres_migrated_engine)
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def _base_action(
+    analyzer_db: Session,
+    postgres_migrated_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Wire the task-layer container + ports holder for every test.
+
+    Installs a scripted vision factory with an empty-responses gateway
+    and a 1-chunk × 3-sub-chunk :class:`FakeAnalysisPorts`. The
+    ``task_db_session`` is replaced with a context manager that opens
+    Sessions against the migrated engine so the analyzer task's
+    connections see the seeded rows.
+
+    Tests customise either the gateway responses (via
+    :meth:`ScriptedVisionGateway.queue_responses`) or the ports
+    (via :func:`_container.set_analysis_ports_for_tests`) before
+    calling :func:`analyze_session_task.run`.
+    """
+
+    factory = ScriptedVisionGatewayFactory()
+    factory.install_gateway(ScriptedVisionGateway(responses=[]))
+    container = bootstrap_for_tests(llm_factory=factory)
+    _container.set_container_for_tests(container)
+    _container.set_analysis_ports_for_tests(FakeAnalysisPorts())
+
+    @contextmanager
+    def _task_session() -> Iterator[Session]:
+        db = Session(bind=postgres_migrated_engine)
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.task_db_session", _task_session
+    )
+    try:
+        yield
+    finally:
+        _container.reset_container_for_tests()
+        _container.reset_analysis_ports_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _new_source(
+    db: Session,
+    *,
+    source_name: str = "analyzer-stages-pg",
+) -> VideoSource:
     source = VideoSource(
-        source_name="analyzer-stages-pg",
-        camera_name="analyzer-stages-pg",
+        source_name=source_name,
+        camera_name=source_name,
         location_name="test",
         source_type="local_directory",
         config_json={"root_path": "/tmp"},
@@ -135,6 +191,26 @@ def _new_session(
     return video_session
 
 
+def _seed_provider(db: Session) -> LLMProvider:
+    """Seed a default-vision :class:`LLMProvider` for the analyzer task."""
+
+    provider = LLMProvider(
+        provider_name="analyzer-stages-pg",
+        provider_type="vision_provider",
+        api_base_url="http://example.invalid/v1",
+        api_key="",
+        model_name="vision-test",
+        timeout_seconds=30,
+        enabled=True,
+        supports_vision=True,
+        is_default_vision=True,
+    )
+    db.add(provider)
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
 def _recognition_result(index: int) -> RecognitionResultDTO:
     return RecognitionResultDTO(
         session_summary=SessionSummaryDTO(
@@ -162,19 +238,127 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
     )
 
 
+def _recognition_result_json(index: int) -> str:
+    return _recognition_result(index).model_dump_json()
+
+
+def _latest_gateway() -> ScriptedVisionGateway:
+    factory = _container.get_container().llm_factory
+    assert isinstance(factory, ScriptedVisionGatewayFactory)
+    return factory.gateways[-1]
+
+
+def _set_responses(*responses: str) -> None:
+    """Queue responses on the gateway the next run will consume.
+
+    Preserves the existing gateway's ``on_call`` side-effect hook
+    (needed by the cancel test); falls back to installing a fresh
+    gateway when no installed gateway exists.
+    """
+
+    factory = _container.get_container().llm_factory
+    assert isinstance(factory, ScriptedVisionGatewayFactory)
+    if factory._gateway is not None:
+        factory._gateway.queue_responses(list(responses))
+    else:
+        factory.install_gateway(ScriptedVisionGateway(responses=list(responses)))
+
+
+# ---------------------------------------------------------------------------
+# Happy / failure / resume paths via the slim Celery task
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.postgres
+def test_multi_chunk_midway_failure_resumes_remaining_chunks(
+    postgres_migrated_engine: Engine,
+) -> None:
+    """Three sub-chunks: two succeed, one fails. The retry resumes only the
+    remaining sub-chunk — the gateway's call log proves no LLM HTTP
+    request was re-issued for the already-success sub-chunks.
+    """
+
+    with Session(postgres_migrated_engine) as db:
+        _seed_provider(db)
+        source = _new_source(db)
+        video_session = _new_session(db, source)
+        session_id = video_session.id
+
+    _set_responses(
+        _recognition_result_json(0),
+        _recognition_result_json(1),
+        "raise",
+    )
+    with pytest.raises(RuntimeError, match="provider failed"):
+        analyze_session_task.run(session_id=session_id)
+
+    with Session(postgres_migrated_engine) as verify:
+        checkpoints = (
+            verify.query(SessionAnalysisCheckpoint)
+            .order_by(SessionAnalysisCheckpoint.sub_chunk_index)
+            .all()
+        )
+        failed_session = verify.query(VideoSession).filter_by(id=session_id).one()
+        first_call_count = len(_latest_gateway().calls)
+        assert first_call_count == 3
+        assert [c.state for c in checkpoints] == ["success", "success", "error"]
+        assert sum(c.total_tokens for c in checkpoints) == 30
+        assert failed_session.analysis_status == "partial"
+        assert verify.query(EventRecord).filter_by(session_id=session_id).count() == 0
+        assert verify.query(LLMUsageLog).filter_by(session_id=session_id).count() == 2
+
+    _set_responses(_recognition_result_json(2))
+    result = analyze_session_task.run(session_id=session_id)
+
+    with Session(postgres_migrated_engine) as verify:
+        completed_session = verify.query(VideoSession).filter_by(id=session_id).one()
+        events = verify.query(EventRecord).filter_by(session_id=session_id).all()
+        usage = verify.query(LLMUsageLog).filter_by(session_id=session_id).all()
+        retry_call_count = len(_latest_gateway().calls)
+        assert retry_call_count == 1
+        assert result["events_created"] == 3
+        assert completed_session.analysis_status == "success"
+        assert len(events) == 3
+        assert {event.summary for event in events} == {"event-0", "event-1", "event-2"}
+        assert len(usage) == 3
+        assert sum(item.total_tokens for item in usage) == 45
+
+
+# ---------------------------------------------------------------------------
+# Late-worker fencing on PostgreSQL
+# ---------------------------------------------------------------------------
+
+
+def _build_guards(task_log: TaskLog) -> Any:
+    """Build a :class:`ClaimGuards` from a real TaskLog row's detail_json.
+
+    Kept narrow: the integration test that drives the fencing scenario
+    is allowed to construct guards from a DB row because that is the
+    public shape of a claim context (``detail_json["analysis_run_id"]``
+    / ``detail_json["generation"]`` are the fencing fields the claim
+    stage writes). The test then exercises
+    :func:`write_sub_chunk_checkpoint` directly because that is the
+    single write path the slim task uses to land success rows.
+    """
+    from src.services.analysis.checkpoint_writer import ClaimGuards
+
+    detail = task_log.detail_json if isinstance(task_log.detail_json, dict) else {}
+    return ClaimGuards(
+        task_log_id=task_log.id,
+        analysis_run_id=str(detail.get("analysis_run_id") or "pg-run"),
+        generation=int(detail.get("generation") or 0),
+        lease_owner=task_log.lease_owner,
+    )
+
+
 def _bind_running_task_log(
     db: Session,
     *,
     session_id: int,
     queue_task_id: str,
 ) -> TaskLog:
-    """Create + commit a RUNNING ``TaskLog`` mirror of what the claim stage produces.
+    """Create + commit a RUNNING TaskLog mirror of what the claim stage produces."""
 
-    The ``analysis_run_id`` / ``generation`` are stored in
-    ``detail_json`` exactly the way :func:`claim._build_claim_context`
-    would store them; the same dict is the source of truth for the
-    fencing comparison in :func:`enforce_fencing`.
-    """
     task_log = TaskLog(
         task_type=TaskType.SESSION_ANALYSIS,
         task_target_id=session_id,
@@ -194,188 +378,25 @@ def _bind_running_task_log(
     return task_log
 
 
-def _build_guards(task_log: TaskLog) -> ClaimGuards:
-    detail = task_log.detail_json if isinstance(task_log.detail_json, dict) else {}
-    return ClaimGuards(
-        task_log_id=task_log.id,
-        analysis_run_id=str(detail.get("analysis_run_id") or "pg-run"),
-        generation=int(detail.get("generation") or 0),
-        lease_owner=task_log.lease_owner,
-    )
-
-
-def _checkpoint_plan(
-    *,
-    session_id: int,
-    sub_chunk_count: int,
-) -> tuple[list[SubChunkPlan], SessionVideoChunk]:
-    """Build a deterministic ``SubChunkPlan`` list for one chunk."""
-    chunk = SessionVideoChunk(
-        chunk_index=0,
-        start_offset_seconds=0,
-        duration_seconds=180,
-        file_paths=[f"/tmp/pg-{i}.mp4" for i in range(sub_chunk_count)],
-        file_durations=[60] * sub_chunk_count,
-    )
-    plans: list[SubChunkPlan] = []
-    for index in range(sub_chunk_count):
-        plans.append(
-            SubChunkPlan(
-                chunk_index=0,
-                sub_chunk_index=index,
-                start_offset_seconds=index * 60,
-                duration_seconds=60,
-                file_paths=(f"/tmp/pg-{index}.mp4",),
-            )
-        )
-    return plans, chunk
-
-
-# ---------------------------------------------------------------------------
-# Happy / failure / resume paths via the slim Celery task
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.postgres
-def test_multi_chunk_midway_failure_resumes_remaining_chunks(
-    postgres_migrated_engine: Engine,
-    monkeypatch,
-) -> None:
-    """Three sub-chunks: two succeed, one fails. The retry resumes only the
-    remaining sub-chunk — ``first_calls`` and ``retry_calls`` prove
-    no LLM HTTP request was re-issued for the already-success sub-chunks.
-    """
-
-    session_id: int
-
-    with Session(postgres_migrated_engine) as db:
-        source = _new_source(db)
-        video_session = _new_session(db, source)
-        session_id = video_session.id
-
-    @contextmanager
-    def _task_session():
-        task_db = Session(postgres_migrated_engine)
-        try:
-            yield task_db
-        finally:
-            task_db.close()
-
-    remaining = ["0", "1", "raise"]
-    first_calls: list[str] = []
-
-    class _FakeClient:
-        def chat_completion(self, **kwargs):
-            del kwargs
-            response = remaining.pop(0)
-            first_calls.append(response)
-            if response == "raise":
-                raise RuntimeError("provider failed")
-            return response
-
-        def get_last_usage(self):
-            return {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-
-        def get_last_raw_response_text(self):
-            return "raw"
-
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_session_video_chunks",
-        lambda db, session_id, chunk_seconds: [
-            SessionVideoChunk(0, 0, 180, ["/tmp/pg-0.mp4", "/tmp/pg-1.mp4", "/tmp/pg-2.mp4"])
-        ],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
-        lambda chunk, db, sub_chunk_seconds: [
-            SubChunk(0, index, index * 60, 60, [f"/tmp/pg-{index}.mp4"]) for index in range(3)
-        ],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
-        lambda chunk: f"data:video/mp4;base64,{chunk.start_offset_seconds}",
-    )
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.enforce_token_quota",
-        lambda db, provider: None,
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration._build_provider_client",
-        lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
-        lambda response: _recognition_result(int(response)),
-    )
-
-    with pytest.raises(RuntimeError, match="provider failed"):
-        analyze_session_task.run(session_id=session_id)
-
-    with Session(postgres_migrated_engine) as verify:
-        checkpoints = (
-            verify.query(SessionAnalysisCheckpoint)
-            .order_by(SessionAnalysisCheckpoint.sub_chunk_index)
-            .all()
-        )
-        failed_session = verify.query(VideoSession).filter_by(id=session_id).one()
-        assert first_calls == ["0", "1", "raise"]
-        assert [c.state for c in checkpoints] == ["success", "success", "error"]
-        assert sum(c.total_tokens for c in checkpoints) == 30
-        assert failed_session.analysis_status == "partial"
-        assert verify.query(EventRecord).filter_by(session_id=session_id).count() == 0
-        assert verify.query(LLMUsageLog).filter_by(session_id=session_id).count() == 2
-
-    retry_responses = ["2"]
-    retry_calls: list[str] = []
-
-    class _RetryClient(_FakeClient):
-        def chat_completion(self, **kwargs):
-            del kwargs
-            response = retry_responses.pop(0)
-            retry_calls.append(response)
-            return response
-
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration._build_provider_client",
-        lambda db: (_RetryClient(), SimpleNamespace(id=None, provider_name="PG fake")),
-    )
-    result = analyze_session_task.run(session_id=session_id)
-
-    with Session(postgres_migrated_engine) as verify:
-        completed_session = verify.query(VideoSession).filter_by(id=session_id).one()
-        events = verify.query(EventRecord).filter_by(session_id=session_id).all()
-        usage = verify.query(LLMUsageLog).filter_by(session_id=session_id).all()
-        assert retry_calls == ["2"]
-        assert result["events_created"] == 3
-        assert completed_session.analysis_status == "success"
-        assert len(events) == 3
-        assert {event.summary for event in events} == {"event-0", "event-1", "event-2"}
-        assert len(usage) == 3
-        assert sum(item.total_tokens for item in usage) == 45
-
-
-# ---------------------------------------------------------------------------
-# Late-worker fencing on PostgreSQL
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.postgres
 def test_recovery_worker_takes_over_then_old_worker_commit_rejected(
     postgres_migrated_engine: Engine,
 ) -> None:
-    """Two workers race for the same TaskLog / session. The second worker
-    (recovery) bumps ``TaskLog.detail_json[generation]`` and ``lease_owner``;
-    the first worker's :class:`ClaimGuards` no longer match and its
-    checkpoint write raises :class:`LateWorkerFencingError`. No
-    :class:`EventRecord` is created.
+    """A first worker hands off the session to a recovery worker (lease
+    owner + generation bumped). The first worker's claim context no
+    longer matches the current TaskLog row, so any
+    :func:`write_sub_chunk_checkpoint` against the seeded checkpoint
+    raises :class:`LateWorkerFencingError` and no
+    :class:`EventRecord` is created. The test seeds the TaskLog + claim
+    context directly because the recovery take-over scenario is a
+    specific fencing shape that the public claim path cannot produce in
+    a single run; the test stays at the TaskLog / checkpoint boundary
+    rather than reaching into private claim internals.
     """
 
     session_id: int
     task_log_id: int
     checkpoint_id: int
-    stale_guards: ClaimGuards
 
     with Session(postgres_migrated_engine) as db:
         source = _new_source(db)
@@ -386,21 +407,26 @@ def test_recovery_worker_takes_over_then_old_worker_commit_rejected(
 
         stale_guards = _build_guards(task_log)
 
-        plans, _ = _checkpoint_plan(session_id=session_id, sub_chunk_count=1)
-        checkpoint = get_or_create_checkpoint(
+        plans = [
+            SubChunkPlan(
+                chunk_index=0,
+                sub_chunk_index=0,
+                start_offset_seconds=0,
+                duration_seconds=60,
+                file_paths=("/tmp/pg-0.mp4",),
+            )
+        ]
+        checkpoint = _build_initial_checkpoint(
             db,
             session_id=session_id,
-            claim=stale_guards,
-            sub_chunk=plans[0],
-            system_prompt="sys",
-            user_prompt="user",
-            video_data_url="data:video/mp4;base64,AAA",
+            guards=stale_guards,
+            plan=plans[0],
         )
         checkpoint_id = checkpoint.id
         db.commit()
 
-    # Simulate the recovery take-over: the new worker has the lease; the
-    # TaskLog row's generation was bumped and the lease_owner is now a
+    # Recovery take-over: the new worker has the lease; the TaskLog
+    # row's generation was bumped and the lease_owner is now a
     # different value.
     with Session(postgres_migrated_engine) as db:
         task_log = db.query(TaskLog).filter_by(id=task_log_id).one()
@@ -410,10 +436,6 @@ def test_recovery_worker_takes_over_then_old_worker_commit_rejected(
         task_log.lease_owner = "q-recovery"
         db.commit()
 
-    # The stale worker's commit attempt must be rejected; no event row
-    # is written because the only write path for events is the
-    # canonical :func:`finalize_session_success` which itself runs the
-    # fence check.
     with Session(postgres_migrated_engine) as db:
         checkpoint = db.query(SessionAnalysisCheckpoint).filter_by(id=checkpoint_id).one()
         with pytest.raises(LateWorkerFencingError):
@@ -437,14 +459,37 @@ def test_recovery_worker_takes_over_then_old_worker_commit_rejected(
         assert refreshed_checkpoint.event_payload is None
 
 
+def _build_initial_checkpoint(
+    db: Session,
+    *,
+    session_id: int,
+    guards: Any,
+    plan: SubChunkPlan,
+) -> SessionAnalysisCheckpoint:
+    """Insert a ``pending`` checkpoint so the fencing test has a row to
+    attempt the success write against.
+    """
+
+    checkpoint = SessionAnalysisCheckpoint(
+        session_id=session_id,
+        analysis_run_id=guards.analysis_run_id,
+        chunk_index=plan.chunk_index,
+        sub_chunk_index=plan.sub_chunk_index,
+        start_offset_seconds=plan.start_offset_seconds,
+        input_fingerprint="seed",
+        state="pending",
+    )
+    db.add(checkpoint)
+    db.flush()
+    return checkpoint
+
+
 # ---------------------------------------------------------------------------
 # Deadlock / serialization-fault recovery
 # ---------------------------------------------------------------------------
 
 
 class _DeadlockOrig(Exception):
-    """Stand-in for psycopg's ``pgcode='40P01'`` original exception."""
-
     def __init__(self) -> None:
         self.pgcode = "40P01"
 
@@ -455,92 +500,40 @@ class _DeadlockOrig(Exception):
 @pytest.mark.postgres
 def test_deadlock_path_detected_and_converted_to_recovery(
     postgres_migrated_engine: Engine,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When ``_replace_session_events`` raises a PG deadlock
+    """When ``replace_session_events`` raises a PG deadlock
     (``OperationalError`` with ``pgcode='40P01'``), the slim task's
     ``_handle_top_level_failure`` calls ``self.retry`` with
     exponential backoff and rolls the session back to ``SEALED``.
 
-    The test asserts:
-
-    * :func:`is_deadlock_operational_error` returns True for the
-      injected exception;
-    * the ``record_recovery_failure`` + ``mark_session_sealed_for_retry``
-      pair runs (the TaskLog retry counter increments, the message
-      reflects the deadlock retry, the session goes back to ``SEALED``);
-    * the fake ``self.retry`` is invoked exactly once with
-      ``countdown=1`` for the first attempt.
+    The deadlock is injected through the public ``FakeAnalysisPorts``
+    seam (``replace_events=`` callable) and the retry is captured by
+    patching the Celery ``retry`` runtime port — no internal helper
+    monkey-patches.
     """
 
-    session_id: int
-
     with Session(postgres_migrated_engine) as db:
+        _seed_provider(db)
         source = _new_source(db)
         video_session = _new_session(db, source)
         session_id = video_session.id
 
-    @contextmanager
-    def _task_session():
-        task_db = Session(postgres_migrated_engine)
-        try:
-            yield task_db
-        finally:
-            task_db.close()
-
-    class _FakeClient:
-        def chat_completion(self, *, messages, **_kwargs):
-            del messages, _kwargs
-            return "{}"
-
-        def get_last_usage(self):
-            return {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-
-        def get_last_raw_response_text(self):
-            return "raw"
-
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_session_video_chunks",
-        lambda db, session_id, chunk_seconds: [SessionVideoChunk(0, 0, 60, ["/tmp/pg.mp4"])],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
-        lambda chunk, db, sub_chunk_seconds: [SubChunk(0, 0, 0, 60, ["/tmp/pg.mp4"])],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
-        lambda chunk: "data:video/mp4;base64,AAA",
-    )
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.enforce_token_quota",
-        lambda db, provider: None,
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration._build_provider_client",
-        lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
-        lambda response: _recognition_result(0),
-    )
-
-    def _deadlock_replace(db, session_id, events):
+    def _deadlock_replace(db: Any, session_id: int, events: list[Any]) -> int:
         raise OperationalError("INSERT INTO event_record ...", {}, _DeadlockOrig())
 
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration._replace_session_events", _deadlock_replace
+    _container.set_analysis_ports_for_tests(
+        FakeAnalysisPorts(
+            chunks=1,
+            sub_chunks_per_chunk=1,
+            replace_events=_deadlock_replace,
+        )
     )
-
-    from src.services.analysis.recovery import is_deadlock_operational_error
-
-    assert is_deadlock_operational_error(OperationalError("INSERT", {}, _DeadlockOrig()))
+    _set_responses(_recognition_result_json(0))
 
     retry_calls: list[int] = []
 
-    def _fake_retry(*, exc, countdown):
-        del exc
+    def _fake_retry(*, exc: BaseException, countdown: int) -> Any:
         retry_calls.append(countdown)
         raise RuntimeError("retry-triggered")
 
@@ -569,111 +562,47 @@ def test_deadlock_path_detected_and_converted_to_recovery(
 @pytest.mark.postgres
 def test_cancelled_during_external_call_rolls_back_cleanly(
     postgres_migrated_engine: Engine,
-    monkeypatch,
 ) -> None:
     """A cancel that arrives between the pre / post transaction pair
     must roll the session back to ``SEALED`` (not ``PARTIAL``) and
-    finalise the TaskLog as ``CANCELLED`` — the ``force=True`` flag in
-    :func:`transition_session` is required for this rollback even when
-    the driving TaskLog has ``cancel_requested=True``.
-
-    The test asserts:
-
-    * the final ``result["cancelled"] is True``;
-    * the ``VideoSession`` lands in ``SEALED``;
-    * the ``TaskLog`` ends in ``CANCELLED``;
-    * the append-only ``pipeline_transition_log`` records the
-      ``ANALYZING → SEALED`` transition.
+    finalise the TaskLog as ``CANCELLED`` — the
+    ``force=True`` flag in :func:`transition_session` is required for
+    this system-initiated rollback even when the driving TaskLog has
+    ``cancel_requested=True``.
     """
 
-    session_id: int
-
     with Session(postgres_migrated_engine) as db:
+        _seed_provider(db)
         source = _new_source(db)
         video_session = _new_session(db, source)
         session_id = video_session.id
 
-    @contextmanager
-    def _task_session():
-        task_db = Session(postgres_migrated_engine)
-        try:
-            yield task_db
-        finally:
-            task_db.close()
+    side_effect_session_id = session_id
 
-    # The first sub-chunk completes successfully; the second sub-chunk's
-    # ``post_db`` is preceded by a cancel signal that fires after the
-    # LLM call but before the success write. The slim task must roll
-    # the session back to ``SEALED`` (no events persisted, since
-    # finalize is what writes events).
-    sub_chunk_calls: list[str] = []
+    def _on_call(call_index: int, _snapshot: dict[str, Any]) -> None:
+        if call_index != 1:
+            return
+        with Session(postgres_migrated_engine) as flip_db:
+            task_log = (
+                flip_db.query(TaskLog)
+                .filter(TaskLog.task_target_id == side_effect_session_id)
+                .order_by(TaskLog.id.desc())
+                .first()
+            )
+            if task_log is not None:
+                task_log.cancel_requested = True
+                flip_db.commit()
 
-    class _FakeClient:
-        def chat_completion(self, *, messages, **_kwargs):
-            del messages, _kwargs
-            sub_chunk_calls.append("call")
-            return "{}"
-
-        def get_last_usage(self):
-            return {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-
-        def get_last_raw_response_text(self):
-            return "raw"
-
-    from src.services.task_dispatch_control import TaskCancellationRequested
-
-    cancel_calls = {"count": 0}
-
-    def _cancel_after_first(*args, **kwargs):
-        del args, kwargs
-        cancel_calls["count"] += 1
-        # Cancel after the second ensure_task_not_cancelled check
-        # (which happens once at the top of the loop and once per
-        # sub-chunk). Mirrors the SQLite test's pattern.
-        if cancel_calls["count"] > 4:
-            raise TaskCancellationRequested("cancelled")
-
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.ensure_task_not_cancelled", _cancel_after_first
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_session_video_chunks",
-        lambda db, session_id, chunk_seconds: [
-            SessionVideoChunk(0, 0, 120, ["/tmp/pg-a.mp4", "/tmp/pg-b.mp4"])
-        ],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
-        lambda chunk, db, sub_chunk_seconds: [
-            SubChunk(0, 0, 0, 60, ["/tmp/pg-a.mp4"]),
-            SubChunk(0, 1, 60, 60, ["/tmp/pg-b.mp4"]),
-        ],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
-        lambda chunk: f"data:video/mp4;base64,{chunk.start_offset_seconds}",
-    )
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.enforce_token_quota",
-        lambda db, provider: None,
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration._build_provider_client",
-        lambda db: (_FakeClient(), SimpleNamespace(id=None, provider_name="PG fake")),
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
-        lambda response: _recognition_result(0),
+    factory = _container.get_container().llm_factory
+    assert isinstance(factory, ScriptedVisionGatewayFactory)
+    factory.install_gateway(ScriptedVisionGateway(responses=[], on_call=_on_call))
+    _set_responses(
+        _recognition_result_json(0),
+        _recognition_result_json(1),
+        _recognition_result_json(2),
     )
 
-    analyze_session_task.push_request(id="cancel-task", retries=0)
-    try:
-        result = analyze_session_task.run(session_id=session_id)
-    finally:
-        analyze_session_task.pop_request()
-
+    result = analyze_session_task.run(session_id=session_id)
     assert result["cancelled"] is True
 
     with Session(postgres_migrated_engine) as verify:
@@ -686,7 +615,7 @@ def test_cancelled_during_external_call_rolls_back_cleanly(
         assert video_session.analysis_status == "sealed"
         assert len(events) == 0
         # Only the checkpoints from before the cancel fired land; the
-        # exact count is implementation-defined (>= 0; <= 1) so we
+        # exact count is implementation-defined (>= 0; <= 2) so we
         # assert the upper bound (no events visible to consumers).
         assert len(checkpoints) <= 2
 
@@ -699,7 +628,6 @@ def test_cancelled_during_external_call_rolls_back_cleanly(
 @pytest.mark.postgres
 def test_no_long_checked_out_connection_during_llm_call(
     postgres_migrated_engine: Engine,
-    monkeypatch,
 ) -> None:
     """The slim Celery task opens one ``task_db_session`` for the
     orchestration lifetime but uses fresh ``task_db_session``
@@ -710,99 +638,45 @@ def test_no_long_checked_out_connection_during_llm_call(
 
     The test asserts the structural invariant: during the LLM call
     the engine pool reports **no** idle-in-transaction connection.
-    PG surfaces this via the ``pg_stat_activity`` view — a row in
-    ``state='idle in transaction'`` would indicate a leaked
-    transaction. We sample the view from a separate connection
-    immediately before, during, and after the LLM call.
-
-    Implementation notes:
-
-    * The instrumentation hook monkey-patches the LLM client so the
-      test sees the connection-state snapshot exactly when the
-      gateway would be hit.
-    * The snapshot is taken from a *fresh* PG connection (not the one
-      the analyzer task is using) so we observe the engine's
-      pool-visible state.
+    The probe lives inside the scripted gateway's per-call
+    side-effect hook (``on_call``), so the test does not touch any
+    internal ``_analyzer_orchestration`` symbol.
     """
 
-    session_id: int
-
     with Session(postgres_migrated_engine) as db:
+        _seed_provider(db)
         source = _new_source(db)
         video_session = _new_session(db, source)
         session_id = video_session.id
 
-    @contextmanager
-    def _task_session():
-        task_db = Session(postgres_migrated_engine)
-        try:
-            yield task_db
-        finally:
-            task_db.close()
-
     snapshots: list[dict[str, int]] = []
 
-    class _InstrumentedClient:
-        def chat_completion(self, *, messages, **_kwargs):
-            del messages, _kwargs
-            with postgres_migrated_engine.connect() as conn:
-                row = conn.execute(
-                    sql_text(
-                        "SELECT count(*) FILTER (WHERE state = 'idle in transaction') "
-                        "AS idle_in_tx, "
-                        "count(*) FILTER (WHERE state = 'active') AS active "
-                        "FROM pg_stat_activity "
-                        "WHERE application_name LIKE '%psycopg%' "
-                        "OR application_name = 'video_dairy'"
-                    )
-                ).one()
-                snapshots.append({"idle_in_tx": int(row.idle_in_tx), "active": int(row.active)})
-            return "{}"
+    def _probe(call_index: int, _snapshot: dict[str, Any]) -> None:
+        del call_index
+        with postgres_migrated_engine.connect() as conn:
+            row = conn.execute(
+                sql_text(
+                    "SELECT count(*) FILTER (WHERE state = 'idle in transaction') "
+                    "AS idle_in_tx, "
+                    "count(*) FILTER (WHERE state = 'active') AS active "
+                    "FROM pg_stat_activity "
+                    "WHERE application_name LIKE '%psycopg%' "
+                    "OR application_name = 'video_dairy'"
+                )
+            ).one()
+            snapshots.append({"idle_in_tx": int(row.idle_in_tx), "active": int(row.active)})
 
-        def get_last_usage(self):
-            return {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-
-        def get_last_raw_response_text(self):
-            return "raw"
-
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_session_video_chunks",
-        lambda db, session_id, chunk_seconds: [SessionVideoChunk(0, 0, 60, ["/tmp/pg.mp4"])],
+    factory = _container.get_container().llm_factory
+    assert isinstance(factory, ScriptedVisionGatewayFactory)
+    _container.set_analysis_ports_for_tests(
+        FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1)
     )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_sub_chunks",
-        lambda chunk, db, sub_chunk_seconds: [SubChunk(0, 0, 0, 60, ["/tmp/pg.mp4"])],
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.build_chunk_video_data_url",
-        lambda chunk: "data:video/mp4;base64,AAA",
-    )
-    monkeypatch.setattr("src.tasks._analyzer_orchestration.build_home_context", lambda db: {})
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.enforce_token_quota",
-        lambda db, provider: None,
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration._build_provider_client",
-        lambda db: (_InstrumentedClient(), SimpleNamespace(id=None, provider_name="PG fake")),
-    )
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.parse_video_recognition_output",
-        lambda response: _recognition_result(0),
-    )
+    factory.install_gateway(ScriptedVisionGateway(responses=[], on_call=_probe))
+    _set_responses(_recognition_result_json(0))
 
     analyze_session_task.run(session_id=session_id)
 
     assert snapshots, "the LLM client was never called"
-    # The very snapshot the LLM call takes must report zero
-    # ``idle in transaction`` connections attributable to this test
-    # session. We allow up to N other connections in ``active``
-    # state because the snapshot query itself takes one, and so do
-    # other PG utilities (background workers). The structural
-    # invariant we pin is the **idle-in-transaction** count: any
-    # non-zero value indicates a leaked transaction (a connection
-    # that started BEGIN and never committed/rolled back).
     for snapshot in snapshots:
         assert snapshot["idle_in_tx"] == 0, (
             "LLM HTTP call observed an idle-in-transaction connection "

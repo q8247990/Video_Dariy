@@ -16,8 +16,10 @@ the Celery registry name (``src.tasks.analyzer.analyze_session_task``)
 is the stable dispatch contract referenced by the outbox registry and
 the celery dispatcher. Pipeline helpers live in
 :mod:`src.tasks._analyzer_orchestration` and are called directly from
-there — tests that need to stub a helper monkeypatch the name in that
-module's namespace.
+there — tests inject an :class:`~src.services.analysis.ports.AnalysisPorts`
+bundle via the task-layer holder
+(:func:`src.tasks._container.set_analysis_ports_for_tests`) instead of
+monkey-patching internal helper symbols.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from typing import Any
 from src.core.celery_app import celery_app
 from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
 from src.tasks._analyzer_orchestration import run_session_analysis
+from src.tasks._container import get_analysis_ports
 
 
 @celery_app.task(bind=True, max_retries=DEADLOCK_MAX_RETRIES)  # type: ignore[untyped-decorator]
@@ -47,6 +50,7 @@ def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> d
         session_id=session_id,
         priority=priority,
         queue_task_id=queue_task_id,
+        ports=get_analysis_ports(),
     )
 
 

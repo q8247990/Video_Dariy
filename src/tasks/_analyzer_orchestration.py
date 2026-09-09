@@ -5,15 +5,19 @@ opens a :func:`task_db_session` and delegates the entire
 orchestration (claim + plan + sub-chunk loop + finalize + failure
 handling) to this module so the task entry stays a ~100-line delegate.
 
-Every helper this module calls (``task_db_session``,
-``build_session_video_chunks``, ``build_chunk_sub_chunks``,
-``build_home_context``, ``_build_provider_client``,
-``_replace_session_events``, ``ensure_task_not_cancelled``,
-``session_chunk_from_sub_chunk``, ``build_chunk_video_data_url``,
-``enforce_token_quota``, ``parse_video_recognition_output``,
-``record_token_usage``) is imported at module top level and called
-directly; tests that need to stub one of them monkeypatch the name in
-this module's namespace (``src.tasks._analyzer_orchestration.X``).
+Every helper this module calls is either:
+
+* a real, top-level import called directly (e.g.
+  :func:`build_home_context`, :func:`ensure_task_not_cancelled`,
+  :func:`enforce_token_quota`, :func:`record_token_usage`,
+  :func:`parse_video_recognition_output`), or
+* reached through the :class:`~src.services.analysis.ports.AnalysisPorts`
+  bundle — the five media-layout / event-replace helpers. Tests inject a
+  scripted :class:`AnalysisPorts` via the task-layer holder
+  (:func:`src.tasks._container.set_analysis_ports_for_tests`) or via
+  the ``ports`` kwarg on :func:`run_session_analysis`, so the
+  orchestrator no longer needs monkey-patchable names for those five
+  helpers.
 """
 
 from __future__ import annotations
@@ -52,7 +56,6 @@ from src.services.analysis import (
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
-from src.services.analysis.aggregator import _replace_session_events
 from src.services.analysis.chunk_plan import SubChunkPlan, assemble_chunk_plan
 from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
 from src.services.analysis.errors import RawResponseCapture
@@ -61,6 +64,7 @@ from src.services.analysis.finalize import (
     record_failed_transition,
     record_partial_failure_transition,
 )
+from src.services.analysis.ports import AnalysisPorts
 from src.services.analysis.provider import _build_provider_client
 from src.services.analysis.sub_chunk_runner import execute_sub_chunk
 from src.services.dispatch.cancel import TaskCancellationRequested
@@ -70,14 +74,7 @@ from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import SourceType
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
-from src.services.session_analysis_video import (
-    SessionVideoChunk,
-    SubChunk,
-    build_chunk_sub_chunks,
-    build_chunk_video_data_url,
-    build_session_video_chunks,
-    session_chunk_from_sub_chunk,
-)
+from src.services.session_analysis_video import SessionVideoChunk, SubChunk
 from src.services.task_dispatch_control import ensure_task_not_cancelled
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.output_parser import parse_video_recognition_output
@@ -143,23 +140,35 @@ def run_session_analysis(
     session_id: int,
     priority: str,
     queue_task_id: str,
+    ports: AnalysisPorts | None = None,
 ) -> dict[str, Any]:
     """Claim, plan, run the sub-chunk loop, finalize; return the response dict.
 
     Owns the whole pipeline lifetime, including the orchestration DB
     session (``task_db_session``); the Celery task wrapper only builds
     ``queue_task_id`` and calls this entry point.
+
+    ``ports`` is an optional :class:`AnalysisPorts` bundle. ``None`` (the
+    production default) resolves through :func:`build_analysis_ports`;
+    tests pass a scripted :class:`AnalysisPorts` directly to drive the
+    pipeline against a deterministic media layout without monkey-patching
+    any module-level name in this file.
     """
+    if ports is None:
+        from src.tasks._container import get_analysis_ports
+
+        ports = get_analysis_ports()
+
     with task_db_session() as db:
         last_prompt_text: str | None = None
         last_response_text: str | None = None
         last_raw_response_text: str | None = None
 
-        chunks = build_session_video_chunks(
-            db, session_id, chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS
+        chunks = ports.plan_chunks(
+            db, session_id, settings.ANALYZER_SEGMENT_SECONDS
         )
         chunk_sub_chunks_list = [
-            build_chunk_sub_chunks(chunk, db, sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS)
+            ports.plan_sub_chunks(chunk, db, settings.ANALYZER_LLM_CHUNK_SECONDS)
             for chunk in chunks
         ]
         plan = assemble_chunk_plan(
@@ -227,6 +236,7 @@ def run_session_analysis(
                 client=client,
                 provider=provider,
                 priority=priority,
+                ports=ports,
             )
             if isinstance(loop_result, dict):
                 return loop_result
@@ -247,7 +257,7 @@ def run_session_analysis(
                     chunk_seconds=plan.chunk_seconds,
                     sub_chunk_seconds=plan.sub_chunk_seconds,
                     parse_modes=parse_modes,
-                    replace_session_events_fn=_replace_session_events,
+                    replace_session_events_fn=ports.replace_session_events,
                 )
             except Exception as exc:
                 raw_text = getattr(client, "get_last_raw_response_text", lambda: None)()
@@ -283,6 +293,7 @@ def _run_sub_chunk_loop(
     client: Any,
     provider: Any,
     priority: str,
+    ports: AnalysisPorts,
 ) -> tuple[int, list[str], bool] | dict[str, Any]:
     """Iterate over the chunk plan; one short txn per sub-chunk stage.
 
@@ -300,9 +311,9 @@ def _run_sub_chunk_loop(
     transaction (released between the pre / post stages so the LLM
     HTTP call happens with **no** checked-out connection).
 
-    Helper names are module-level imports, so tests that need to stub
-    one monkeypatch it in this module's namespace
-    (``src.tasks._analyzer_orchestration.X``).
+    The media-layout helpers reach this loop through the injected
+    ``ports`` bundle; tests inject a scripted :class:`AnalysisPorts`
+    rather than monkey-patching the underlying helper symbols.
     """
     guards = claim.to_guards()
     sub_chunk_count = 0
@@ -350,10 +361,10 @@ def _run_sub_chunk_loop(
                     sub_chunk_dto,
                 )
                 last_prompt_text = user_prompt
-                projected_chunk = session_chunk_from_sub_chunk(
+                projected_chunk = ports.sub_chunk_as_chunk(
                     sub_chunk_dto, parent_chunk_index=chunk.chunk_index
                 )
-                video_data_url = build_chunk_video_data_url(projected_chunk)
+                video_data_url = ports.chunk_video_data_url(projected_chunk)
                 extra_body = build_sub_chunk_extra_body()
                 prepared, result = _run_one_sub_chunk(
                     db=db,

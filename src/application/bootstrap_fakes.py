@@ -18,7 +18,7 @@ The fakes must remain dependency-free — they do not import
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from src.application.ports.clock import ClockPort, IdGeneratorPort
@@ -363,11 +363,251 @@ class FakeLLMGatewayFactory(LLMGatewayFactoryPort):
         return gateway
 
 
+# ---------------------------------------------------------------------------
+# Scripted vision gateway factory (analyzer pipeline first wave)
+# ---------------------------------------------------------------------------
+
+
+class ScriptedVisionGateway(LLMGatewayPort):
+    """Vision-specific gateway that pops scripted responses from a queue.
+
+    The queue accepts strings (returned verbatim from
+    :meth:`chat_completion`) and the sentinel string ``"raise"`` which
+    makes the call raise :class:`RuntimeError` with a configurable
+    message. Every call is appended to :attr:`calls` (full kwargs, the
+    recorded raw response text, and the snapshot from
+    :meth:`get_last_usage`) so the analyzer tests can assert what the
+    pipeline saw without monkeypatching any internal symbol.
+
+    ``on_call`` is invoked once per :meth:`chat_completion` invocation
+    *before* the queued response is returned / raised, so a test can
+    flip a ``TaskLog.cancel_requested`` flag mid-run, sample
+    ``pg_stat_activity`` during the call, etc.
+    """
+
+    supports_tool_calling: bool = False
+
+    def __init__(
+        self,
+        *,
+        responses: Optional[list[str]] = None,
+        raise_message: str = "provider failed",
+        usage: Optional[dict[str, int]] = None,
+        raw_response_text: Optional[str] = None,
+        on_call: Optional[Callable[[int, dict[str, Any]], None]] = None,
+    ) -> None:
+        self._responses: list[str] = list(responses or [])
+        self._raise_message = raise_message
+        self._usage: dict[str, int] = dict(
+            usage
+            if usage is not None
+            else {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        )
+        self._raw_response_text: Optional[str] = (
+            raw_response_text
+            if raw_response_text is not None
+            else '{"choices":[{"message":{"content":null,"reasoning":"debug"}}]}'
+        )
+        self._on_call = on_call
+        self.calls: list[dict[str, Any]] = []
+        self._closed = False
+
+    def queue_responses(self, responses: list[str]) -> None:
+        """Append scripted responses to the existing queue."""
+
+        self._responses.extend(responses)
+
+    def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[dict[str, Any]] = None,
+        extra_body: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
+        call_index = len(self.calls)
+        snapshot = {
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "response_format": response_format,
+            "extra_body": extra_body,
+        }
+        if self._on_call is not None:
+            self._on_call(call_index, snapshot)
+        if self._responses:
+            response = self._responses.pop(0)
+        else:
+            response = "{}"
+        if response == "raise":
+            self.calls.append({"response": response, **snapshot})
+            raise RuntimeError(self._raise_message)
+        self.calls.append({"response": response, **snapshot})
+        return response
+
+    def chat_completion_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]:
+        return (None, None)
+
+    def get_last_usage(self) -> Optional[dict[str, int]]:
+        return dict(self._usage)
+
+    def get_last_raw_response_text(self) -> Optional[str]:
+        return self._raw_response_text
+
+    def close(self) -> None:
+        self._closed = True
+
+    def probe_vision(self) -> bool:
+        return True
+
+    def probe_tool_calling(self) -> bool:
+        return False
+
+
+class ScriptedVisionGatewayFactory(LLMGatewayFactoryPort):
+    """Factory that hands out a single shared :class:`ScriptedVisionGateway`.
+
+    The analyzer pipeline always issues exactly one
+    ``_build_provider_client`` per task run; tests rewire the fake factory
+    between runs (via :func:`set_container_for_tests`) to inject a fresh
+    gateway with the responses / side-effect hook the next run needs.
+    The factory keeps a list of every :class:`ScriptedVisionGateway` it
+    built so test assertions on :attr:`factory.gateways[-1].calls`
+    survive a multi-run scenario.
+    """
+
+    def __init__(self, *, gateway: Optional[ScriptedVisionGateway] = None) -> None:
+        self._gateway: Optional[ScriptedVisionGateway] = gateway
+        self.gateways: list[ScriptedVisionGateway] = []
+        self.build_calls: list[dict[str, Any]] = []
+
+    def install_gateway(self, gateway: ScriptedVisionGateway) -> None:
+        """Set the gateway the next ``build`` call must return."""
+
+        self._gateway = gateway
+
+    def build(
+        self,
+        *,
+        api_base_url: str,
+        api_key: str,
+        model_name: str,
+        timeout_seconds: int,
+        supports_tool_calling: bool = False,
+    ) -> LLMGatewayPort:
+        del api_base_url, api_key, timeout_seconds, supports_tool_calling
+        gateway = self._gateway or ScriptedVisionGateway()
+        self._gateway = None
+        self.build_calls.append({"model_name": model_name})
+        self.gateways.append(gateway)
+        return gateway
+
+
+# ---------------------------------------------------------------------------
+# FakeAnalysisPorts (analyzer pipeline first wave)
+# ---------------------------------------------------------------------------
+
+
+class FakeAnalysisPorts:
+    """In-memory :class:`~src.services.analysis.ports.AnalysisPorts` bundle.
+
+    The bundle owns:
+
+    * a deterministic chunk plan (``chunks × sub_chunks_per_chunk``
+      sub-chunks per chunk, all sharing the same single-file path so the
+      fingerprint is reproducible across runs);
+    * a stable data URL prefix shared by every sub-chunk;
+    * a ``replace_session_events`` callable that, by default, delegates
+      to the real :func:`replace_session_events` from the aggregator so
+      tests exercise the production event-persistence path.
+
+    The deadlock test passes ``replace_events=<callable raising
+    OperationalError pgcode='40P01'>`` at construction time to drive
+    the analyzer's deadlock-recovery branch through the public seam
+    without monkey-patching any module-level symbol.
+    """
+
+    def __init__(
+        self,
+        *,
+        chunks: int = 1,
+        sub_chunks_per_chunk: int = 3,
+        file_path: str = "/tmp/mock.mp4",
+        data_url: str = "data:video/mp4;base64,AAAA",
+        replace_events: Optional[Callable[[Any, int, list[Any]], int]] = None,
+    ) -> None:
+        self._chunks = chunks
+        self._sub_chunks_per_chunk = sub_chunks_per_chunk
+        self._file_path = file_path
+        self._data_url = data_url
+        if replace_events is None:
+            from src.services.analysis.aggregator import replace_session_events
+
+            self._replace_events = replace_session_events
+        else:
+            self._replace_events = replace_events
+
+    def plan_chunks(self, db: Any, session_id: int, chunk_seconds: int) -> list[Any]:
+        del db, session_id, chunk_seconds
+        from src.services.session_analysis_video import SessionVideoChunk
+
+        return [
+            SessionVideoChunk(
+                chunk_index=index,
+                start_offset_seconds=0,
+                duration_seconds=self._sub_chunks_per_chunk * 60,
+                file_paths=[self._file_path],
+            )
+            for index in range(self._chunks)
+        ]
+
+    def plan_sub_chunks(self, chunk: Any, db: Any, sub_chunk_seconds: int) -> list[Any]:
+        del db, sub_chunk_seconds
+        from src.services.session_analysis_video import SubChunk
+
+        return [
+            SubChunk(
+                chunk_index=chunk.chunk_index,
+                sub_chunk_index=sub_index,
+                start_offset_seconds=sub_index * 60,
+                duration_seconds=60,
+                file_paths=[self._file_path],
+            )
+            for sub_index in range(self._sub_chunks_per_chunk)
+        ]
+
+    def sub_chunk_as_chunk(self, sub_chunk: Any, parent_chunk_index: int) -> Any:
+        from src.services.session_analysis_video import SessionVideoChunk
+
+        return SessionVideoChunk(
+            chunk_index=parent_chunk_index,
+            start_offset_seconds=sub_chunk.start_offset_seconds,
+            duration_seconds=sub_chunk.duration_seconds,
+            file_paths=list(sub_chunk.file_paths),
+        )
+
+    def chunk_video_data_url(self, chunk: Any) -> str:
+        del chunk
+        return self._data_url
+
+    def replace_session_events(self, db: Any, session_id: int, events: list[Any]) -> int:
+        return self._replace_events(db, session_id, events)
+
+
 __all__ = [
+    "FakeAnalysisPorts",
     "FakeClock",
     "FakeIdGenerator",
     "FakeLLMGateway",
     "FakeLLMGatewayFactory",
     "FakeTaskControl",
     "FakeTaskDispatcher",
+    "ScriptedVisionGateway",
+    "ScriptedVisionGatewayFactory",
 ]
