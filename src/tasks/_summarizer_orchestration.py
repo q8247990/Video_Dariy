@@ -362,6 +362,7 @@ def run_daily_summary_generation(
     queue_task_id: Optional[str],
     container: Any,
     task_log: TaskLog,
+    serial_split_prompt_threshold: Optional[int] = None,
 ) -> dict[str, Any]:
     """Drive the full single-day generation flow and serialise the outcome.
 
@@ -370,6 +371,16 @@ def run_daily_summary_generation(
     binding the ``TaskLog`` and the top-level commit / cancellation
     exception envelope; this function owns the pipeline and returns
     the legacy response payload via :func:`_outcome_to_response`.
+
+    ``serial_split_prompt_threshold`` is an optional test seam that
+    overrides :data:`~src.services.summarizer.constants.SERIAL_SPLIT_PROMPT_THRESHOLD`
+    for the single-vs-serial decision in :func:`_run_llm_phase`. It
+    defaults to ``None`` and falls through to the production constant,
+    preserving existing behaviour for the Celery wrapper. Tests
+    exercising the serial path (which the natural data-input cap makes
+    unreachable in production) pass an explicit low value here — same
+    pattern as :class:`~src.application.qa.use_case_query.AnswerQuestionUseCase`'s
+    optional ``qa_service_factory`` port.
     """
     outcome = _run_generation_pipeline(
         db=db,
@@ -377,6 +388,7 @@ def run_daily_summary_generation(
         queue_task_id=queue_task_id,
         container=container,
         task_log=task_log,
+        serial_split_prompt_threshold=serial_split_prompt_threshold,
     )
     return _outcome_to_response(outcome)
 
