@@ -253,7 +253,7 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
         legacy fan-out semantics so existing producers that have not
         yet migrated continue to work.
         """
-        detail_json = {
+        detail_json: dict[str, Any] = {
             "event_type": command.event_type,
             "payload_keys": sorted((command.payload or {}).keys()),
         }

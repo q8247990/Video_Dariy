@@ -16,7 +16,7 @@ rows the underlying service persists.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from sqlalchemy.orm import Session
 
@@ -61,7 +61,7 @@ class AnswerQuestionUseCase:
             from src.application.qa.service import QAService
 
             service = QAService(db=self.db, llm_factory=self._container.llm_factory)
-        return service.answer(request)
+        return cast(QAResult, service.answer(request))
 
 
 __all__ = ["AnswerQuestionUseCase"]

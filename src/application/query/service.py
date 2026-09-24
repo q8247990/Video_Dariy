@@ -46,9 +46,7 @@ class HomeQueryService:
         return self._attention_cache
 
     def _attention_condition(self) -> ColumnElement[bool]:
-        conditions: list[ColumnElement[bool]] = [
-            EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))
-        ]
+        conditions: list[Any] = [EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))]
         conditions.append(
             text(
                 "EXISTS (SELECT 1 FROM json_array_elements(event_record.related_entities_json) e "

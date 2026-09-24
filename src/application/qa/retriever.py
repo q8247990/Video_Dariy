@@ -28,9 +28,7 @@ def _attention_focus_keys(db: Session) -> frozenset[str]:
 
 
 def _attention_condition(db: Session, keys: frozenset[str]) -> ColumnElement[bool]:
-    conditions: list[ColumnElement[bool]] = [
-        EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))
-    ]
+    conditions: list[Any] = [EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))]
     conditions.append(
         text(
             "EXISTS (SELECT 1 FROM json_array_elements(event_record.related_entities_json) e "

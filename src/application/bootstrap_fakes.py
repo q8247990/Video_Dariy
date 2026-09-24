@@ -546,6 +546,7 @@ class FakeAnalysisPorts:
         self._sub_chunks_per_chunk = sub_chunks_per_chunk
         self._file_path = file_path
         self._data_url = data_url
+        self._replace_events: Callable[[Any, int, list[Any]], int]
         if replace_events is None:
             from src.services.analysis.aggregator import replace_session_events
 

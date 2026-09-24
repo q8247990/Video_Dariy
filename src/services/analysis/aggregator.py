@@ -23,13 +23,13 @@ from src.models.event_record import EventRecord
 from src.models.home_profile import HomeProfile
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.video_session import VideoSession
-from src.schemas.home_profile import coerce_focus_points
+from src.schemas.home_profile import FocusPointItem, coerce_focus_points
 from src.services.attention import attention_focus_keys, is_attention_event
 from src.services.video_analysis.mapper import build_event_record_from_recognized_event
 from src.services.video_analysis.schemas import RecognitionResultDTO
 
 
-def _profile_focus_items(db: Session):
+def _profile_focus_items(db: Session) -> list[FocusPointItem]:
     profile = db.query(HomeProfile).order_by(HomeProfile.id.asc()).first()
     return coerce_focus_points(profile.focus_points_json) if profile else []
 

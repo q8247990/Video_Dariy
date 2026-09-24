@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import ColumnElement, func, or_, text
 from sqlalchemy.orm import Session
@@ -29,9 +30,7 @@ def declared_focus_items(db: Session) -> list[FocusPointItem]:
 
 
 def attention_condition(db: Session) -> ColumnElement[bool]:
-    conditions: list[ColumnElement[bool]] = [
-        EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))
-    ]
+    conditions: list[Any] = [EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))]
     conditions.append(
         text(
             "EXISTS (SELECT 1 FROM json_array_elements(event_record.related_entities_json) e "
