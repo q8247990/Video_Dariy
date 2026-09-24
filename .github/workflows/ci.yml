@@ -72,6 +72,22 @@ jobs:
           set -euo pipefail
           pip install -r requirements.txt
 
+      # The backup/restore integration test shells out to pg_dump/pg_restore,
+      # which refuse to run when the client major is older than the server
+      # (the service container is postgres:17-alpine, the runner ships 16).
+      # Install the matching PGDG client so the round-trip test can run.
+      - name: Install PostgreSQL 17 client tools
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
       # Belt-and-suspenders: GitHub runner already waits for the service
       # healthcheck, but we re-poll with the same `pg_isready` command and
       # fail the job if it does not respond within 5 minutes (covers a
