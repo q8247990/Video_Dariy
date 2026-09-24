@@ -1,17 +1,33 @@
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, cast
+from typing import Optional, cast
 
-from sqlalchemy import case, func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.models.daily_summary import DailySummary
-from src.models.event_record import EventRecord
 from src.models.home_profile import HomeProfile
 from src.models.task_log import TaskLog
 from src.models.video_source import VideoSource
+from src.services.measures.queries import (
+    attention_condition,
+    attention_event_count,
+    attention_event_rows,
+    focus_event_counts,
+)
 from src.services.pipeline_constants import TaskStatus, TaskType
 
-IMPORTANT_LEVELS = ("high",)
+__all__ = [
+    "assistant_name",
+    "attention_condition",
+    "attention_event_count",
+    "attention_event_rows",
+    "failed_analysis_count_24h",
+    "failed_task_count_24h",
+    "focus_event_counts",
+    "last_scan_at",
+    "latest_daily_summary",
+    "latest_task_by_type",
+]
 
 
 def assistant_name(db: Session) -> str:
@@ -61,59 +77,3 @@ def failed_task_count_24h(db: Session) -> int:
         .scalar()
         or 0
     )
-
-
-def event_summary_counts(db: Session) -> tuple[int, int, int]:
-    now = datetime.now(timezone.utc)
-    today_start = datetime.combine(now.date(), datetime.min.time())
-    yesterday_start = today_start - timedelta(days=1)
-
-    today_event_count = (
-        db.query(func.count(EventRecord.id))
-        .filter(EventRecord.event_start_time >= today_start, EventRecord.event_start_time <= now)
-        .scalar()
-        or 0
-    )
-
-    yesterday_event_count = (
-        db.query(func.count(EventRecord.id))
-        .filter(
-            EventRecord.event_start_time >= yesterday_start,
-            EventRecord.event_start_time < today_start,
-        )
-        .scalar()
-        or 0
-    )
-
-    important_event_count_24h = (
-        db.query(func.count(EventRecord.id))
-        .filter(
-            EventRecord.event_start_time >= now - timedelta(hours=24),
-            _important_condition(),
-        )
-        .scalar()
-        or 0
-    )
-
-    return today_event_count, yesterday_event_count, important_event_count_24h
-
-
-def important_event_rows(db: Session) -> list[tuple[EventRecord, VideoSource]]:
-    importance_score = case(
-        (EventRecord.importance_level == "high", 3),
-        else_=0,
-    )
-
-    rows = (
-        db.query(EventRecord, VideoSource)
-        .join(VideoSource, EventRecord.source_id == VideoSource.id)
-        .filter(_important_condition())
-        .order_by(importance_score.desc(), EventRecord.event_start_time.desc())
-        .limit(5)
-        .all()
-    )
-    return cast(list[tuple[EventRecord, VideoSource]], rows)
-
-
-def _important_condition() -> Any:
-    return EventRecord.importance_level.in_(IMPORTANT_LEVELS)

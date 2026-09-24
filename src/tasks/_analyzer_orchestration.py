@@ -32,7 +32,6 @@ from src.application.prompt.contracts import (
     VideoRecognitionPromptInput,
     VideoSourcePromptContext,
 )
-from src.core.config import settings
 from src.db.session import task_db_session
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
@@ -56,7 +55,7 @@ from src.services.analysis import (
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
-from src.services.analysis.chunk_plan import SubChunkPlan, assemble_chunk_plan
+from src.services.analysis.chunk_plan import SubChunkPlan
 from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
 from src.services.analysis.errors import RawResponseCapture
 from src.services.analysis.failure import handle_deadlock_retry_exhausted
@@ -74,7 +73,6 @@ from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import SourceType
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
-from src.services.session_analysis_video import SessionVideoChunk, SubChunk
 from src.services.task_dispatch_control import ensure_task_not_cancelled
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.output_parser import parse_video_recognition_output
@@ -92,7 +90,7 @@ def _build_prompts(
     source: VideoSource,
     home_context: dict[str, Any],
     session: Any,
-    chunk: SessionVideoChunk | SubChunk,
+    sub_chunk: SubChunkPlan,
 ) -> tuple[str, str]:
     """Assemble the recognition prompts for one sub-chunk work item.
 
@@ -120,9 +118,9 @@ def _build_prompts(
                 session_start_time=session.session_start_time,
                 session_end_time=session.session_end_time,
                 total_duration_seconds=session.total_duration_seconds,
-                segment_index=chunk.chunk_index,
-                segment_start_offset_sec=chunk.start_offset_seconds,
-                segment_duration_seconds=chunk.duration_seconds,
+                segment_index=sub_chunk.sub_chunk_index,
+                segment_start_offset_sec=sub_chunk.start_offset_seconds,
+                segment_duration_seconds=sub_chunk.duration_seconds,
             ),
             strategy_context=StrategyPromptContext(
                 ingest_type=ingest_type,
@@ -164,20 +162,7 @@ def run_session_analysis(
         last_response_text: str | None = None
         last_raw_response_text: str | None = None
 
-        chunks = ports.plan_chunks(
-            db, session_id, settings.ANALYZER_SEGMENT_SECONDS
-        )
-        chunk_sub_chunks_list = [
-            ports.plan_sub_chunks(chunk, db, settings.ANALYZER_LLM_CHUNK_SECONDS)
-            for chunk in chunks
-        ]
-        plan = assemble_chunk_plan(
-            session_id=session_id,
-            chunk_seconds=settings.ANALYZER_SEGMENT_SECONDS,
-            sub_chunk_seconds=settings.ANALYZER_LLM_CHUNK_SECONDS,
-            chunks=chunks,
-            chunk_sub_chunks_list=chunk_sub_chunks_list,
-        )
+        plan = ports.plan_analysis(db, session_id)
         claim, skip = claim_session_for_analysis(
             db,
             session_id=session_id,
@@ -231,7 +216,6 @@ def run_session_analysis(
                 self=self,
                 claim=claim,
                 plan=plan,
-                chunk_sub_chunks_list=chunk_sub_chunks_list,
                 home_context=home_context,
                 client=client,
                 provider=provider,
@@ -250,12 +234,10 @@ def run_session_analysis(
                     session=claim.session,
                     task_log=claim.task_log,
                     analysis_run_id=plan.analysis_run_id,
-                    chunk_count=len(plan.chunks),
+                    file_count=len(plan.sub_chunks),
                     sub_chunk_count=sub_chunk_count,
                     priority=priority,
                     raw_mp4_num_frames=RAW_MP4_NUM_FRAMES,
-                    chunk_seconds=plan.chunk_seconds,
-                    sub_chunk_seconds=plan.sub_chunk_seconds,
                     parse_modes=parse_modes,
                     replace_session_events_fn=ports.replace_session_events,
                 )
@@ -288,14 +270,13 @@ def _run_sub_chunk_loop(
     self: Any,
     claim: Any,
     plan: Any,
-    chunk_sub_chunks_list: list[list[Any]],
     home_context: dict[str, Any],
     client: Any,
     provider: Any,
     priority: str,
     ports: AnalysisPorts,
 ) -> tuple[int, list[str], bool] | dict[str, Any]:
-    """Iterate over the chunk plan; one short txn per sub-chunk stage.
+    """Iterate over the file-level plan; one short txn per sub-chunk stage.
 
     Returns ``(sub_chunk_count, parse_modes, late_worker)`` on the
     normal / late-worker paths, or a structured ``dict`` (the same
@@ -331,63 +312,43 @@ def _run_sub_chunk_loop(
             claim.task_log.id,
             default_message=f"Analysis cancelled for session {claim.session.id}",
         )
-        for chunk in plan.chunks:
+        for plan_item in plan.sub_chunks:
             ensure_task_not_cancelled(
                 db,
                 claim.task_log.id,
-                default_message=f"Analysis cancelled for session {claim.session.id}",
+                default_message=(
+                    f"Analysis cancelled for session {claim.session.id}, "
+                    f"file {plan_item.sub_chunk_index}"
+                ),
             )
-            chunk_sub_chunks = chunk_sub_chunks_list[chunk.chunk_index]
-            for sub_chunk_dto in chunk_sub_chunks:
-                ensure_task_not_cancelled(
-                    db,
-                    claim.task_log.id,
-                    default_message=(
-                        f"Analysis cancelled for session {claim.session.id}, "
-                        f"chunk {chunk.chunk_index}-{sub_chunk_dto.sub_chunk_index}"
-                    ),
-                )
-                plan_item = SubChunkPlan(
-                    chunk_index=sub_chunk_dto.chunk_index,
-                    sub_chunk_index=sub_chunk_dto.sub_chunk_index,
-                    start_offset_seconds=sub_chunk_dto.start_offset_seconds,
-                    duration_seconds=sub_chunk_dto.duration_seconds,
-                    file_paths=tuple(sub_chunk_dto.file_paths),
-                )
-                system_prompt, user_prompt = _build_prompts(
-                    claim.source,
-                    home_context,
-                    claim.session,
-                    sub_chunk_dto,
-                )
-                last_prompt_text = user_prompt
-                projected_chunk = ports.sub_chunk_as_chunk(
-                    sub_chunk_dto, parent_chunk_index=chunk.chunk_index
-                )
-                video_data_url = ports.chunk_video_data_url(projected_chunk)
-                extra_body = build_sub_chunk_extra_body()
-                prepared, result = _run_one_sub_chunk(
-                    db=db,
-                    self=self,
-                    claim=claim,
-                    guards=guards,
-                    chunk_index=chunk.chunk_index,
-                    sub_chunk=sub_chunk_dto,
-                    plan_item=plan_item,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    projected_chunk=projected_chunk,
-                    video_data_url=video_data_url,
-                    extra_body=extra_body,
-                    client=client,
-                    provider=provider,
-                )
-                if result is not None:
-                    last_response_text = getattr(result, "raw_response_text", None) or ""
-                    last_raw_response_text = last_response_text
-                if prepared.did_call_llm:
-                    sub_chunk_count += 1
-                    parse_modes.append("new")
+            system_prompt, user_prompt = _build_prompts(
+                claim.source,
+                home_context,
+                claim.session,
+                plan_item,
+            )
+            last_prompt_text = user_prompt
+            video_data_url = ports.video_data_url(plan_item.file_paths[0])
+            extra_body = build_sub_chunk_extra_body()
+            prepared, result = _run_one_sub_chunk(
+                db=db,
+                self=self,
+                claim=claim,
+                guards=guards,
+                plan_item=plan_item,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                video_data_url=video_data_url,
+                extra_body=extra_body,
+                client=client,
+                provider=provider,
+            )
+            if result is not None:
+                last_response_text = getattr(result, "raw_response_text", None) or ""
+                last_raw_response_text = last_response_text
+            if prepared.did_call_llm:
+                sub_chunk_count += 1
+                parse_modes.append("new")
         # Post-loop cancel fence: a cancel that arrives between the
         # last sub-chunk's commit and the completion query must still
         # roll the session back to ``SEALED`` rather than to ``PARTIAL``.
@@ -549,12 +510,9 @@ def _run_one_sub_chunk(
     self: Any,
     claim: Any,
     guards: ClaimGuards,
-    chunk_index: int,
-    sub_chunk: Any,
-    plan_item: Any,
+    plan_item: SubChunkPlan,
     system_prompt: str,
     user_prompt: str,
-    projected_chunk: Any,
     video_data_url: str,
     extra_body: dict[str, Any],
     client: Any,
@@ -609,13 +567,12 @@ def _run_one_sub_chunk(
         # Resumed run; the LLM call is intentionally skipped.
         return prepared, None
 
-    # LLM / ffmpeg call — no DB connection held here.
+    # LLM call — no DB connection held here.
     try:
         result = execute_sub_chunk(
             client=client,
             provider=provider,
             sub_chunk=plan_item,
-            plan_chunk_index=chunk_index,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             video_data_url=video_data_url,

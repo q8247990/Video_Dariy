@@ -16,7 +16,6 @@ type FormState = {
   latency_alert_threshold_seconds: string
   alert_consecutive_required: string
   alert_notify_cooldown_minutes: string
-  default_session_merge_gap_seconds: string
   tag_recommendation_enabled: boolean
   mcp_enabled: boolean
   mcp_token: string
@@ -44,10 +43,6 @@ function toFormState(data: SystemConfig): FormState {
       typeof data.alert_notify_cooldown_minutes === 'number'
         ? String(data.alert_notify_cooldown_minutes)
         : '60',
-    default_session_merge_gap_seconds:
-      typeof data.default_session_merge_gap_seconds === 'number'
-        ? String(data.default_session_merge_gap_seconds)
-        : '61',
     tag_recommendation_enabled: Boolean(data.tag_recommendation_enabled),
     mcp_enabled: Boolean(data.mcp_enabled),
     mcp_token: typeof data.mcp_token === 'string' ? data.mcp_token : '',
@@ -101,7 +96,6 @@ export function SystemConfigPage() {
             latency_alert_threshold_seconds: Number(form.latency_alert_threshold_seconds),
             alert_consecutive_required: Number(form.alert_consecutive_required),
             alert_notify_cooldown_minutes: Number(form.alert_notify_cooldown_minutes),
-            default_session_merge_gap_seconds: Number(form.default_session_merge_gap_seconds),
             tag_recommendation_enabled: form.tag_recommendation_enabled,
             mcp_enabled: form.mcp_enabled,
             mcp_token: form.mcp_token,
@@ -121,7 +115,6 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
   latency_alert_threshold_seconds: 600,
   alert_consecutive_required: 3,
   alert_notify_cooldown_minutes: 60,
-  default_session_merge_gap_seconds: 61,
   tag_recommendation_enabled: false,
   mcp_enabled: false,
   mcp_token: '',
@@ -226,18 +219,6 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
               value={form.alert_notify_cooldown_minutes}
               onChange={(event) =>
                 setForm((old) => ({ ...old, alert_notify_cooldown_minutes: event.target.value }))
-              }
-            />
-          </label>
-
-          <label>
-            {t('system_config.session_merge_gap')}
-            <input
-              type="number"
-              min={1}
-              value={form.default_session_merge_gap_seconds}
-              onChange={(event) =>
-                setForm((old) => ({ ...old, default_session_merge_gap_seconds: event.target.value }))
               }
             />
           </label>

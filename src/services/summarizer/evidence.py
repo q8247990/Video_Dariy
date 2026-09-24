@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from src.models.event_record import EventRecord
+from src.schemas.home_profile import coerce_focus_points
+from src.services.attention import attention_focus_keys
 from src.services.daily_summary.preprocess import (
     build_known_subjects,
     build_subject_event_mapping,
@@ -115,10 +117,11 @@ def build_evidence(
 
     home_context = build_home_context(db)
     known_subjects = build_known_subjects(home_context)
-    subject_sections, missing_subjects, mapped_event_ids = build_subject_event_mapping(
-        events, known_subjects
+    subject_sections, missing_subjects, _ = build_subject_event_mapping(events, known_subjects)
+    attention_keys = attention_focus_keys(
+        coerce_focus_points(home_context["home_profile"].get("focus_items"))
     )
-    attention_candidates = extract_attention_candidates(events, mapped_event_ids)
+    attention_candidates = extract_attention_candidates(events, attention_keys=attention_keys)
 
     subject_sections_payload = [item.model_dump() for item in subject_sections]
     attention_candidates_payload = [item.model_dump() for item in attention_candidates]

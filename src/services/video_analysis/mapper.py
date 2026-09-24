@@ -32,10 +32,10 @@ def build_event_record_from_recognized_event(
         title=recognized_event.title,
         summary=recognized_event.summary,
         detail=recognized_event.detail,
-        importance_level=recognized_event.importance_level,
         offset_start_sec=absolute_offset_start,
         offset_end_sec=absolute_offset_end,
         related_entities_json=[item.model_dump() for item in recognized_event.related_entities],
         observed_actions_json=recognized_event.observed_actions,
         interpreted_state_json=recognized_event.interpreted_state,
+        focus_matches_json=recognized_event.focus_matches,
     )

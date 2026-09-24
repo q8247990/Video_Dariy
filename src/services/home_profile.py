@@ -8,14 +8,15 @@ from src.schemas.home_profile import (
     AGE_GROUP_OPTIONS,
     ENTITY_TYPE_OPTIONS,
     FAMILY_TAG_OPTIONS,
-    FOCUS_POINT_OPTIONS,
+    FOCUS_POINT_PRESETS,
     MEMBER_ROLE_OPTIONS,
     PET_ROLE_OPTIONS,
     SYSTEM_STYLE_OPTIONS,
+    FocusPointItem,
     HomeEntityResponse,
     HomeEntityUpdate,
-    HomeProfileResponse,
     HomeProfileUpsert,
+    coerce_focus_points,
 )
 
 
@@ -43,7 +44,7 @@ def save_home_profile(db: Session, payload: HomeProfileUpsert) -> HomeProfile:
     profile = get_or_create_home_profile(db)
     profile.home_name = payload.home_name
     profile.family_tags_json = payload.family_tags
-    profile.focus_points_json = payload.focus_points
+    profile.focus_points_json = [item.model_dump() for item in payload.focus_points]
     profile.system_style = payload.system_style
     profile.style_preference_text = payload.style_preference_text
     profile.assistant_name = payload.assistant_name
@@ -125,35 +126,39 @@ def disable_entity(db: Session, entity_id: int) -> bool:
     return True
 
 
+def _focus_display(item: FocusPointItem) -> str:
+    return f"{item.label}（{item.description}）" if item.description else item.label
+
+
 def build_home_context(db: Session) -> dict[str, Any]:
     profile = get_or_create_home_profile(db)
     members = list_entities(db, entity_type="member")
     pets = list_entities(db, entity_type="pet")
+    focus_items = [item for item in coerce_focus_points(profile.focus_points_json) if item.enabled]
 
     return {
-        "home_profile": HomeProfileResponse.model_validate(
-            {
-                "id": profile.id,
-                "home_name": profile.home_name,
-                "family_tags": profile.family_tags_json or [],
-                "focus_points": profile.focus_points_json or [],
-                "system_style": profile.system_style,
-                "style_preference_text": profile.style_preference_text,
-                "assistant_name": profile.assistant_name,
-                "home_note": profile.home_note,
-                "created_at": profile.created_at,
-                "updated_at": profile.updated_at,
-            }
-        ).model_dump(),
+        "home_profile": {
+            "id": profile.id,
+            "home_name": profile.home_name,
+            "family_tags": profile.family_tags_json or [],
+            "focus_points": [_focus_display(item) for item in focus_items],
+            "focus_items": [item.model_dump() for item in focus_items],
+            "system_style": profile.system_style,
+            "style_preference_text": profile.style_preference_text,
+            "assistant_name": profile.assistant_name,
+            "home_note": profile.home_note,
+            "created_at": profile.created_at,
+            "updated_at": profile.updated_at,
+        },
         "members": [HomeEntityResponse.model_validate(item).model_dump() for item in members],
         "pets": [HomeEntityResponse.model_validate(item).model_dump() for item in pets],
     }
 
 
-def get_options() -> dict[str, list[str]]:
+def get_options() -> dict[str, Any]:
     return {
         "family_tags": sorted(FAMILY_TAG_OPTIONS),
-        "focus_points": sorted(FOCUS_POINT_OPTIONS),
+        "focus_points": [dict(item) for item in FOCUS_POINT_PRESETS],
         "system_styles": sorted(SYSTEM_STYLE_OPTIONS),
         "entity_types": sorted(ENTITY_TYPE_OPTIONS),
         "member_roles": sorted(MEMBER_ROLE_OPTIONS),

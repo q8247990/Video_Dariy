@@ -13,7 +13,6 @@ class SystemConfigUpdate(BaseModel):
     latency_alert_threshold_seconds: Optional[int] = None
     alert_consecutive_required: Optional[int] = None
     alert_notify_cooldown_minutes: Optional[int] = None
-    default_session_merge_gap_seconds: Optional[int] = None
     tag_recommendation_enabled: Optional[bool] = None
     mcp_enabled: Optional[bool] = None
     mcp_token: Optional[str] = None

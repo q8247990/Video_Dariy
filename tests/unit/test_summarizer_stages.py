@@ -182,7 +182,6 @@ def _add_event(
             event_type=event_type,
             title="成员出现",
             summary="爸爸上午出现",
-            importance_level=importance,
             related_entities_json=related_entities,
         )
     )

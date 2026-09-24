@@ -5,8 +5,8 @@ the modules in this package. Each module owns one execution stage:
 
 * :mod:`.claim` — bind a TaskLog, take the lease, transition the
   session to ``ANALYZING``.
-* :mod:`.chunk_plan` — split a session into ``SessionVideoChunk`` /
-  ``SubChunk`` work units and compute the deterministic
+* :mod:`.chunk_plan` — build the file-level ``SubChunkPlan`` work
+  units (one per video file) and compute the deterministic
   ``analysis_run_id``.
 * :mod:`.provider` — resolve the default vision provider and build
   a fresh :class:`LLMGatewayPort`.
@@ -25,7 +25,7 @@ the modules in this package. Each module owns one execution stage:
 The stages are intentionally side-effect-free except for the
 persistence layer (``checkpoint_writer`` / ``finalize``), and the
 external-call stage (``sub_chunk_runner``) never touches SQLAlchemy
-— the LLM / ffmpeg work happens without a checked-out DB
+— the LLM work happens without a checked-out DB
 connection. Prompt assembly is intentionally owned by the Celery
 orchestrator in :mod:`src.tasks._analyzer_orchestration` because it
 imports the ``src.application.prompt`` contracts / compiler; the
@@ -53,9 +53,9 @@ from src.services.analysis.checkpoint_writer import (
     write_token_usage,
 )
 from src.services.analysis.chunk_plan import (
-    ChunkPlan,
+    AnalysisPlan,
     SubChunkPlan,
-    build_chunk_plan,
+    build_analysis_plan,
     sub_chunk_fingerprint,
 )
 from src.services.analysis.claim import (
@@ -97,7 +97,7 @@ __all__ = [
     "CHECKPOINT_STATE_PENDING",
     "CHECKPOINT_STATE_PROCESSING",
     "CHECKPOINT_STATE_SUCCESS",
-    "ChunkPlan",
+    "AnalysisPlan",
     "ClaimContext",
     "ClaimGuards",
     "CheckpointWriteResult",
@@ -109,7 +109,7 @@ __all__ = [
     "SkipOutcome",
     "SubChunkPlan",
     "SubChunkRunResult",
-    "build_chunk_plan",
+    "build_analysis_plan",
     "build_provider_client",
     "build_sub_chunk_extra_body",
     "build_sub_chunk_video_url",

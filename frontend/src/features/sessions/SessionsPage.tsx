@@ -119,9 +119,9 @@ export function SessionsPage() {
                 <td>{item.total_duration_seconds ?? '-'}</td>
                 <td>{item.activity_level ?? '-'}</td>
                 <td>
-                  {item.has_important_event === null
+                  {item.has_attention_event === null
                     ? '-'
-                    : item.has_important_event
+                    : item.has_attention_event
                     ? t('sessions.yes')
                     : t('sessions.no')}
                 </td>

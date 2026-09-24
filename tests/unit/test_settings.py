@@ -10,36 +10,15 @@ def test_default_settings_load_cleanly() -> None:
     from src.core.config import Settings
 
     s = Settings()
-    assert s.ANALYZER_LLM_CHUNK_SECONDS == 60
-    assert s.ANALYZER_SEGMENT_SECONDS == 600
+    assert s.ANALYSIS_LEASE_SECONDS == 300
 
 
-def test_llm_chunk_seconds_must_be_positive() -> None:
+def test_analysis_chunk_sizing_settings_are_removed() -> None:
     from src.core.config import Settings
 
-    with pytest.raises(ValidationError, match="ANALYZER_LLM_CHUNK_SECONDS must be > 0"):
-        Settings(ANALYZER_LLM_CHUNK_SECONDS=0)
-
-
-def test_llm_chunk_seconds_must_not_exceed_segment_seconds() -> None:
-    from src.core.config import Settings
-
-    with pytest.raises(ValidationError, match="must be <= ANALYZER_SEGMENT_SECONDS"):
-        Settings(ANALYZER_LLM_CHUNK_SECONDS=700, ANALYZER_SEGMENT_SECONDS=600)
-
-
-def test_llm_chunk_seconds_equal_to_segment_seconds_is_allowed() -> None:
-    from src.core.config import Settings
-
-    s = Settings(ANALYZER_LLM_CHUNK_SECONDS=600, ANALYZER_SEGMENT_SECONDS=600)
-    assert s.ANALYZER_LLM_CHUNK_SECONDS == 600
-
-
-def test_llm_chunk_seconds_smaller_than_segment_seconds_is_allowed() -> None:
-    from src.core.config import Settings
-
-    s = Settings(ANALYZER_LLM_CHUNK_SECONDS=120, ANALYZER_SEGMENT_SECONDS=600)
-    assert s.ANALYZER_LLM_CHUNK_SECONDS == 120
+    s = Settings()
+    assert not hasattr(s, "ANALYZER_SEGMENT_SECONDS")
+    assert not hasattr(s, "ANALYZER_LLM_CHUNK_SECONDS")
 
 
 def test_production_settings_reject_missing_signing_secrets() -> None:

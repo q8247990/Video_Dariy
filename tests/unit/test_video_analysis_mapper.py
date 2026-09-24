@@ -26,7 +26,6 @@ def test_build_event_record_with_base_offset() -> None:
         observed_actions=["walk"],
         interpreted_state=["normal"],
         confidence=0.95,
-        importance_level="medium",
     )
 
     event = build_event_record_from_recognized_event(

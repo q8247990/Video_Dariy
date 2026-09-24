@@ -193,7 +193,8 @@ def test_put_home_profile_updates_fields(client: TestClient, pg_db: Session) -> 
     fetched = client.get("/api/v1/home-profile").json()["data"]
     assert fetched["home_name"] == "小王一家"
     assert fetched["family_tags"] == ["has_pet"]
-    assert fetched["focus_points"] == ["pet_status"]
+    assert [item["key"] for item in fetched["focus_points"]] == ["pet_status"]
+    assert fetched["focus_points"][0]["label"] == "宠物状态"
 
     assert pg_db.query(HomeEntityProfile).count() == 0
 

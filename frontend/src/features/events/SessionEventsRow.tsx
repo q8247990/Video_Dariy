@@ -31,7 +31,6 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
                 <tr>
                   <th>{t('events.col_event_time', '发生时间')}</th>
                   <th>{t('events.col_event_title', '事件')}</th>
-                  <th>{t('events.col_importance', '重要性')}</th>
                   <th>{t('events.col_actions', '操作')}</th>
                 </tr>
               </thead>
@@ -40,7 +39,6 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
                   <tr key={event.id}>
                     <td>{formatSessionStartTime(event.event_start_time)}</td>
                     <td>{event.title ?? event.summary ?? event.description}</td>
-                    <td>{event.importance_level ?? '-'}</td>
                     <td>
                       <button className="ghost" onClick={() => onOpenEventDetail(event.id)}>
                         {t('events.view_detail', '事件详情')}
@@ -50,7 +48,7 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
                 ))}
                 {(eventsQuery.data ?? []).length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="empty-cell">
+                    <td colSpan={3} className="empty-cell">
                       {t('events.empty_session_events', '该 Session 暂无事件')}
                     </td>
                   </tr>

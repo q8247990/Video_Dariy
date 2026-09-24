@@ -70,10 +70,9 @@ TOOL_SEARCH_EVENTS = {
                     "items": {"type": "string"},
                     "description": "事件类型列表，从已知事件类型中选取",
                 },
-                "importance_levels": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "description": "重要程度列表",
+                "attention": {
+                    "type": "boolean",
+                    "description": "仅返回需关注事件",
                 },
                 "limit": {
                     "type": "integer",
@@ -211,7 +210,7 @@ def _exec_search_events(service: HomeQueryService, args: dict[str, Any]) -> dict
         subjects=args.get("subjects") or [],
         keywords=args.get("keywords") or [],
         event_types=args.get("event_types") or [],
-        importance_levels=args.get("importance_levels") or [],
+        attention=args.get("attention"),
         limit=args.get("limit", 20),
     )
 

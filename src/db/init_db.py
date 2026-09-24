@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 #: The Alembic revision this deployment expects to be at. Readiness gates
 #: (``/readyz``) compare the live schema against this head.
-EXPECTED_ALEMBIC_REVISION = "20260907_0023"
+EXPECTED_ALEMBIC_REVISION = "20260923_0025"
 
 #: Named PostgreSQL advisory-lock key used to serialize schema migration across
 #: concurrently starting backend containers. Advisory locks are scoped to a

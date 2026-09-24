@@ -22,10 +22,7 @@ class RecognitionOutputValidationError(RecognitionOutputError):
 
 
 def _looks_like_session_summary(payload: dict) -> bool:
-    return all(
-        key in payload
-        for key in ["summary_text", "activity_level", "main_subjects", "has_important_event"]
-    )
+    return all(key in payload for key in ["summary_text", "activity_level", "main_subjects"])
 
 
 def _normalize_recognition_payload(payload: dict) -> list[dict]:
@@ -51,7 +48,6 @@ def _normalize_recognition_payload(payload: dict) -> list[dict]:
             "summary_text": payload.get("summary_text", "自动生成摘要"),
             "activity_level": payload.get("activity_level", "medium"),
             "main_subjects": payload.get("main_subjects", []),
-            "has_important_event": payload.get("has_important_event", False),
         }
         if summary_from_root["summary_text"]:
             candidates.append(

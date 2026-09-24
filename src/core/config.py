@@ -56,8 +56,6 @@ class Settings(BaseSettings):
     SESSION_PLAYBACK_MODE: str = "hls_index_only"
 
     # Analysis
-    ANALYZER_SEGMENT_SECONDS: int = 600
-    ANALYZER_LLM_CHUNK_SECONDS: int = 60
     ANALYSIS_LEASE_SECONDS: int = 300
     ANALYSIS_PROGRESS_GRACE_SECONDS: int = 600
     ANALYSIS_PENDING_GRACE_SECONDS: int = 1800
@@ -71,15 +69,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @model_validator(mode="after")
-    def _validate_llm_chunk_seconds(self) -> "Settings":
-        if self.ANALYZER_LLM_CHUNK_SECONDS <= 0:
-            raise ValueError("ANALYZER_LLM_CHUNK_SECONDS must be > 0")
-        if self.ANALYZER_LLM_CHUNK_SECONDS > self.ANALYZER_SEGMENT_SECONDS:
-            raise ValueError(
-                f"ANALYZER_LLM_CHUNK_SECONDS ({self.ANALYZER_LLM_CHUNK_SECONDS}) "
-                f"must be <= ANALYZER_SEGMENT_SECONDS "
-                f"({self.ANALYZER_SEGMENT_SECONDS})"
-            )
+    def _validate_settings(self) -> "Settings":
         if self.APP_ENV.strip().lower() == "production":
             self._validate_production_secrets()
         return self

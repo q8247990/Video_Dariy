@@ -170,7 +170,6 @@ def _recognition_result_json() -> str:
             summary_text="summary",
             activity_level="medium",
             main_subjects=["爸爸"],
-            has_important_event=True,
         ),
         events=[
             RecognizedEventDTO(
@@ -184,7 +183,6 @@ def _recognition_result_json() -> str:
                 observed_actions=[],
                 interpreted_state=[],
                 confidence=0.9,
-                importance_level="medium",
             )
         ],
         analysis_notes=[],
@@ -216,9 +214,7 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
     factory.install_gateway(ScriptedVisionGateway(responses=[_recognition_result_json()]))
     container = bootstrap_for_tests(llm_factory=factory)
     _container.set_container_for_tests(container)
-    _container.set_analysis_ports_for_tests(
-        FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1)
-    )
+    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
 
     @contextmanager
     def _task_session() -> Any:
@@ -228,9 +224,7 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
         finally:
             s.close()
 
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.task_db_session", _task_session
-    )
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     try:
         analyze_session_task.run(session_id=session_id)
     finally:

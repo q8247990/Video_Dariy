@@ -11,7 +11,7 @@ rows it actually exercises.
 They cover the contracts that the slim Celery task and the
 final aggregator / finalize stages depend on:
 
-* :func:`chunk_plan.build_chunk_plan` — the deterministic
+* :func:`chunk_plan.build_analysis_plan` — the deterministic
   ``analysis_run_id`` / per-sub-chunk fingerprint contract.
 * :func:`sub_chunk_runner.build_sub_chunk_video_url`` /
   :func:`sub_chunk_runner.build_sub_chunk_extra_body` — the
@@ -56,7 +56,7 @@ from src.services.analysis import (
     RAW_MP4_NUM_FRAMES,
     ClaimGuards,
     LateWorkerFencingError,
-    build_chunk_plan,
+    build_analysis_plan,
     build_sub_chunk_extra_body,
     build_sub_chunk_video_url,
     get_or_create_checkpoint,
@@ -176,7 +176,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
             summary_text=f"summary-{index}",
             activity_level="medium",
             main_subjects=["爸爸"],
-            has_important_event=True,
         ),
         events=[
             RecognizedEventDTO(
@@ -190,7 +189,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
                 observed_actions=[],
                 interpreted_state=[],
                 confidence=0.9,
-                importance_level="medium",
             )
         ],
         analysis_notes=[],
@@ -219,36 +217,22 @@ def _build_guards(task_log: TaskLog) -> ClaimGuards:
 # ---------------------------------------------------------------------------
 
 
-def test_chunk_plan_computes_expected_offsets_and_fingerprints(pg_db: Session) -> None:
-    """``build_chunk_plan`` produces the deterministic offsets / per-sub-chunk
-    ``analysis_run_id`` / ``input_fingerprint`` contract that the
-    checkpoint writer relies on.
+def test_analysis_plan_computes_expected_offsets_and_fingerprints(pg_db: Session) -> None:
+    """``build_analysis_plan`` produces the deterministic offsets /
+    per-sub-chunk ``analysis_run_id`` / ``input_fingerprint`` contract
+    that the checkpoint writer relies on.
 
-    Three 60-second files / one chunk / 60-second sub-chunks produces a
-    single chunk with three sub-chunks; the plan's analysis_run_id must
-    be stable across repeated calls and the per-sub-chunk fingerprint
-    must change when the input changes.
+    Three 60-second files produce three file-level sub-chunks; the
+    plan's analysis_run_id must be stable across repeated calls and the
+    per-sub-chunk fingerprint must change when the input changes.
     """
     _, session_id = _seed_source_with_video_files(pg_db, file_count=3, file_duration_seconds=60)
 
-    plan_first = build_chunk_plan(
-        pg_db,
-        session_id=session_id,
-        chunk_seconds=600,
-        sub_chunk_seconds=60,
-    )
-    plan_second = build_chunk_plan(
-        pg_db,
-        session_id=session_id,
-        chunk_seconds=600,
-        sub_chunk_seconds=60,
-    )
+    plan_first = build_analysis_plan(pg_db, session_id)
+    plan_second = build_analysis_plan(pg_db, session_id)
 
     assert plan_first.session_id == session_id
     assert plan_first.analysis_run_id == plan_second.analysis_run_id
-    assert len(plan_first.chunks) == 1
-    assert plan_first.chunks[0].start_offset_seconds == 0
-    assert plan_first.chunks[0].duration_seconds == 180
     assert len(plan_first.sub_chunks) == 3
     assert [sc.start_offset_seconds for sc in plan_first.sub_chunks] == [0, 60, 120]
     assert [sc.duration_seconds for sc in plan_first.sub_chunks] == [60, 60, 60]
@@ -293,7 +277,7 @@ def test_single_sub_chunk_builds_raw_mp4_payload_with_120_frames(tmp_path) -> No
         file_paths=(str(fake_mp4),),
     )
 
-    url = build_sub_chunk_video_url(plan_chunk_index=0, sub_chunk=plan_item)
+    url = build_sub_chunk_video_url(plan_item)
     extra_body = build_sub_chunk_extra_body()
 
     assert url.startswith("data:video/mp4;base64,")
@@ -323,7 +307,6 @@ def test_single_sub_chunk_parses_llm_output_into_dto() -> None:
                 "summary_text": "客厅有人走过",
                 "activity_level": "medium",
                 "main_subjects": ["爸爸"],
-                "has_important_event": True,
             },
             "events": [
                 {
@@ -337,7 +320,6 @@ def test_single_sub_chunk_parses_llm_output_into_dto() -> None:
                     "observed_actions": ["walking"],
                     "interpreted_state": ["standing"],
                     "confidence": 0.92,
-                    "importance_level": "medium",
                 }
             ],
             "analysis_notes": [],
@@ -349,7 +331,6 @@ def test_single_sub_chunk_parses_llm_output_into_dto() -> None:
     assert isinstance(parsed, RecognitionResultDTO)
     assert parsed.session_summary.summary_text == "客厅有人走过"
     assert parsed.session_summary.activity_level == "medium"
-    assert parsed.session_summary.has_important_event is True
     assert len(parsed.events) == 1
     event = parsed.events[0]
     assert isinstance(event, RecognizedEventDTO)

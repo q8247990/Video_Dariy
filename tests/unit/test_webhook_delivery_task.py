@@ -118,10 +118,7 @@ def test_webhook_task_persists_independent_delivery_outcomes(
     verify_db: Session = session_factory()
     try:
         deliveries = verify_db.query(WebhookDeliveryLog).all()
-        hook_names_by_id = {
-            row.id: row.name
-            for row in verify_db.query(WebhookConfig).all()
-        }
+        hook_names_by_id = {row.id: row.name for row in verify_db.query(WebhookConfig).all()}
         assert {entry.status for entry in deliveries} == {"success", "failed"}
         assert {hook_names_by_id[entry.webhook_id] for entry in deliveries} == {
             "success",

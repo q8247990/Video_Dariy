@@ -160,16 +160,15 @@ def test_parse_output_invalid_event_type_falls_back_to_other() -> None:
     assert result.events[0].event_type == "other"
 
 
-def test_parse_output_invalid_importance_level_still_fails() -> None:
-    """非法 importance_level 是严格校验，抛出 ValidationError 而非回退。"""
+def test_parse_output_invalid_activity_level_still_fails() -> None:
+    """activity_level 仍是严格校验；已移除的 importance_level 作为多余字段被忽略。"""
 
     raw = """
     {
       "session_summary": {
         "summary_text": "无",
-        "activity_level": "low",
-        "main_subjects": [],
-        "has_important_event": false
+        "activity_level": "extreme",
+        "main_subjects": []
       },
       "events": [
         {
@@ -182,7 +181,7 @@ def test_parse_output_invalid_importance_level_still_fails() -> None:
           "related_entities": [],
           "observed_actions": [],
           "interpreted_state": [],
-          "confidence": 0.8,
+          "confidence": 1.8,
           "importance_level": "urgent"
         }
       ],
@@ -190,5 +189,5 @@ def test_parse_output_invalid_importance_level_still_fails() -> None:
     }
     """
 
-    with pytest.raises(RecognitionOutputValidationError, match="importance_level"):
+    with pytest.raises(RecognitionOutputValidationError, match="confidence"):
         parse_video_recognition_output(raw)

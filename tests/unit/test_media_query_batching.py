@@ -9,9 +9,7 @@ from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 
 
-def test_get_session_playback_loads_files_in_one_batch(
-    monkeypatch, pg_db: Session
-) -> None:
+def test_get_session_playback_loads_files_in_one_batch(monkeypatch, pg_db: Session) -> None:
     monkeypatch.setattr("src.api.v1.endpoints.media.is_video_file_available", lambda _: True)
 
     source = VideoSource(

@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from src.services.video_analysis.enums import (
     ACTIVITY_LEVELS,
     ANALYSIS_NOTE_TYPES,
-    IMPORTANCE_LEVELS,
     RECOGNITION_STATUSES,
     VIDEO_EVENT_TYPES,
 )
@@ -15,7 +14,6 @@ class SessionSummaryDTO(BaseModel):
     summary_text: str = Field(min_length=1)
     activity_level: str
     main_subjects: list[str] = Field(default_factory=list)
-    has_important_event: bool
 
     @field_validator("activity_level")
     @classmethod
@@ -50,21 +48,26 @@ class RecognizedEventDTO(BaseModel):
     related_entities: list[RelatedEntityDTO] = Field(default_factory=list)
     observed_actions: list[str] = Field(default_factory=list)
     interpreted_state: list[str] = Field(default_factory=list)
+    focus_matches: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
-    importance_level: str
+
+    @field_validator("focus_matches", mode="before")
+    @classmethod
+    def normalize_focus_matches(cls, values: object) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        seen: list[str] = []
+        for item in values:
+            key = str(item).strip().lower()
+            if key and key not in seen:
+                seen.append(key)
+        return seen
 
     @field_validator("event_type")
     @classmethod
     def validate_event_type(cls, value: str) -> str:
         if value not in VIDEO_EVENT_TYPES:
             raise ValueError("invalid event_type")
-        return value
-
-    @field_validator("importance_level")
-    @classmethod
-    def validate_importance_level(cls, value: str) -> str:
-        if value not in IMPORTANCE_LEVELS:
-            raise ValueError("invalid importance_level")
         return value
 
     @field_validator("offset_end_sec")

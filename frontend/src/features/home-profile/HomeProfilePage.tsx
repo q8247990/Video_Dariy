@@ -4,14 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
-import type { HomeProfile } from '../../types/api'
+import type { FocusPointItem, HomeProfile } from '../../types/api'
 import { getHomeOptions, getHomeProfile, saveHomeProfile } from './api'
-import { familyTagLabel, focusPointLabel, systemStyleLabel } from './labels'
+import { familyTagLabel, systemStyleLabel } from './labels'
 
 type FormState = {
   home_name: string
   family_tags: string[]
-  focus_points: string[]
+  focus_points: FocusPointItem[]
   system_style: string
   style_preference_text: string
   assistant_name: string
@@ -39,6 +39,15 @@ function toggleValue(values: string[], value: string): string[] {
     return values.filter((item) => item !== value)
   }
   return [...values, value]
+}
+
+function nextFocusKey(items: FocusPointItem[]): string {
+  const existing = new Set(items.map((item) => item.key))
+  let index = items.length + 1
+  while (existing.has(`custom_${index}`)) {
+    index += 1
+  }
+  return `custom_${index}`
 }
 
 export function HomeProfilePage() {
@@ -97,7 +106,13 @@ export function HomeProfilePage() {
           saveMutation.mutate({
             home_name: form.home_name.trim(),
             family_tags: form.family_tags,
-            focus_points: form.focus_points,
+            focus_points: form.focus_points
+              .filter((item) => item.label.trim().length > 0)
+              .map((item) => ({
+                ...item,
+                label: item.label.trim(),
+                description: item.description.trim(),
+              })),
             system_style: form.system_style,
             style_preference_text: form.style_preference_text.trim(),
             assistant_name: form.assistant_name.trim(),
@@ -166,22 +181,103 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
 
         <div>
           <p className="text-muted">{t('home_profile.field_focus_points')}</p>
-          <div className="inline-fields">
-            {options.focus_points.map((item) => (
-              <label className="checkbox-field" key={item}>
+          <div className="focus-list">
+            {form.focus_points.map((item, index) => (
+              <div className="focus-row" key={item.key}>
                 <input
-                  type="checkbox"
-                  checked={isChecked(form.focus_points, item)}
-                  onChange={() =>
+                  value={item.label}
+                  maxLength={20}
+                  placeholder={t('home_profile.focus_label_placeholder')}
+                  onChange={(event) =>
                     setForm((old) => ({
                       ...old,
-                      focus_points: toggleValue(old.focus_points, item),
+                      focus_points: old.focus_points.map((fp, i) =>
+                        i === index ? { ...fp, label: event.target.value } : fp,
+                      ),
                     }))
                   }
                 />
-                {focusPointLabel(t, item)}
-              </label>
+                <input
+                  value={item.description}
+                  maxLength={100}
+                  placeholder={t('home_profile.focus_description_placeholder')}
+                  onChange={(event) =>
+                    setForm((old) => ({
+                      ...old,
+                      focus_points: old.focus_points.map((fp, i) =>
+                        i === index ? { ...fp, description: event.target.value } : fp,
+                      ),
+                    }))
+                  }
+                />
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={item.attention}
+                    onChange={(event) =>
+                      setForm((old) => ({
+                        ...old,
+                        focus_points: old.focus_points.map((fp, i) =>
+                          i === index ? { ...fp, attention: event.target.checked } : fp,
+                        ),
+                      }))
+                    }
+                  />
+                  {t('home_profile.focus_attention')}
+                </label>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() =>
+                    setForm((old) => ({
+                      ...old,
+                      focus_points: old.focus_points.filter((_, i) => i !== index),
+                    }))
+                  }
+                >
+                  {t('home_profile.focus_remove')}
+                </button>
+              </div>
             ))}
+          </div>
+          <div className="inline-fields">
+            {options.focus_points.map((preset) => (
+              <button
+                type="button"
+                className="ghost"
+                key={preset.key}
+                disabled={form.focus_points.some((fp) => fp.key === preset.key)}
+                onClick={() =>
+                  setForm((old) => ({
+                    ...old,
+                    focus_points: [...old.focus_points, { ...preset }],
+                  }))
+                }
+              >
+                {preset.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                setForm((old) => ({
+                  ...old,
+                  focus_points: [
+                    ...old.focus_points,
+                    {
+                      key: nextFocusKey(old.focus_points),
+                      label: '',
+                      description: '',
+                      enabled: true,
+                      attention: false,
+                    },
+                  ],
+                }))
+              }
+            >
+              {t('home_profile.focus_add_custom')}
+            </button>
           </div>
         </div>
 

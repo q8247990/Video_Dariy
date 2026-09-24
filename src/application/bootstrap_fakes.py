@@ -553,47 +553,34 @@ class FakeAnalysisPorts:
         else:
             self._replace_events = replace_events
 
-    def plan_chunks(self, db: Any, session_id: int, chunk_seconds: int) -> list[Any]:
-        del db, session_id, chunk_seconds
-        from src.services.session_analysis_video import SessionVideoChunk
-
-        return [
-            SessionVideoChunk(
-                chunk_index=index,
-                start_offset_seconds=0,
-                duration_seconds=self._sub_chunks_per_chunk * 60,
-                file_paths=[self._file_path],
-            )
-            for index in range(self._chunks)
-        ]
-
-    def plan_sub_chunks(self, chunk: Any, db: Any, sub_chunk_seconds: int) -> list[Any]:
-        del db, sub_chunk_seconds
-        from src.services.session_analysis_video import SubChunk
-
-        return [
-            SubChunk(
-                chunk_index=chunk.chunk_index,
-                sub_chunk_index=sub_index,
-                start_offset_seconds=sub_index * 60,
-                duration_seconds=60,
-                file_paths=[self._file_path],
-            )
-            for sub_index in range(self._sub_chunks_per_chunk)
-        ]
-
-    def sub_chunk_as_chunk(self, sub_chunk: Any, parent_chunk_index: int) -> Any:
-        from src.services.session_analysis_video import SessionVideoChunk
-
-        return SessionVideoChunk(
-            chunk_index=parent_chunk_index,
-            start_offset_seconds=sub_chunk.start_offset_seconds,
-            duration_seconds=sub_chunk.duration_seconds,
-            file_paths=list(sub_chunk.file_paths),
+    def plan_analysis(self, db: Any, session_id: int) -> Any:
+        del db
+        from src.services.analysis.chunk_plan import (
+            AnalysisPlan,
+            SubChunkPlan,
+            analysis_run_id_for_paths,
         )
 
-    def chunk_video_data_url(self, chunk: Any) -> str:
-        del chunk
+        sub_chunks: list[SubChunkPlan] = []
+        for index in range(self._chunks * self._sub_chunks_per_chunk):
+            sub_chunks.append(
+                SubChunkPlan(
+                    chunk_index=0,
+                    sub_chunk_index=index,
+                    start_offset_seconds=index * 60,
+                    duration_seconds=60,
+                    file_paths=(self._file_path,),
+                )
+            )
+        paths = [path for item in sub_chunks for path in item.file_paths]
+        return AnalysisPlan(
+            session_id=session_id,
+            sub_chunks=tuple(sub_chunks),
+            analysis_run_id=analysis_run_id_for_paths(paths),
+        )
+
+    def video_data_url(self, file_path: str) -> str:
+        del file_path
         return self._data_url
 
     def replace_session_events(self, db: Any, session_id: int, events: list[Any]) -> int:

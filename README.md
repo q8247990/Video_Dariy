@@ -155,7 +155,6 @@ python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generat
 | `PLAYBACK_CACHE_ROOT` | HLS 播放缓存目录 | Docker 部署保持默认即可 |
 | `MCP_TOKEN` | MCP 接口鉴权 Token | 需要 MCP 时配置 |
 | `DEFAULT_LOCALE` | 界面语言（zh-CN / en-US） | 默认 zh-CN |
-| `ANALYZER_SEGMENT_SECONDS` | 视频分析切片时长（秒） | 默认 600 |
 | `SESSION_PLAYBACK_MODE` | 回放模式 | 默认 hls_index_only |
 | `DB_INIT_MAX_RETRIES` | 数据库初始化重试次数 | 默认 120 |
 | `DB_INIT_RETRY_INTERVAL_SECONDS` | 数据库初始化重试间隔（秒） | 默认 2 |
@@ -360,14 +359,11 @@ python3 -m pytest -m postgres
 
 # 迁移检查
 python3 -m alembic upgrade head
-python3 -m alembic heads   # 期望 20260902_0021
+python3 -m alembic heads   # 期望 20260923_0025
 
 # 代码检查
 ruff check .
 ruff format --check src tests
-# 已知例外：ruff format --check 在以下 4 个文件存在历史遗留失败（属既有范围，待单独处理）：
-#   src/application/prompt/compiler.py、src/application/qa/agent.py、
-#   tests/unit/test_i18n.py、tests/unit/test_keyframe_extractor.py
 ```
 
 </details>

@@ -18,7 +18,6 @@ SCAN_LATE_TOLERANCE_SECONDS: Final = "scan_late_tolerance_seconds"
 LATENCY_ALERT_THRESHOLD_SECONDS: Final = "latency_alert_threshold_seconds"
 ALERT_CONSECUTIVE_REQUIRED: Final = "alert_consecutive_required"
 ALERT_NOTIFY_COOLDOWN_MINUTES: Final = "alert_notify_cooldown_minutes"
-DEFAULT_SESSION_MERGE_GAP_SECONDS: Final = "default_session_merge_gap_seconds"
 TAG_RECOMMENDATION_ENABLED: Final = "tag_recommendation_enabled"
 MCP_ENABLED: Final = "mcp_enabled"
 MCP_TOKEN: Final = "mcp_token"
@@ -93,7 +92,6 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     LATENCY_ALERT_THRESHOLD_SECONDS: ConfigDefinition(600, _positive_int),
     ALERT_CONSECUTIVE_REQUIRED: ConfigDefinition(3, _positive_int),
     ALERT_NOTIFY_COOLDOWN_MINUTES: ConfigDefinition(60, _positive_int),
-    DEFAULT_SESSION_MERGE_GAP_SECONDS: ConfigDefinition(61, _positive_int),
     TAG_RECOMMENDATION_ENABLED: ConfigDefinition(False, _bool),
     MCP_ENABLED: ConfigDefinition(True, _bool),
     MCP_TOKEN: ConfigDefinition("", _optional_string),

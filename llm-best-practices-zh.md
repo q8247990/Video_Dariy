@@ -43,9 +43,8 @@ JSON 事件。整个链路要同时满足三个矛盾需求：
 与 LLM 直接相关的链路：
 
 1. 扫描、去重、Session 合并与封口（纯 CPU，不涉及模型）；
-2. **Session 分析**：`SEALED` 的 Session 按 600 秒切块（`ANALYZER_SEGMENT_SECONDS`），
-   每块再按 60 秒切 sub-chunk（`ANALYZER_LLM_CHUNK_SECONDS`，默认 60），**每个 sub-chunk 一次
-   视觉模型调用**；
+2. **Session 分析**：`SEALED` 的 Session 按文件切分，**每个视频文件恰好一个 sub-chunk、
+   一次视觉模型调用**（不合并、不切割；历史的两级切块已删除）；
 3. 家庭日报、问答、MCP 基于结构化事件做二次 LLM 调用（纯文本，成本低，本文不展开）。
 
 一次视觉调用的负载画像（这是后面所有调参的约束来源）：
@@ -472,9 +471,9 @@ num_frames: -1}`，让每帧带真实时间位置（模型报的时间戳与烧�
 
 硬件和引擎之上，应用层的实践决定了"同样的模型、同样的卡，结果差几倍"。
 
-1. **两级切块，一次一调**：600s chunk（`ANALYZER_SEGMENT_SECONDS`）→ 60s sub-chunk
-   （`ANALYZER_LLM_CHUNK_SECONDS`）。跨文件片段先 `ffmpeg concat` 成单 mp4 再 base64
-   （`build_chunk_video_data_url`），保证时间轴连续、`base_offset_seconds` 语义清晰。
+1. **一文件一调**：session 内每个视频文件就是一个 sub-chunk，直接读取该文件 base64
+   （`build_video_data_url`），无跨文件 concat，`base_offset_seconds` 即该文件在 session
+   内的起始偏移。文件真实时长在入库时由 `ffprobe` 探测。
 2. **参数固化不配置化**：`RAW_MP4_NUM_FRAMES=120` 是常量。凡属产品决策的参数，
    用代码常量 + 回归测试（`test_analyzer_raw_mp4_payload.py` 断言 payload 前缀、
    num_frames 值、schema 422 拒绝 keyframe）锁定，而不是藏在可漂移的配置里。

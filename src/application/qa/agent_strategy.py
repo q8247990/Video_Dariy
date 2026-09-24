@@ -14,17 +14,25 @@ from src.application.qa.schemas import (
 from src.models.chat_query_log import ChatQueryLog
 from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
+from src.services.attention import attention_keys_for_db, is_attention_event
 
 logger = logging.getLogger(__name__)
 
 
-def _event_to_evidence(row: EventRecord) -> EventEvidence:
+def _event_to_evidence(
+    row: EventRecord, attention_keys: frozenset[str] = frozenset()
+) -> EventEvidence:
     return EventEvidence(
         id=row.id,
         session_id=row.session_id,
         event_start_time=row.event_start_time,
         event_type=row.event_type or "",
-        importance_level=row.importance_level or "",
+        attention=is_attention_event(
+            event_type=row.event_type,
+            related_entities=row.related_entities_json,
+            focus_matches=row.focus_matches_json,
+            attention_keys=attention_keys,
+        ),
         title=row.title or "",
         summary=row.summary or "",
         detail=row.detail or "",
@@ -42,7 +50,7 @@ def _session_to_evidence(row: VideoSession) -> SessionEvidence:
         summary_text=row.summary_text or "",
         activity_level=row.activity_level or "",
         main_subjects=row.main_subjects_json or [],
-        has_important_event=bool(row.has_important_event),
+        has_attention_event=bool(row.has_attention_event),
         analysis_notes=row.analysis_notes_json or [],
     )
 
@@ -53,11 +61,12 @@ def _load_referred_events(db: Session, event_ids: list[int]) -> list[EventEviden
         return []
     rows = db.query(EventRecord).filter(EventRecord.id.in_(event_ids)).all()
     by_id = {row.id: row for row in rows}
+    attention_keys = attention_keys_for_db(db)
     evidence: list[EventEvidence] = []
     for event_id in event_ids:
         row = by_id.get(event_id)
         if row is not None:
-            evidence.append(_event_to_evidence(row))
+            evidence.append(_event_to_evidence(row, attention_keys))
     return evidence
 
 

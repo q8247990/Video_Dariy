@@ -27,6 +27,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -85,8 +86,29 @@ class SkipOutcome:
     current_status: Optional[str] = None
 
 
+def purge_stale_checkpoints(db: Session, *, session_id: int, keep_run_id: str) -> int:
+    """Delete checkpoints from previous analysis runs of one session.
+
+    A new ``analysis_run_id`` is issued whenever the file set or the
+    planning scheme changes, leaving the prior run's checkpoints behind.
+    They are never read again (``completed_results_for_run`` filters by
+    run id) and the token-usage FK is ``ON DELETE SET NULL``, so
+    dropping them is safe and keeps the table (and the ``/metrics``
+    progress counts) from growing on every re-analysis. Called inside
+    the claim transaction, so it races with no other writer.
+    """
+    return (
+        db.query(SessionAnalysisCheckpoint)
+        .filter(
+            SessionAnalysisCheckpoint.session_id == session_id,
+            SessionAnalysisCheckpoint.analysis_run_id != keep_run_id,
+        )
+        .delete(synchronize_session=False)
+    )
+
+
 def _claim_session_for_analysis(
-    db: Session, session_id: int
+    db: Session, session_id: int, analysis_run_id: str
 ) -> tuple[VideoSession | None, str | None]:
     """Acquire ``ANALYZING`` ownership of a sealed / partial session.
 
@@ -111,6 +133,8 @@ def _claim_session_for_analysis(
                 SessionAnalysisStatus.PARTIAL,
             )
         )
+        if updated:
+            purge_stale_checkpoints(db, session_id=session_id, keep_run_id=analysis_run_id)
         db.commit()
         if updated:
             session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
@@ -177,7 +201,7 @@ def claim_session_for_analysis(
         return None, None
 
     db.commit()
-    session, skip_reason = _claim_session_for_analysis(db, session_id)
+    session, skip_reason = _claim_session_for_analysis(db, session_id, analysis_run_id)
     if skip_reason is not None or session is None:
         detail = _resolve_skip_message(skip_reason or "not_found", session_id)
         stripped = (skip_reason or "").removeprefix("status_")
@@ -291,4 +315,5 @@ __all__ = [
     "finalize_skip",
     "finalize_stale_message",
     "mark_session_sealed_for_retry",
+    "purge_stale_checkpoints",
 ]

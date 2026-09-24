@@ -12,7 +12,7 @@ from src.application.qa.schemas import (
     RetrievalPlan,
     TimeRange,
 )
-from src.services.video_analysis.enums import IMPORTANCE_LEVELS, VIDEO_EVENT_TYPES
+from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +130,8 @@ def normalize_query_plan(
         if isinstance(t, str) and t.strip() in VIDEO_EVENT_TYPES
     ]
 
-    # importance_levels
-    importance_raw = raw.get("importance_levels") or []
-    importance_levels = [
-        str(i).strip()
-        for i in importance_raw
-        if isinstance(i, str) and i.strip() in IMPORTANCE_LEVELS
-    ]
+    attention_raw = raw.get("attention")
+    attention = attention_raw if isinstance(attention_raw, bool) else None
 
     # booleans
     use_daily_summary_first = bool(raw.get("use_daily_summary_first", True))
@@ -155,7 +150,7 @@ def normalize_query_plan(
         time_range=time_range,
         subjects=subjects,
         event_types=event_types,
-        importance_levels=importance_levels,
+        attention=attention,
         use_daily_summary_first=use_daily_summary_first,
         use_session_summary_first=use_session_summary_first,
         need_event_details=need_event_details,
@@ -219,7 +214,7 @@ def build_retrieval_plan(query_plan: QueryPlan) -> RetrievalPlan:
     event_filters = EventFilters(
         subjects=list(query_plan.subjects),
         event_types=list(query_plan.event_types),
-        importance_levels=list(query_plan.importance_levels),
+        attention=query_plan.attention,
     )
 
     # 预算

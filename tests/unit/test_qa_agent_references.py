@@ -57,6 +57,7 @@ class FakeToolGateway:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float,
+        max_tokens: int | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         self.with_tools_calls += 1
         if self.with_tools_calls == 1:
@@ -66,7 +67,12 @@ class FakeToolGateway:
             ]
         return "测试回答", []
 
-    def chat_completion(self, messages: list[dict[str, Any]], temperature: float) -> str:
+    def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int | None = None,
+    ) -> str:
         return "轮次用尽后的回答"
 
     def get_last_usage(self) -> None:
@@ -129,7 +135,7 @@ def _seed_data(db: Session) -> tuple[int, int, int]:
         summary_text="测试会话",
         activity_level="low",
         main_subjects_json=["妈妈"],
-        has_important_event=False,
+        has_attention_event=False,
     )
     db.add(session)
     db.flush()
@@ -141,7 +147,6 @@ def _seed_data(db: Session) -> tuple[int, int, int]:
         title="妈妈进入客厅",
         summary="妈妈进入客厅",
         detail="详细",
-        importance_level="medium",
     )
     db.add(event)
     db.commit()
@@ -189,6 +194,7 @@ def test_agent_strategy_no_tool_calls_yields_empty_references(db_session: Sessio
             messages: list[dict[str, Any]],
             tools: list[dict[str, Any]],
             temperature: float,
+            max_tokens: int | None = None,
         ) -> tuple[str, list[dict[str, Any]]]:
             return "无工具回答", []
 

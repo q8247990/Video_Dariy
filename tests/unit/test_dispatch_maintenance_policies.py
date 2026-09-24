@@ -684,9 +684,7 @@ def test_heartbeat_aggregates_results_no_branching(
     verify_db: Session = session_factory()
     try:
         persisted = (
-            verify_db.query(AppRuntimeState)
-            .filter_by(state_key=HEARTBEAT_COUNTERS_KEY)
-            .one()
+            verify_db.query(AppRuntimeState).filter_by(state_key=HEARTBEAT_COUNTERS_KEY).one()
         )
         assert persisted.state_value == expected
     finally:
@@ -816,9 +814,7 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
     verify_db: Session = session_factory()
     try:
         persisted = (
-            verify_db.query(AppRuntimeState)
-            .filter_by(state_key=HEARTBEAT_COUNTERS_KEY)
-            .one()
+            verify_db.query(AppRuntimeState).filter_by(state_key=HEARTBEAT_COUNTERS_KEY).one()
         )
         assert persisted.state_value == expected
     finally:

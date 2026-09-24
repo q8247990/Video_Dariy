@@ -21,16 +21,37 @@ runner does not regress the pre-Wave-5 behaviour.
 from __future__ import annotations
 
 import logging
+import os
+from datetime import timedelta
 from typing import Callable, Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.video_file import VideoFile, build_file_path_hash
+from src.services.ffmpeg_utils import probe_video_duration_seconds
 from src.services.session_build.constants import HASH_QUERY_CHUNK_SIZE
 from src.services.session_build.types import DiscoveredFile, InsertedFile
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_insert_duration_seconds(file: DiscoveredFile) -> int:
+    """Return the real duration for a newly inserted file.
+
+    The Xiaomi filename parser cannot know a clip's real length, so it
+    historically stamped every file with a constant ``60``. At the
+    persistence boundary we probe the on-disk file once (new files
+    only — pre-existing rows are skipped before this point) and use the
+    real duration so session merge gaps, sub-chunk offsets and event
+    times are anchored to reality. Falls back to the parser value when
+    the file is absent (hermetic unit tests) or ``ffprobe`` fails.
+    """
+    if os.path.isfile(file.file_path):
+        probed = probe_video_duration_seconds(file.file_path)
+        if probed is not None:
+            return max(1, int(round(probed)))
+    return file.duration_seconds
 
 
 def compute_file_hashes(
@@ -94,6 +115,8 @@ def insert_file(
     for the next iteration. Without the savepoint a rollback
     would nuke the whole batch and the reducer would never run.
     """
+    duration_seconds = _resolve_insert_duration_seconds(file)
+    end_time = file.start_time + timedelta(seconds=duration_seconds)
     try:
         with db.begin_nested():
             video_file = VideoFile(
@@ -103,8 +126,8 @@ def insert_file(
                 file_name=file.file_name,
                 file_path=file.file_path,
                 start_time=file.start_time,
-                end_time=file.end_time,
-                duration_seconds=file.duration_seconds,
+                end_time=end_time,
+                duration_seconds=duration_seconds,
                 file_size=file.file_size,
                 file_format=file.file_format,
                 storage_type=file.storage_type,

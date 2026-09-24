@@ -6,8 +6,9 @@ from src.models.event_record import EventRecord
 from src.models.video_source import VideoSource
 from src.schemas.dashboard import (
     DashboardAction,
+    DashboardAttentionEvent,
     DashboardEventSummary,
-    DashboardImportantEvent,
+    DashboardFocusCount,
     DashboardLatestDailySummary,
     DashboardStatusItem,
     DashboardSystemStatus,
@@ -91,14 +92,12 @@ class DashboardPresenter:
 
     @staticmethod
     def event_summary(
-        today_event_count: int,
-        yesterday_event_count: int,
-        important_event_count_24h: int,
+        attention_event_count: int,
+        focus_counts: list[DashboardFocusCount],
     ) -> DashboardEventSummary:
         return DashboardEventSummary(
-            today_event_count=today_event_count,
-            yesterday_event_count=yesterday_event_count,
-            important_event_count_24h=important_event_count_24h,
+            attention_event_count=attention_event_count,
+            focus_counts=focus_counts,
         )
 
     @staticmethod
@@ -142,16 +141,17 @@ class DashboardPresenter:
         )
 
     @staticmethod
-    def important_events(
+    def attention_events(
         rows: list[tuple[EventRecord, VideoSource]], locale: str
-    ) -> list[DashboardImportantEvent]:
-        result: list[DashboardImportantEvent] = []
+    ) -> list[DashboardAttentionEvent]:
+        result: list[DashboardAttentionEvent] = []
         for event, source in rows:
+            display_text = event.title or event.description
             result.append(
-                DashboardImportantEvent(
+                DashboardAttentionEvent(
                     id=event.id,
-                    title=_build_event_title(event.description, locale),
-                    summary=_truncate_text(event.description, 60),
+                    title=_build_event_title(display_text, locale),
+                    summary=_truncate_text(display_text, 60),
                     event_time=event.event_start_time,
                     camera_name=source.camera_name,
                 )

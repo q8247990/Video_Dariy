@@ -138,9 +138,7 @@ def _base_action(
         finally:
             db.close()
 
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.task_db_session", _task_session
-    )
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     try:
         yield
     finally:
@@ -217,7 +215,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
             summary_text=f"summary-{index}",
             activity_level="medium",
             main_subjects=["PG"],
-            has_important_event=True,
         ),
         events=[
             RecognizedEventDTO(
@@ -231,7 +228,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
                 observed_actions=[],
                 interpreted_state=[],
                 confidence=0.9,
-                importance_level="medium",
             )
         ],
         analysis_notes=[],
@@ -668,9 +664,7 @@ def test_no_long_checked_out_connection_during_llm_call(
 
     factory = _container.get_container().llm_factory
     assert isinstance(factory, ScriptedVisionGatewayFactory)
-    _container.set_analysis_ports_for_tests(
-        FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1)
-    )
+    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
     factory.install_gateway(ScriptedVisionGateway(responses=[], on_call=_probe))
     _set_responses(_recognition_result_json(0))
 
@@ -719,5 +713,5 @@ def test_sub_chunk_runner_extra_body_constant_on_postgres(
     extra_body = build_sub_chunk_extra_body()
     assert extra_body["media_io_kwargs"]["video"]["num_frames"] == 120
 
-    url = build_sub_chunk_video_url(plan_chunk_index=0, sub_chunk=plans[0])
+    url = build_sub_chunk_video_url(plans[0])
     assert url.startswith("data:video/mp4;base64,")

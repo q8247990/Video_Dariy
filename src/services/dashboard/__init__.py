@@ -6,12 +6,14 @@ from src.core.i18n import DEFAULT_LOCALE, t
 from src.schemas.dashboard import (
     DashboardAction,
     DashboardAlert,
+    DashboardAttentionEvent,
     DashboardEventSummary,
-    DashboardImportantEvent,
+    DashboardFocusCount,
     DashboardLatestDailySummary,
     DashboardOverviewResponse,
     DashboardTaskSummary,
 )
+from src.services.measures import declared_focus_items, home_local_day_window
 from src.services.onboarding import DEFAULT_ASSISTANT_NAME, get_onboarding_status
 from src.services.pipeline_constants import TaskStatus, TaskType
 
@@ -34,7 +36,7 @@ def get_dashboard_overview(
         task_summary=_build_task_summary(db),
         event_summary=_build_event_summary(db),
         latest_daily_summary=_build_latest_daily_summary(db),
-        important_events=_build_important_events(db, loc),
+        attention_events=_build_attention_events(db, loc),
     )
 
 
@@ -126,8 +128,16 @@ def _build_task_summary(db: Session) -> DashboardTaskSummary:
 
 
 def _build_event_summary(db: Session) -> DashboardEventSummary:
-    today_count, yesterday_count, important_count = queries.event_summary_counts(db)
-    return DashboardPresenter.event_summary(today_count, yesterday_count, important_count)
+    start, end = home_local_day_window(db)
+    labels = {item.key: item.label for item in declared_focus_items(db)}
+    focus_counts = [
+        DashboardFocusCount(focus_key=key, label=labels.get(key, key), count=count)
+        for key, count in queries.focus_event_counts(db, start=start, end=end)
+    ]
+    return DashboardPresenter.event_summary(
+        attention_event_count=queries.attention_event_count(db, start=start, end=end),
+        focus_counts=focus_counts,
+    )
 
 
 def _build_latest_daily_summary(db: Session) -> DashboardLatestDailySummary:
@@ -142,5 +152,5 @@ def _build_latest_daily_summary(db: Session) -> DashboardLatestDailySummary:
     )
 
 
-def _build_important_events(db: Session, locale: str) -> list[DashboardImportantEvent]:
-    return DashboardPresenter.important_events(queries.important_event_rows(db), locale)
+def _build_attention_events(db: Session, locale: str) -> list[DashboardAttentionEvent]:
+    return DashboardPresenter.attention_events(queries.attention_event_rows(db), locale)

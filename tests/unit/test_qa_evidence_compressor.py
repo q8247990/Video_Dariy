@@ -57,13 +57,13 @@ def test_compress_query_plan_full() -> None:
         ),
         subjects=["爸爸"],
         event_types=["member_appear"],
-        importance_levels=["high"],
+        attention=True,
     )
     text = compress_query_plan(plan)
     assert "subject_activity" in text
     assert "爸爸" in text
     assert "member_appear" in text
-    assert "high" in text
+    assert "需关注" in text
 
 
 def test_compress_query_plan_minimal() -> None:
@@ -114,14 +114,14 @@ def test_compress_sessions() -> None:
             summary_text="爸爸在客厅持续活动",
             activity_level="medium",
             main_subjects=["爸爸"],
-            has_important_event=True,
+            has_attention_event=True,
         )
     ]
     text = compress_sessions(sessions)
     assert "S45" in text
     assert "medium" in text
     assert "爸爸" in text
-    assert "important=yes" in text
+    assert "attention=yes" in text
 
 
 def test_compress_sessions_empty() -> None:
@@ -140,7 +140,7 @@ def test_compress_events() -> None:
             session_id=45,
             event_start_time=datetime(2026, 3, 20, 9, 3),
             event_type="member_appear",
-            importance_level="medium",
+            attention=False,
             title="成员出现",
             summary="爸爸上午出现在客厅并活动",
             detail="爸爸出现在客厅并持续停留，期间有明显移动",
@@ -167,7 +167,7 @@ def test_compress_events_filters_unrecognized_entities() -> None:
             session_id=50,
             event_start_time=datetime(2026, 3, 20, 10, 0),
             event_type="unknown_person_appear",
-            importance_level="high",
+            attention=True,
             title="未知人员",
             summary="门口出现未知人员",
             detail="门口出现未知人员短暂停留",
@@ -216,7 +216,7 @@ def test_compress_evidence_integration() -> None:
                 session_id=1,
                 event_start_time=datetime(2026, 3, 20, 9, 0),
                 event_type="member_appear",
-                importance_level="medium",
+                attention=False,
                 title="成员出现",
                 summary="爸爸出现",
                 detail="爸爸出现在客厅",

@@ -127,18 +127,20 @@ export function DashboardPage() {
           <h3>{t('dashboard.events_overview_title')}</h3>
           <div className="dashboard-kv-list">
             <div>
-              <span>{t('dashboard.today_event_count')}</span>
-              <strong>{data.event_summary.today_event_count}</strong>
-            </div>
-            <div>
-              <span>{t('dashboard.yesterday_event_count')}</span>
-              <strong>{data.event_summary.yesterday_event_count}</strong>
-            </div>
-            <div>
-              <span>{t('dashboard.important_events_24h')}</span>
-              <strong>{data.event_summary.important_event_count_24h}</strong>
+              <span>{t('dashboard.attention_events_today')}</span>
+              <strong>{data.event_summary.attention_event_count}</strong>
             </div>
           </div>
+          {data.event_summary.focus_counts.length > 0 ? (
+            <ul className="list-simple dashboard-text-list">
+              {data.event_summary.focus_counts.map((item) => (
+                <li key={item.focus_key}>
+                  <span>{item.label}</span>
+                  <strong>{item.count}</strong>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <button className="ghost" onClick={() => navigate('/events')}>
             {t('dashboard.go_events')}
           </button>
@@ -167,10 +169,10 @@ export function DashboardPage() {
         </article>
 
         <article className="card">
-          <h3>{t('dashboard.important_events_title')}</h3>
-          {data.important_events.length > 0 ? (
+          <h3>{t('dashboard.attention_events_title')}</h3>
+          {data.attention_events.length > 0 ? (
             <ul className="list-simple dashboard-important-list">
-              {data.important_events.map((item) => (
+              {data.attention_events.map((item) => (
                 <li key={item.id}>
                   <button className="ghost" onClick={() => navigate(`/events/${item.id}`)}>
                     {t('dashboard.view_detail')}
@@ -184,7 +186,7 @@ export function DashboardPage() {
               ))}
             </ul>
           ) : (
-            <p className="text-muted">{t('dashboard.no_important_events')}</p>
+            <p className="text-muted">{t('dashboard.no_attention_events')}</p>
           )}
         </article>
 

@@ -127,10 +127,6 @@ export function EventDetailPage() {
           {detail.event_type ?? detail.action_type ?? '-'}
         </p>
         <p>
-          <strong>{t('events.detail_field_importance')}</strong>
-          {detail.importance_level ?? '-'}
-        </p>
-        <p>
           <strong>{t('events.detail_field_relative_time')}</strong>
           {detail.offset_start_sec !== null && detail.offset_end_sec !== null
             ? `${detail.offset_start_sec}s ~ ${detail.offset_end_sec}s`
@@ -180,7 +176,6 @@ export function EventDetailPage() {
               <tr>
                 <th>{t('events.col_event_time')}</th>
                 <th>{t('events.col_event_title')}</th>
-                <th>{t('events.col_importance')}</th>
                 <th>{t('events.col_actions')}</th>
               </tr>
             </thead>
@@ -189,7 +184,6 @@ export function EventDetailPage() {
                 <tr key={item.id} className={item.id === detail.id ? 'row-selected' : ''}>
                   <td>{formatDateTime(item.event_start_time)}</td>
                   <td>{item.title ?? item.summary ?? item.description}</td>
-                  <td>{item.importance_level ?? '-'}</td>
                   <td>
                     <button className="ghost" onClick={() => navigate(`/events/${item.id}`)}>
                       {t('events.view_detail')}

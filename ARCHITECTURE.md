@@ -290,15 +290,14 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 流程：
 
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
-2. 将 Session 按 `ANALYZER_SEGMENT_SECONDS` 切片，默认 600 秒（10 分钟 session-level chunk）
-3. 对每个 session chunk 内部按 `ANALYZER_LLM_CHUNK_SECONDS`（默认 60 秒）再切分为 sub-chunk；每个 sub-chunk 调一次视觉模型
-4. LLM 载荷固定为 `raw_mp4`：直接将 sub-chunk mp4 base64 传给视觉模型，并通过 `media_io_kwargs.video.num_frames` 请求服务端均匀采样。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径。
-5. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
-6. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
-7. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
-8. 覆盖替换该 Session 历史事件
-9. 汇总片段摘要并回写到 `VideoSession`
-10. 更新分析状态为 `SUCCESS`
+2. 按文件切分：session 内每个视频文件恰好对应一个 sub-chunk，一次 LLM 调用；不合并、不切割（历史的两级切块 600s→60s 已删除）
+3. LLM 载荷固定为 `raw_mp4`：直接将单文件 mp4 base64 传给视觉模型，并通过 `media_io_kwargs.video.num_frames` 请求服务端均匀采样。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径，也不再做跨文件 concat。
+4. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
+5. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
+6. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
+7. 覆盖替换该 Session 历史事件
+8. 汇总片段摘要并回写到 `VideoSession`
+9. 更新分析状态为 `SUCCESS`
 
 分析与断点续跑：
 
@@ -512,13 +511,10 @@ DailySummary 1 --- 1 summary_date
 - `SESSION_PLAYBACK_MODE`
 - `MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS`（媒体签名 URL 有效期，默认 1800 秒）
 - `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST`（Webhook SSRF 防护的内网放行列表）
-- `ANALYZER_SEGMENT_SECONDS`
-- `ANALYZER_LLM_CHUNK_SECONDS`（默认 60；每个 LLM 调用的 sub-chunk 时长）
-- （以下仅保留兼容，属 inert——视频预处理为 raw_mp4-only，无法重新启用关键帧路径）
-  `ANALYZER_VIDEO_KEYFRAME_PERIOD_SECONDS`（默认 8）、
-  `ANALYZER_VIDEO_KEYFRAME_MAD_THRESHOLD`（默认 1.0）、
-  `ANALYZER_VIDEO_KEYFRAME_PHASH_THRESHOLD`（默认 6）、
-  `ANALYZER_VIDEO_KEYFRAME_FALLBACK_TO_MP4`（默认 true）
+> Session 分析已无切片相关环境变量：`ANALYZER_SEGMENT_SECONDS` /
+> `ANALYZER_LLM_CHUNK_SECONDS` / `ANALYZER_VIDEO_KEYFRAME_*` 均已删除。
+> 分析单位为视频文件（一文件一次 LLM 调用），文件真实时长在入库时由
+> `ffprobe` 探测（失败回退 60s）。
 
 说明：当前根目录 `.env.example` 已按 PostgreSQL、Redis、MCP 与播放缓存目录的实际配置同步更新，推荐以 `src/core/config.py` 和 `docker-compose.yml` 为最终运行准则。
 
@@ -638,11 +634,9 @@ Session 分析状态（`analysis_status`）主要包括：
 python3 -m pytest tests/unit -q         # 单元测试
 python3 -m pytest -m postgres           # 集成测试，需真实 PostgreSQL（DATABASE_URL）
 python3 -m alembic upgrade head
-python3 -m alembic heads                # 期望 20260904_0022
+python3 -m alembic heads                # 期望 20260923_0025
 ruff check .
 ruff format --check src tests
-# 已知例外：ruff format --check 在
-# src/application/prompt/compiler.py、src/application/qa/agent.py、
 ```
 
 现有测试覆盖了：

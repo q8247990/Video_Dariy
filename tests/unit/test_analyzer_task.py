@@ -103,9 +103,7 @@ def _base_action(pg_db_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch)
         finally:
             db.close()
 
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.task_db_session", _task_session
-    )
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
 
     try:
         yield
@@ -189,7 +187,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
             summary_text=f"summary-{index}",
             activity_level="medium",
             main_subjects=["爸爸"],
-            has_important_event=True,
         ),
         events=[
             RecognizedEventDTO(
@@ -203,7 +200,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
                 observed_actions=[],
                 interpreted_state=[],
                 confidence=0.9,
-                importance_level="medium",
             )
         ],
         analysis_notes=[],
@@ -485,9 +481,7 @@ def test_analyze_session_cancelled_mid_run_partial_not_served(
 
 
 def test_analyze_session_replaces_old_events(pg_db_factory: SessionFactory) -> None:
-    _container.set_analysis_ports_for_tests(
-        FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1)
-    )
+    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
     session_factory = pg_db_factory
     db = session_factory()
     try:
@@ -523,15 +517,12 @@ def test_analyze_session_empty_result_clears_old_events(
             summary_text="no event",
             activity_level="low",
             main_subjects=[],
-            has_important_event=False,
         ),
         events=[],
         analysis_notes=[],
     )
 
-    _container.set_analysis_ports_for_tests(
-        FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1)
-    )
+    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
     session_factory = pg_db_factory
     db = session_factory()
     try:

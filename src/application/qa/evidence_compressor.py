@@ -46,8 +46,8 @@ def compress_query_plan(query_plan: QueryPlan) -> str:
         parts.append(f"主体={'、'.join(query_plan.subjects)}")
     if query_plan.event_types:
         parts.append(f"类型={'、'.join(query_plan.event_types)}")
-    if query_plan.importance_levels:
-        parts.append(f"重要性={'、'.join(query_plan.importance_levels)}")
+    if query_plan.attention is not None:
+        parts.append(f"关注={'需关注' if query_plan.attention else '常规'}")
     return " | ".join(parts)
 
 
@@ -111,12 +111,12 @@ def compress_sessions(sessions: list[SessionEvidence]) -> str:
         start = s.session_start_time.strftime("%m-%d %H:%M")
         end = s.session_end_time.strftime("%H:%M")
         subjects = "、".join(s.main_subjects) if s.main_subjects else "无"
-        important = "yes" if s.has_important_event else "no"
+        attention = "yes" if s.has_attention_event else "no"
         summary = _truncate(s.summary_text, MAX_SUMMARY_LENGTH)
 
         line = (
             f"S{s.id} | {start}~{end} | activity={s.activity_level}"
-            f" | important={important} | subjects={subjects}"
+            f" | attention={attention} | subjects={subjects}"
             f" | summary={summary}"
         )
         lines.append(line)
@@ -152,7 +152,7 @@ def compress_events(events: list[EventEvidence]) -> str:
         detail = _truncate(e.detail, MAX_DETAIL_LENGTH)
 
         line = (
-            f"E{e.id} | {time_str} | {e.importance_level} | {e.event_type}"
+            f"E{e.id} | {time_str} | {'需关注' if e.attention else '常规'} | {e.event_type}"
             f" | subject={subject} | summary={summary}"
         )
         if detail and detail != summary:

@@ -4,7 +4,7 @@ Given the ``state=success`` checkpoints for the current
 ``analysis_run_id``, build the canonical :class:`EventRecord` list
 and the merged ``VideoSession.summary_text`` /
 ``activity_level`` / ``main_subjects_json`` /
-``has_important_event`` / ``analysis_notes_json`` projections.
+``has_attention_event`` / ``analysis_notes_json`` projections.
 
 The replace step (``replace_session_events``) and the merge step
 (``merge_session_fields``) are split so the slim Celery task can
@@ -20,10 +20,35 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from src.models.event_record import EventRecord
+from src.models.home_profile import HomeProfile
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.video_session import VideoSession
+from src.schemas.home_profile import coerce_focus_points
+from src.services.attention import attention_focus_keys, is_attention_event
 from src.services.video_analysis.mapper import build_event_record_from_recognized_event
 from src.services.video_analysis.schemas import RecognitionResultDTO
+
+
+def _profile_focus_items(db: Session):
+    profile = db.query(HomeProfile).order_by(HomeProfile.id.asc()).first()
+    return coerce_focus_points(profile.focus_points_json) if profile else []
+
+
+def _declared_focus_keys(db: Session) -> set[str]:
+    return {item.key for item in _profile_focus_items(db) if item.enabled}
+
+
+def attention_keys_for_db(db: Session) -> frozenset[str]:
+    return attention_focus_keys(_profile_focus_items(db))
+
+
+def _is_attention(event: EventRecord, attention_keys: frozenset[str]) -> bool:
+    return is_attention_event(
+        event_type=event.event_type,
+        related_entities=event.related_entities_json,
+        focus_matches=event.focus_matches_json,
+        attention_keys=attention_keys,
+    )
 
 
 def completed_results_for_run(
@@ -45,17 +70,20 @@ def completed_results_for_run(
     )
     results: list[tuple[int, int, RecognitionResultDTO]] = []
     events: list[EventRecord] = []
+    allowed_focus_keys = _declared_focus_keys(db)
     for checkpoint in checkpoints:
         if checkpoint.event_payload is None:
             continue
         result = RecognitionResultDTO.model_validate(checkpoint.event_payload)
         results.append((checkpoint.chunk_index, checkpoint.sub_chunk_index, result))
         for item in result.events:
-            events.append(
-                build_event_record_from_recognized_event(
-                    session, item, base_offset_seconds=checkpoint.start_offset_seconds
-                )
+            event = build_event_record_from_recognized_event(
+                session, item, base_offset_seconds=checkpoint.start_offset_seconds
             )
+            event.focus_matches_json = [
+                key for key in (event.focus_matches_json or []) if key in allowed_focus_keys
+            ]
+            events.append(event)
     return results, events
 
 
@@ -63,17 +91,18 @@ def merge_session_fields(
     session: VideoSession,
     structured_results: list[tuple[int, int, RecognitionResultDTO]],
     events: list[EventRecord],
+    *,
+    attention_keys: frozenset[str] = frozenset(),
 ) -> None:
     """Fold per-sub-chunk summaries into the session-level projection."""
+    has_attention_event = any(_is_attention(event, attention_keys) for event in events)
     if not structured_results:
         session.summary_text = (
             f"分段识别完成，共识别 {len(events)} 个事件" if events else "未识别到有效事件"
         )
         session.activity_level = "medium" if events else "low"
         session.main_subjects_json = []
-        session.has_important_event = any(
-            event.importance_level in {"high", "medium"} for event in events
-        )
+        session.has_attention_event = has_attention_event
         session.analysis_notes_json = []
         return
 
@@ -81,10 +110,8 @@ def merge_session_fields(
     if len(structured_results) == 1:
         summary_lines.append(structured_results[0][2].session_summary.summary_text)
     else:
-        for chunk_index, sub_index, result in structured_results:
-            summary_lines.append(
-                f"片段{chunk_index + 1}-{sub_index + 1}: {result.session_summary.summary_text}"
-            )
+        for _chunk_index, sub_index, result in structured_results:
+            summary_lines.append(f"文件{sub_index + 1}: {result.session_summary.summary_text}")
 
     activity_score = {"low": 1, "medium": 2, "high": 3}
     highest_activity = "low"
@@ -92,13 +119,11 @@ def merge_session_fields(
     merged_subjects: list[str] = []
     merged_notes: list[dict[str, str]] = []
     notes_seen: set[tuple[str, str]] = set()
-    has_important_event = any(event.importance_level in {"high", "medium"} for event in events)
 
     for _, _, result in structured_results:
         summary = result.session_summary
         if activity_score[summary.activity_level] > activity_score[highest_activity]:
             highest_activity = summary.activity_level
-        has_important_event = has_important_event or summary.has_important_event
 
         for subject in summary.main_subjects:
             key = subject.strip()
@@ -117,7 +142,7 @@ def merge_session_fields(
     session.summary_text = "\n".join(summary_lines)
     session.activity_level = highest_activity
     session.main_subjects_json = merged_subjects
-    session.has_important_event = has_important_event
+    session.has_attention_event = has_attention_event
     session.analysis_notes_json = merged_notes
 
 
@@ -134,6 +159,7 @@ def replace_session_events(db: Session, session_id: int, events: list[EventRecor
 
 
 __all__ = [
+    "attention_keys_for_db",
     "completed_results_for_run",
     "merge_session_fields",
     "replace_session_events",

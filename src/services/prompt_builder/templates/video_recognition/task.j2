@@ -2,5 +2,13 @@
 任务目标: 对当前 session 做结构化识别，输出可入库事件。
 会话上下文: session_id={{ session_context.session_id }}; source_id={{ session_context.source_id }}; start={{ session_start_time_iso }}; end={{ session_end_time_iso }}; duration={{ session_context.total_duration_seconds }}; segment_index={{ session_context.segment_index }}; segment_start_offset_sec={{ session_context.segment_start_offset_sec }}; segment_duration_seconds={{ session_context.segment_duration_seconds }}.
 策略上下文: ingest_type={{ strategy_context.ingest_type | compact_text }}; source_type={{ strategy_context.source_type | compact_text }}; strategy_note={{ strategy_context.strategy_note | compact_text }}.
-事件抽取规则: event_type 枚举={{ event_type_list | compact_list }}; analysis_note_type 枚举={{ note_type_list | compact_list }}; merge_similar_actions=true; split_only_on_significant_change=true.
-最终约束: 只能输出 JSON 对象; 所有 offset 必须为非负数且 end>=start; offset 以当前输入视频片段起点为 0 秒; event_type 必须来自枚举; importance_level 必须来自 low/medium/high; detail 需详细描述可观察事实.
+事件抽取规则:
+event_type 定义（必须从中选择，禁止自造或输出英文别名）:
+{% for item in event_type_definitions %}- {{ item.type }}: {{ item.desc }}
+{% endfor %}类型边界（避免混用）:
+- appear/enter/leave 侧重“出现/进入/离开的动作与方向”；stay 侧重“在场停留”。
+- pet_activity 指有明确活动（走动/奔跑/玩耍/嗅探）；pet_rest 指休息或静止（趴卧/睡觉）；仅在场但无明显活动时用 pet_stay。
+- member_appear 用于首次出现或短暂经过；持续在场且无进出动作用 member_stay。
+- 仅当无法归入任何具体类型时才用 other，禁止用 other 兜底常见场景。
+analysis_note_type 枚举={{ note_type_list | compact_list }}; merge_similar_actions=true; split_only_on_significant_change=true.
+最终约束: 只能输出 JSON 对象; 所有 offset 必须为非负数且 end>=start; offset 以当前输入视频片段起点为 0 秒; event_type 必须来自上面定义; detail 需详细描述可观察事实; 所有自然语言字段使用简体中文.

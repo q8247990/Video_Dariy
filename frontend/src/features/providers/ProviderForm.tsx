@@ -19,13 +19,42 @@ type FormState = {
   model_name: string
   timeout_seconds: number
   retry_count: number
+  max_model_len: string
+  max_output_tokens: string
   enabled: boolean
   supports_vision: boolean
   supports_qa: boolean
   supports_tool_calling: boolean
 }
 
+function readExtraString(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  return ''
+}
+
+function buildExtraConfigJson(
+  form: FormState,
+  base?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const extra: Record<string, unknown> = { ...(base ?? {}) }
+  const entries: [string, string][] = [
+    ['max_model_len', form.max_model_len],
+    ['max_output_tokens', form.max_output_tokens],
+  ]
+  for (const [key, raw] of entries) {
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      extra[key] = parsed
+    } else {
+      delete extra[key]
+    }
+  }
+  return extra
+}
+
 function getInitialState(initialValue?: Provider): FormState {
+  const extra: Record<string, unknown> = initialValue?.extra_config_json ?? {}
   return {
     provider_name: initialValue?.provider_name ?? '',
     api_base_url: initialValue?.api_base_url ?? '',
@@ -33,6 +62,8 @@ function getInitialState(initialValue?: Provider): FormState {
     model_name: initialValue?.model_name ?? '',
     timeout_seconds: initialValue?.timeout_seconds ?? 60,
     retry_count: initialValue?.retry_count ?? 3,
+    max_model_len: readExtraString(extra.max_model_len),
+    max_output_tokens: readExtraString(extra.max_output_tokens),
     enabled: initialValue?.enabled ?? true,
     supports_vision: initialValue?.supports_vision ?? false,
     supports_qa: initialValue?.supports_qa ?? true,
@@ -89,6 +120,7 @@ export function ProviderForm({
         model_name: form.model_name,
         timeout_seconds: form.timeout_seconds,
         retry_count: form.retry_count,
+        extra_config_json: buildExtraConfigJson(form, initialValue?.extra_config_json),
         enabled: form.enabled,
         supports_vision: form.supports_vision,
         supports_qa: form.supports_qa,
@@ -108,7 +140,7 @@ export function ProviderForm({
       model_name: form.model_name,
       timeout_seconds: form.timeout_seconds,
       retry_count: form.retry_count,
-      extra_config_json: {},
+      extra_config_json: buildExtraConfigJson(form),
       enabled: form.enabled,
       supports_vision: form.supports_vision,
       supports_qa: form.supports_qa,
@@ -224,6 +256,31 @@ export function ProviderForm({
             onChange={(event) =>
               setForm((old) => ({ ...old, retry_count: Number(event.target.value) || 0 }))
             }
+          />
+        </label>
+      </div>
+
+      <div className="inline-fields">
+        <label>
+          {t('providers.form_max_model_len')}
+          <input
+            type="number"
+            min={1}
+            value={form.max_model_len}
+            onChange={(event) => setForm((old) => ({ ...old, max_model_len: event.target.value }))}
+            placeholder={t('providers.form_max_model_len_placeholder')}
+          />
+        </label>
+        <label>
+          {t('providers.form_max_output_tokens')}
+          <input
+            type="number"
+            min={1}
+            value={form.max_output_tokens}
+            onChange={(event) =>
+              setForm((old) => ({ ...old, max_output_tokens: event.target.value }))
+            }
+            placeholder={t('providers.form_max_output_tokens_placeholder')}
           />
         </label>
       </div>

@@ -26,7 +26,7 @@ class VideoSession(Base):
     summary_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     activity_level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     main_subjects_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    has_important_event: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    has_attention_event: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     analysis_notes_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     last_analyzed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

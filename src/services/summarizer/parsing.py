@@ -43,6 +43,7 @@ def parse_summary_with_retry(
     initial_response_text: Optional[str],
     prompt: str,
     locale: Optional[str] = None,
+    max_tokens: int = 8192,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], bool]:
     """Parse ``initial_response_text``; on failure, retry once via ``retry_client``.
 
@@ -86,7 +87,7 @@ def parse_summary_with_retry(
             {"role": "user", "content": retry_prompt},
         ],
         temperature=0,
-        max_tokens=8192,
+        max_tokens=max_tokens,
     )
     parsed = parse_daily_summary_output(retry_text or "")
     return (

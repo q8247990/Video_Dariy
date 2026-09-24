@@ -132,10 +132,9 @@ def _build_tools(locale: str | None = None) -> list[dict[str, Any]]:
                         "items": {"type": "string"},
                         "description": get_mcp_field_description("event_types", locale),
                     },
-                    "importance_levels": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "description": get_mcp_field_description("importance_levels", locale),
+                    "attention": {
+                        "type": "boolean",
+                        "description": get_mcp_field_description("attention", locale),
                     },
                     "limit": {
                         "type": "integer",

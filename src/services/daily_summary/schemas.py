@@ -34,7 +34,6 @@ class SubjectEventSummary(BaseModel):
     event_type: Optional[str] = None
     title: str
     summary: str
-    importance_level: Optional[str] = None
     recognition_status: str
 
 
@@ -50,4 +49,3 @@ class AttentionCandidate(BaseModel):
     event_type: Optional[str] = None
     title: str
     summary: str
-    importance_level: Optional[str] = None

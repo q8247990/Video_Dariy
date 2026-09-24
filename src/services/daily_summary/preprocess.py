@@ -1,7 +1,8 @@
 from collections import defaultdict
-from typing import Literal, Optional, cast
+from typing import Literal, cast
 
 from src.models.event_record import EventRecord
+from src.services.attention import is_attention_event
 from src.services.daily_summary.schemas import (
     AttentionCandidate,
     SubjectEventSection,
@@ -9,12 +10,6 @@ from src.services.daily_summary.schemas import (
 )
 
 SubjectType = Literal["member", "pet"]
-
-ATTENTION_EVENT_TYPES = {
-    "unknown_person_appear",
-    "abnormal_stay",
-    "scene_attention_needed",
-}
 
 
 def build_known_subjects(home_context: dict) -> list[dict[str, str]]:
@@ -73,7 +68,6 @@ def build_subject_event_mapping(
                     event_type=event.event_type,
                     title=_event_title(event),
                     summary=_event_summary(event),
-                    importance_level=event.importance_level,
                     recognition_status=recognition_status,
                 )
             )
@@ -104,15 +98,18 @@ def build_subject_event_mapping(
 
 def extract_attention_candidates(
     events: list[EventRecord],
-    mapped_event_ids: Optional[set[int]] = None,
+    *,
+    attention_keys: frozenset[str] = frozenset(),
 ) -> list[AttentionCandidate]:
-    mapped_ids = mapped_event_ids or set()
     candidates: list[AttentionCandidate] = []
 
     for event in events:
-        in_attention_type = event.event_type in ATTENTION_EVENT_TYPES
-        high_importance_unmapped = event.importance_level == "high" and event.id not in mapped_ids
-        if not in_attention_type and not high_importance_unmapped:
+        if not is_attention_event(
+            event_type=event.event_type,
+            related_entities=event.related_entities_json,
+            focus_matches=event.focus_matches_json,
+            attention_keys=attention_keys,
+        ):
             continue
 
         candidates.append(
@@ -121,7 +118,6 @@ def extract_attention_candidates(
                 event_type=event.event_type,
                 title=_event_title(event),
                 summary=_event_summary(event),
-                importance_level=event.importance_level,
             )
         )
 

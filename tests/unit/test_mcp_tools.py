@@ -209,7 +209,6 @@ def test_call_tool_ask_home_monitor_success(pg_db: Session, monkeypatch) -> None
                     },
                     "subjects": [],
                     "event_types": [],
-                    "importance_levels": [],
                     "use_daily_summary_first": False,
                     "use_session_summary_first": True,
                     "need_event_details": True,

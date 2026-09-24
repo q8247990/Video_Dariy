@@ -20,10 +20,7 @@
    - 如果用户问"有没有异常/可疑"，映射到 unknown_person_appear、abnormal_stay、scene_attention_needed。
    - 如果用户问"有没有人来"，映射到 member_appear、member_enter、unknown_person_appear。
    - 如果无法确定具体类型，留空表示不限制。
-7. importance_levels 只能从 low、medium、high 中选取。
-   - 如果用户强调"重要""关键""异常"，设为 ["high"]。
-   - 如果用户强调"重要的和一般的"，设为 ["high", "medium"]。
-   - 如果无特殊强调，留空表示不限制。
+7. attention 为布尔过滤：当用户强调"重要""关键""异常""需要关注"时设为 true；否则留空表示不限制。
 8. question_mode 判断规则：
    - overview：用户想了解整体情况、概览、总结
    - latest：用户想知道最新/最近一条事件
@@ -52,7 +49,7 @@
   },
   "subjects": ["string, from known subject list"],
   "event_types": ["string, from event type enum"],
-  "importance_levels": ["low|medium|high"],
+  "attention": true,
   "use_daily_summary_first": true,
   "use_session_summary_first": true,
   "need_event_details": true,

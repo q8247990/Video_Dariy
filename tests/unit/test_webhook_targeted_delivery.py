@@ -165,9 +165,7 @@ def test_send_webhook_task_n_subscribers_yield_n_targeted_deliveries(
         assert {d.webhook_id for d in deliveries} == set(hook_ids)
         assert {d.status for d in deliveries} == {"success"}
         task_logs = (
-            verify_db.query(TaskLog)
-            .filter(TaskLog.task_type == TaskType.WEBHOOK_PUSH)
-            .all()
+            verify_db.query(TaskLog).filter(TaskLog.task_type == TaskType.WEBHOOK_PUSH).all()
         )
         assert len(task_logs) == 3
         assert all(log.status == TaskStatus.SUCCESS for log in task_logs)

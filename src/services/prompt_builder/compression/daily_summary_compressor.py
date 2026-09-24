@@ -27,17 +27,6 @@ def _normalize_text(value: str) -> str:
     return " ".join(text.split())
 
 
-def _importance_rank(value: str | None) -> int:
-    level = (value or "").strip().lower()
-    if level == "high":
-        return 3
-    if level == "medium":
-        return 2
-    if level == "low":
-        return 1
-    return 0
-
-
 def _truncate_text(value: str, max_len: int) -> str:
     text = (value or "").strip()
     if len(text) <= max_len:
@@ -57,7 +46,6 @@ def _compress_subject_section(section: dict[str, Any]) -> dict[str, Any]:
         event_type = str(item.get("event_type") or "unknown")
         title = str(item.get("title") or "未命名事件").strip()
         summary = str(item.get("summary") or "").strip()
-        importance_level = str(item.get("importance_level") or "")
         recognition_status = str(item.get("recognition_status") or "unknown")
 
         dedup_key = "|".join(
@@ -75,26 +63,22 @@ def _compress_subject_section(section: dict[str, Any]) -> dict[str, Any]:
                 "title": title,
                 "summary": _truncate_text(summary, MAX_CLUSTER_SUMMARY_LEN),
                 "occurrence_count": 1,
-                "max_importance_rank": _importance_rank(importance_level),
-                "importance_level": importance_level,
+                "attention": event_type in RISK_EVENT_TYPES,
                 "recognition_status": recognition_status,
             }
             continue
 
         cluster["occurrence_count"] += 1
-        current_rank = _importance_rank(importance_level)
-        if current_rank > int(cluster["max_importance_rank"]):
-            cluster["max_importance_rank"] = current_rank
-            cluster["importance_level"] = importance_level
+        if event_type in RISK_EVENT_TYPES:
+            cluster["attention"] = True
         if recognition_status == "confirmed":
             cluster["recognition_status"] = "confirmed"
 
     clusters = list(cluster_map.values())
 
-    def _cluster_rank(item: dict[str, Any]) -> tuple[int, int, int, int]:
+    def _cluster_rank(item: dict[str, Any]) -> tuple[int, int, int]:
         return (
-            int(item.get("max_importance_rank") or 0),
-            1 if item.get("event_type") in RISK_EVENT_TYPES else 0,
+            1 if item.get("attention") else 0,
             int(item.get("occurrence_count") or 0),
             1 if item.get("recognition_status") == "confirmed" else 0,
         )
@@ -110,9 +94,8 @@ def _compress_subject_section(section: dict[str, Any]) -> dict[str, Any]:
     long_tail_candidates = clusters[primary_keep:]
     long_tail_candidates.sort(
         key=lambda item: (
-            1 if item.get("event_type") in RISK_EVENT_TYPES else 0,
+            1 if item.get("attention") else 0,
             1 if str(item.get("event_type") or "") not in selected_types else 0,
-            int(item.get("max_importance_rank") or 0),
             int(item.get("occurrence_count") or 0),
         ),
         reverse=True,
@@ -140,7 +123,6 @@ def _compress_attention_candidates(
         event_type = str(item.get("event_type") or "unknown")
         title = str(item.get("title") or "未命名关注项").strip()
         summary = str(item.get("summary") or "").strip()
-        importance_level = str(item.get("importance_level") or "")
         dedup_key = "|".join([event_type, _normalize_text(title), _normalize_text(summary)])
 
         cluster = cluster_map.get(dedup_key)
@@ -150,21 +132,14 @@ def _compress_attention_candidates(
                 "title": title,
                 "summary": _truncate_text(summary, MAX_ATTENTION_SUMMARY_LEN),
                 "occurrence_count": 1,
-                "max_importance_rank": _importance_rank(importance_level),
-                "importance_level": importance_level,
             }
             continue
 
         cluster["occurrence_count"] += 1
-        current_rank = _importance_rank(importance_level)
-        if current_rank > int(cluster["max_importance_rank"]):
-            cluster["max_importance_rank"] = current_rank
-            cluster["importance_level"] = importance_level
 
     rows = list(cluster_map.values())
     rows.sort(
         key=lambda item: (
-            int(item.get("max_importance_rank") or 0),
             1 if item.get("event_type") in RISK_EVENT_TYPES else 0,
             int(item.get("occurrence_count") or 0),
         ),

@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from sqlalchemy import case, text
+from sqlalchemy import ColumnElement, case, or_, text
 from sqlalchemy.orm import Session
 
 from src.application.qa.schemas import (
@@ -12,9 +12,37 @@ from src.application.qa.schemas import (
 )
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
+from src.models.home_profile import HomeProfile
 from src.models.video_session import VideoSession
+from src.schemas.home_profile import coerce_focus_points
+from src.services.attention import ATTENTION_EVENT_TYPES, attention_focus_keys, is_attention_event
 
 logger = logging.getLogger(__name__)
+
+
+def _attention_focus_keys(db: Session) -> frozenset[str]:
+    profile = db.query(HomeProfile).order_by(HomeProfile.id.asc()).first()
+    if profile is None:
+        return frozenset()
+    return attention_focus_keys(coerce_focus_points(profile.focus_points_json))
+
+
+def _attention_condition(db: Session, keys: frozenset[str]) -> ColumnElement[bool]:
+    conditions: list[ColumnElement[bool]] = [
+        EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))
+    ]
+    conditions.append(
+        text(
+            "EXISTS (SELECT 1 FROM json_array_elements(event_record.related_entities_json) e "
+            "WHERE e->>'entity_type' = 'unknown_person')"
+        )
+    )
+    if keys:
+        keys_literal = ", ".join(f"'{key}'" for key in sorted(keys))
+        conditions.append(
+            text(f"(event_record.focus_matches_json::jsonb ?| array[{keys_literal}])")
+        )
+    return or_(*conditions)
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +105,8 @@ def retrieve_sessions(
 
     # 排序策略
     if question_mode == "risk_check":
-        importance_score = case(
-            (VideoSession.has_important_event.is_(True), 1),
-            else_=0,
-        )
-        query = query.order_by(importance_score.desc(), VideoSession.session_start_time.desc())
+        attention_score = case((VideoSession.has_attention_event.is_(True), 1), else_=0)
+        query = query.order_by(attention_score.desc(), VideoSession.session_start_time.desc())
     else:
         query = query.order_by(VideoSession.session_start_time.desc())
 
@@ -97,7 +122,7 @@ def retrieve_sessions(
                 summary_text=row.summary_text or "",
                 activity_level=row.activity_level or "",
                 main_subjects=row.main_subjects_json or [],
-                has_important_event=bool(row.has_important_event),
+                has_attention_event=bool(row.has_attention_event),
                 analysis_notes=row.analysis_notes_json or [],
             )
         )
@@ -134,9 +159,12 @@ def retrieve_events(
     if filters.event_types:
         query = query.filter(EventRecord.event_type.in_(filters.event_types))
 
-    # importance_level 过滤
-    if filters.importance_levels:
-        query = query.filter(EventRecord.importance_level.in_(filters.importance_levels))
+    attention_keys = _attention_focus_keys(db)
+
+    if filters.attention is True:
+        query = query.filter(_attention_condition(db, attention_keys))
+    elif filters.attention is False:
+        query = query.filter(~_attention_condition(db, attention_keys))
 
     # 主体过滤：PostgreSQL JSON 查询
     if filters.subjects:
@@ -146,12 +174,8 @@ def retrieve_events(
 
     # 排序策略
     if question_mode == "risk_check":
-        importance_score = case(
-            (EventRecord.importance_level == "high", 3),
-            (EventRecord.importance_level == "medium", 2),
-            else_=1,
-        )
-        query = query.order_by(importance_score.desc(), EventRecord.event_start_time.desc())
+        attention_score = case((_attention_condition(db, attention_keys), 1), else_=0)
+        query = query.order_by(attention_score.desc(), EventRecord.event_start_time.desc())
     elif question_mode == "latest":
         query = query.order_by(EventRecord.event_start_time.desc())
     else:
@@ -167,7 +191,12 @@ def retrieve_events(
                 session_id=row.session_id,
                 event_start_time=row.event_start_time,
                 event_type=row.event_type or "",
-                importance_level=row.importance_level or "",
+                attention=is_attention_event(
+                    event_type=row.event_type,
+                    related_entities=row.related_entities_json,
+                    focus_matches=row.focus_matches_json,
+                    attention_keys=attention_keys,
+                ),
                 title=row.title or "",
                 summary=row.summary or "",
                 detail=row.detail or "",

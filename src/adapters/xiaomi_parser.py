@@ -58,8 +58,10 @@ class XiaomiDirectoryParser:
 
             start_time = self._to_utc(datetime(year, month, day, hour, minute, second))
 
-            # Estimate duration (typically Xiaomi videos are 60 seconds)
-            # Without ffprobe, we assume 60s for now
+            # Fallback estimate only: the filename carries no length. The
+            # real duration is probed from the file at the dedupe/persistence
+            # boundary; this 60s value is used when the file is absent or
+            # ffprobe fails.
             duration = 60
             end_time = start_time + timedelta(seconds=duration)
 

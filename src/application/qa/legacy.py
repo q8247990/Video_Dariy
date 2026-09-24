@@ -22,6 +22,7 @@ from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
 from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
+from src.services.provider_generation_limits import resolve_max_output_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ class LegacyQAStrategy:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
+                max_tokens=resolve_max_output_tokens(self.provider, scene_default=None),
                 response_format={"type": "json_object"},
             )
             record_token_usage(
@@ -165,6 +167,7 @@ class LegacyQAStrategy:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.2,
+                max_tokens=resolve_max_output_tokens(self.provider, scene_default=None),
             )
             record_token_usage(
                 self.db,

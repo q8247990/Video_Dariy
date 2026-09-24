@@ -1,15 +1,13 @@
 """Sub-chunk execution stage.
 
 Performs the one piece of work that *cannot* hold a checked-out DB
-connection: the ffmpeg-decode (when multiple files are concatenated)
-followed by the vLLM HTTP request. Everything in this module is
-deliberately DB-free; the caller passes a fully-loaded
-:class:`LLMGatewayPort` and receives back a :class:`SubChunkRunResult`
-that the checkpoint writer then persists.
+connection: reading one file's MP4 bytes followed by the vLLM HTTP
+request. Everything in this module is deliberately DB-free; the caller
+passes a fully-loaded :class:`LLMGatewayPort` and receives back a
+:class:`SubChunkRunResult` that the checkpoint writer then persists.
 
 The only "side effect" of this stage is the read of file bytes from
-disk (and, for multi-file sub-chunks, an ffmpeg concatenation in
-memory). It does not import :mod:`src.db.session` and does not take a
+disk. It does not import :mod:`src.db.session` and does not take a
 SQLAlchemy session argument — that's the structural enforcement of
 the "no long-lived DB connection during LLM call" requirement.
 """
@@ -23,10 +21,8 @@ from src.application.ports.llm_gateway import LLMGatewayPort
 from src.models.llm_provider import LLMProvider
 from src.services.analysis.chunk_plan import SubChunkPlan
 from src.services.analysis.constants import RAW_MP4_NUM_FRAMES
-from src.services.session_analysis_video import (
-    build_chunk_video_data_url,
-    session_chunk_from_sub_chunk,
-)
+from src.services.provider_generation_limits import resolve_max_output_tokens
+from src.services.session_analysis_video import build_video_data_url
 from src.services.video_analysis.schemas import RecognitionResultDTO
 
 
@@ -77,22 +73,17 @@ def _token_counts_from_usage(
     return prompt_tokens, completion_tokens, total_tokens
 
 
-def build_sub_chunk_video_url(
-    *,
-    plan_chunk_index: int,
-    sub_chunk: SubChunkPlan,
-) -> str:
-    """Read / concatenate the sub-chunk's MP4 bytes and base64-wrap them.
+def build_sub_chunk_video_url(sub_chunk: SubChunkPlan) -> str:
+    """Read the sub-chunk's single MP4 and base64-wrap it.
 
-    Pure function — no LLM, no DB. Exposed separately so unit tests
-    can pin the ``data:video/mp4;base64,...`` prefix and the
-    ``RAW_MP4_NUM_FRAMES`` ``media_io_kwargs`` constant without
-    touching the gateway.
+    Pure function — no LLM, no DB. A sub-chunk always maps to exactly
+    one file, so there is no concatenation path.
     """
-    projected = session_chunk_from_sub_chunk(
-        sub_chunk.to_sub_chunk(), parent_chunk_index=plan_chunk_index
-    )
-    return build_chunk_video_data_url(projected)
+    if not sub_chunk.file_paths:
+        raise ValueError(
+            f"sub-chunk {sub_chunk.chunk_index}-{sub_chunk.sub_chunk_index} has no source file"
+        )
+    return build_video_data_url(sub_chunk.file_paths[0])
 
 
 def build_sub_chunk_extra_body() -> dict[str, Any]:
@@ -105,7 +96,6 @@ def execute_sub_chunk(
     client: LLMGatewayPort,
     provider: LLMProvider,
     sub_chunk: SubChunkPlan,
-    plan_chunk_index: int,
     system_prompt: str,
     user_prompt: str,
     video_data_url: str | None = None,
@@ -134,11 +124,9 @@ def execute_sub_chunk(
     monkey-patchable names so the existing unit-test fixtures keep
     working unchanged.
     """
-    del provider
+    max_output_tokens = resolve_max_output_tokens(provider, scene_default=8192)
     if video_data_url is None:
-        video_data_url = build_sub_chunk_video_url(
-            plan_chunk_index=plan_chunk_index, sub_chunk=sub_chunk
-        )
+        video_data_url = build_sub_chunk_video_url(sub_chunk)
     if extra_body is None:
         extra_body = build_sub_chunk_extra_body()
     messages = _build_messages(
@@ -150,7 +138,7 @@ def execute_sub_chunk(
     response_text = client.chat_completion(
         messages=messages,
         temperature=0,
-        max_tokens=8192,
+        max_tokens=max_output_tokens,
         response_format={"type": "json_object"},
         extra_body=extra_body,
     )

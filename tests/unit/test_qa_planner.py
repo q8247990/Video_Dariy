@@ -55,7 +55,7 @@ def test_normalize_query_plan_valid_input() -> None:
         },
         "subjects": ["爸爸"],
         "event_types": ["member_appear", "member_stay"],
-        "importance_levels": ["high", "medium"],
+        "attention": True,
         "use_daily_summary_first": False,
         "use_session_summary_first": True,
         "need_event_details": True,
@@ -69,7 +69,7 @@ def test_normalize_query_plan_valid_input() -> None:
     assert plan.time_range.end == datetime(2026, 3, 21, 12, 0, 0)
     assert plan.subjects == ["爸爸"]
     assert set(plan.event_types) == {"member_appear", "member_stay"}
-    assert set(plan.importance_levels) == {"high", "medium"}
+    assert plan.attention is True
     assert plan.use_daily_summary_first is False
     assert plan.limit == 25
 

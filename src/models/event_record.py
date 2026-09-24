@@ -33,12 +33,12 @@ class EventRecord(Base):
     title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    importance_level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
     offset_start_sec: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 3), nullable=True)
     offset_end_sec: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 3), nullable=True)
     related_entities_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     observed_actions_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     interpreted_state_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    focus_matches_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     raw_result: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
 
     source: Mapped["VideoSource"] = relationship("VideoSource")

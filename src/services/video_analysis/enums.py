@@ -27,21 +27,24 @@ ANALYSIS_NOTE_TYPES = {
 }
 
 EVENT_TYPE_DEFINITIONS: list[dict[str, str]] = [
-    {"type": "member_appear", "desc": "家庭成员出现在画面中"},
-    {"type": "member_enter", "desc": "成员进入画面或区域"},
-    {"type": "member_leave", "desc": "成员离开画面或区域"},
-    {"type": "member_stay", "desc": "成员持续停留"},
-    {"type": "unknown_person_appear", "desc": "陌生人/未知人员出现"},
-    {"type": "pet_appear", "desc": "宠物出现在画面中"},
-    {"type": "pet_activity", "desc": "宠物活动（走动、玩耍等）"},
-    {"type": "pet_rest", "desc": "宠物休息或静止"},
+    {"type": "member_appear", "desc": "家庭成员出现在画面中（首次出现或短暂经过，无明确进出动作）"},
+    {"type": "member_enter", "desc": "成员进入画面或某个区域（有明确的进入动作与方向）"},
+    {"type": "member_leave", "desc": "成员离开画面或某个区域（有明确的离开动作与方向）"},
+    {"type": "member_stay", "desc": "成员在画面内持续停留（在场时间较长且无明确进出动作）"},
+    {"type": "unknown_person_appear", "desc": "陌生人/未知人员出现（无法匹配家庭档案的人员）"},
+    {"type": "pet_appear", "desc": "宠物出现在画面中（首次出现或短暂经过）"},
+    {"type": "pet_enter", "desc": "宠物进入画面或某个区域（有明确的进入动作）"},
+    {"type": "pet_leave", "desc": "宠物离开画面或某个区域（有明确的离开动作）"},
+    {"type": "pet_stay", "desc": "宠物在画面内持续停留（无明显进出动作、也判定不出活动或休息）"},
+    {"type": "pet_activity", "desc": "宠物活动（走动、奔跑、玩耍、嗅探等明确活动）"},
+    {"type": "pet_rest", "desc": "宠物休息或静止（趴卧、睡觉、长时间不动）"},
     {"type": "member_pet_interaction", "desc": "成员与宠物互动"},
     {"type": "multi_entity_interaction", "desc": "多个对象之间互动"},
     {"type": "abnormal_stay", "desc": "异常停留（长时间不动、异常位置等）"},
     {"type": "scene_attention_needed", "desc": "场景需要关注（异常光线、物品移动等）"},
+    {"type": "other", "desc": "无法归入以上任何具体类型时才使用，禁止用它兜底常见场景"},
 ]
 
-IMPORTANCE_LEVELS = {"low", "medium", "high"}
 RECOGNITION_STATUSES = {"confirmed", "suspected", "unknown"}
 ACTIVITY_LEVELS = {"low", "medium", "high"}
 

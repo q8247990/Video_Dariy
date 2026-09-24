@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.providers.openai_client import OpenAIClient
-from src.services.session_analysis_video import SessionVideoChunk, build_chunk_video_data_url
+from src.services.session_analysis_video import build_video_data_url
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 
 
@@ -56,8 +56,7 @@ def _build_prompt() -> str:
         '  "session_summary": {\n'
         '    "summary_text": "string",\n'
         '    "activity_level": "low|medium|high",\n'
-        '    "main_subjects": ["string"],\n'
-        '    "has_important_event": true\n'
+        '    "main_subjects": ["string"]\n'
         "  },\n"
         '  "events": [\n'
         "    {\n"
@@ -70,8 +69,7 @@ def _build_prompt() -> str:
         '      "related_entities": [],\n'
         '      "observed_actions": [],\n'
         '      "interpreted_state": [],\n'
-        '      "confidence": 0.9,\n'
-        '      "importance_level": "low|medium|high"\n'
+        '      "confidence": 0.9\n'
         "    }\n"
         "  ],\n"
         '  "analysis_notes": []\n'
@@ -87,13 +85,7 @@ def test_real_llm_recognition_with_memory_chunk(tmp_path: Path) -> None:
     video_path = tmp_path / "sample_black.mp4"
     _build_sample_video(video_path)
 
-    chunk = SessionVideoChunk(
-        chunk_index=0,
-        start_offset_seconds=0,
-        duration_seconds=2,
-        file_paths=[str(video_path)],
-    )
-    data_url = build_chunk_video_data_url(chunk)
+    data_url = build_video_data_url(str(video_path))
     assert data_url.startswith("data:video/mp4;base64,")
 
     client = OpenAIClient(

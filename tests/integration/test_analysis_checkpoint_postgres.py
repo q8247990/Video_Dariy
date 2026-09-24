@@ -68,9 +68,7 @@ def _base_action(postgres_migrated_engine, monkeypatch: pytest.MonkeyPatch) -> I
         finally:
             db.close()
 
-    monkeypatch.setattr(
-        "src.tasks._analyzer_orchestration.task_db_session", _task_session
-    )
+    monkeypatch.setattr("src.tasks._analyzer_orchestration.task_db_session", _task_session)
     try:
         yield
     finally:
@@ -101,7 +99,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
             summary_text=f"summary-{index}",
             activity_level="medium",
             main_subjects=["PG"],
-            has_important_event=True,
         ),
         events=[
             RecognizedEventDTO(
@@ -115,7 +112,6 @@ def _recognition_result(index: int) -> RecognitionResultDTO:
                 observed_actions=[],
                 interpreted_state=[],
                 confidence=0.9,
-                importance_level="medium",
             )
         ],
         analysis_notes=[],
@@ -282,3 +278,90 @@ def test_analyze_session_failure_then_retry_resumes_only_remaining_on_postgres(
         assert sum(item.total_tokens for item in usage) == 45
     finally:
         verify.close()
+
+
+@pytest.mark.postgres
+def test_purge_stale_checkpoints_keeps_current_run_and_usage_rows(
+    postgres_migrated_engine,
+) -> None:
+    """A new run's claim drops the previous run's checkpoints.
+
+    Pins both halves of the cleanup contract: the old run's checkpoint
+    rows are deleted, and the ``llm_usage_log`` rows that pointed at them
+    survive (``analysis_checkpoint_id`` becomes ``NULL`` via the
+    ``ON DELETE SET NULL`` foreign key).
+    """
+    from datetime import date
+
+    from src.services.analysis.claim import purge_stale_checkpoints
+
+    db = Session(bind=postgres_migrated_engine)
+    try:
+        source = VideoSource(
+            source_name="PG purge camera",
+            camera_name="PG purge camera",
+            location_name="home",
+            source_type="local_directory",
+            config_json={"root_path": "/tmp"},
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
+        session = VideoSession(
+            source_id=source.id,
+            session_start_time=datetime.now(timezone.utc),
+            session_end_time=datetime.now(timezone.utc),
+            analysis_status="sealed",
+        )
+        db.add(session)
+        db.flush()
+
+        old = SessionAnalysisCheckpoint(
+            session_id=session.id,
+            analysis_run_id="old-run",
+            chunk_index=0,
+            sub_chunk_index=0,
+            start_offset_seconds=0,
+            input_fingerprint="fp-old",
+            state="success",
+        )
+        current = SessionAnalysisCheckpoint(
+            session_id=session.id,
+            analysis_run_id="current-run",
+            chunk_index=0,
+            sub_chunk_index=0,
+            start_offset_seconds=0,
+            input_fingerprint="fp-current",
+            state="success",
+        )
+        db.add_all([old, current])
+        db.flush()
+        usage = LLMUsageLog(
+            provider_id=None,
+            session_id=session.id,
+            analysis_checkpoint_id=old.id,
+            usage_date=date(2026, 3, 14),
+            scene="session_analysis",
+            total_tokens=10,
+        )
+        db.add(usage)
+        db.flush()
+
+        purged = purge_stale_checkpoints(db, session_id=session.id, keep_run_id="current-run")
+        db.commit()
+
+        assert purged == 1
+        remaining = (
+            db.query(SessionAnalysisCheckpoint)
+            .filter(SessionAnalysisCheckpoint.session_id == session.id)
+            .all()
+        )
+        assert [checkpoint.analysis_run_id for checkpoint in remaining] == ["current-run"]
+
+        db.expire_all()
+        preserved = db.query(LLMUsageLog).filter(LLMUsageLog.id == usage.id).one()
+        assert preserved.total_tokens == 10
+        assert preserved.analysis_checkpoint_id is None
+    finally:
+        db.rollback()
+        db.close()

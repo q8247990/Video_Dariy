@@ -387,7 +387,6 @@ def test_generate_daily_summary_structured_persist_success(
                     event_type="member_appear",
                     title="成员出现",
                     summary="爸爸上午出现在客厅并活动",
-                    importance_level="medium",
                     related_entities_json=[
                         {
                             "entity_type": "member",
@@ -405,7 +404,6 @@ def test_generate_daily_summary_structured_persist_success(
                     event_type="unknown_person_appear",
                     title="未知人员出现",
                     summary="门口出现未知人员短暂停留",
-                    importance_level="high",
                 ),
             ]
         )
@@ -845,7 +843,6 @@ def test_generate_daily_summary_enrolls_one_outbox_per_subscriber(
                 event_type="member_appear",
                 title="成员出现",
                 summary="爸爸上午出现在客厅并活动",
-                importance_level="medium",
             )
         )
         db.commit()
@@ -933,7 +930,6 @@ def test_generate_daily_summary_uses_single_pass_under_threshold(
                 event_type="member_appear",
                 title="成员出现",
                 summary="爸爸上午出现在客厅并活动",
-                importance_level="medium",
                 related_entities_json=[
                     {
                         "entity_type": "member",
@@ -1034,7 +1030,6 @@ def test_generate_daily_summary_uses_serial_path_when_threshold_is_overridden(
                     event_type="member_appear",
                     title="成员出现",
                     summary="爸爸上午出现在客厅并活动",
-                    importance_level="medium",
                     related_entities_json=[
                         {
                             "entity_type": "member",
@@ -1052,7 +1047,6 @@ def test_generate_daily_summary_uses_serial_path_when_threshold_is_overridden(
                     event_type="pet_appear",
                     title="宠物出现",
                     summary="布丁下午在沙发",
-                    importance_level="low",
                     related_entities_json=[
                         {
                             "entity_type": "pet",

@@ -7,9 +7,11 @@ from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.dashboard import get_dashboard_overview
+from src.services.home_timezone import local_day_bounds
+from src.services.summarizer.schedule import get_home_timezone
 
 
-def test_event_summary_counts_only_high_importance_in_24h(pg_db: Session) -> None:
+def _create_source_and_session(pg_db: Session, event_time: datetime) -> tuple[int, int]:
     source = VideoSource(
         source_name="source-1",
         camera_name="客厅",
@@ -20,109 +22,91 @@ def test_event_summary_counts_only_high_importance_in_24h(pg_db: Session) -> Non
     pg_db.add(source)
     pg_db.flush()
 
-    pg_db.add(source)
-    pg_db.flush()
-
     session = VideoSession(
         source_id=source.id,
-        session_start_time=datetime.utcnow() - timedelta(hours=4),
-        session_end_time=datetime.utcnow(),
+        session_start_time=event_time,
+        session_end_time=event_time + timedelta(minutes=30),
     )
     pg_db.add(session)
     pg_db.flush()
+    return source.id, session.id
 
-    now = datetime.utcnow()
-    high_event = EventRecord(
-        source_id=source.id,
-        session_id=session.id,
-        event_start_time=now - timedelta(hours=1),
-        event_end_time=now - timedelta(hours=1) + timedelta(minutes=1),
-        description="高优先级事件",
-        importance_level="high",
+
+def test_event_summary_counts_attention_events_and_focus(pg_db: Session) -> None:
+    zone = get_home_timezone(pg_db)
+    day_start, _ = local_day_bounds(zone, datetime.now(zone).date())
+    event_time = day_start + timedelta(hours=1)
+    source_id, session_id = _create_source_and_session(pg_db, event_time)
+
+    pg_db.add(
+        EventRecord(
+            source_id=source_id,
+            session_id=session_id,
+            event_start_time=event_time,
+            description="门口出现陌生人",
+            event_type="unknown_person_appear",
+        )
     )
-    medium_event = EventRecord(
-        source_id=source.id,
-        session_id=session.id,
-        event_start_time=now - timedelta(hours=2),
-        event_end_time=now - timedelta(hours=2) + timedelta(minutes=1),
-        description="包含 intrusion 关键词但仅 medium",
-        action_type="intrusion",
-        importance_level="medium",
+    pg_db.add(
+        EventRecord(
+            source_id=source_id,
+            session_id=session_id,
+            event_start_time=event_time,
+            description="成员在客厅停留",
+            event_type="member_stay",
+            focus_matches_json=["pet_status"],
+        )
     )
-    no_importance_event = EventRecord(
-        source_id=source.id,
-        session_id=session.id,
-        event_start_time=now - timedelta(hours=3),
-        event_end_time=now - timedelta(hours=3) + timedelta(minutes=1),
-        description="包含 告警 关键词但无重要级别",
-        action_type="告警",
-        importance_level=None,
-    )
-    pg_db.add(high_event)
-    pg_db.add(medium_event)
-    pg_db.add(no_importance_event)
     pg_db.commit()
 
     overview = get_dashboard_overview(pg_db)
 
-    assert overview.event_summary.important_event_count_24h == 1
+    assert overview.event_summary.attention_event_count == 1
+    focus_counts = {item.focus_key: item.count for item in overview.event_summary.focus_counts}
+    assert focus_counts.get("pet_status") == 1
 
 
-def test_important_events_list_filters_to_high_only(pg_db: Session) -> None:
-    source = VideoSource(
-        source_name="source-1",
-        camera_name="玄关",
-        location_name="玄关",
-        source_type="local_directory",
-        enabled=True,
-    )
-    pg_db.add(source)
-    pg_db.flush()
+def test_attention_events_list_is_newest_first(pg_db: Session) -> None:
+    zone = get_home_timezone(pg_db)
+    day_start, _ = local_day_bounds(zone, datetime.now(zone).date())
+    event_time = day_start + timedelta(hours=1)
+    source_id, session_id = _create_source_and_session(pg_db, event_time)
 
-    session = VideoSession(
-        source_id=source.id,
-        session_start_time=datetime.utcnow() - timedelta(hours=4),
-        session_end_time=datetime.utcnow(),
+    pg_db.add(
+        EventRecord(
+            source_id=source_id,
+            session_id=session_id,
+            event_start_time=event_time,
+            description="陌生人-较早",
+            event_type="unknown_person_appear",
+        )
     )
-    pg_db.add(session)
-    pg_db.flush()
-
-    now = datetime.utcnow()
-    event_high_old = EventRecord(
-        source_id=source.id,
-        session_id=session.id,
-        event_start_time=now - timedelta(hours=2),
-        event_end_time=now - timedelta(hours=2) + timedelta(minutes=1),
-        description="高优先级-较早",
-        importance_level="high",
+    pg_db.add(
+        EventRecord(
+            source_id=source_id,
+            session_id=session_id,
+            event_start_time=event_time + timedelta(minutes=10),
+            description="陌生人-较新",
+            event_type="unknown_person_appear",
+        )
     )
-    event_high_new = EventRecord(
-        source_id=source.id,
-        session_id=session.id,
-        event_start_time=now - timedelta(hours=1),
-        event_end_time=now - timedelta(hours=1) + timedelta(minutes=1),
-        description="高优先级-较新",
-        importance_level="high",
+    pg_db.add(
+        EventRecord(
+            source_id=source_id,
+            session_id=session_id,
+            event_start_time=event_time + timedelta(minutes=20),
+            description="成员停留不应进入需关注列表",
+            event_type="member_stay",
+        )
     )
-    event_medium = EventRecord(
-        source_id=source.id,
-        session_id=session.id,
-        event_start_time=now - timedelta(minutes=30),
-        event_end_time=now - timedelta(minutes=29),
-        description="中优先级不应进入重点列表",
-        importance_level="medium",
-    )
-    pg_db.add(event_high_old)
-    pg_db.add(event_high_new)
-    pg_db.add(event_medium)
     pg_db.commit()
 
     overview = get_dashboard_overview(pg_db, locale="zh-CN")
 
-    important_events = overview.important_events
-    assert len(important_events) == 2
-    assert important_events[0].summary == "高优先级-较新"
-    assert important_events[1].summary == "高优先级-较早"
+    attention_events = overview.attention_events
+    assert len(attention_events) == 2
+    assert attention_events[0].summary == "陌生人-较新"
+    assert attention_events[1].summary == "陌生人-较早"
 
 
 def test_latest_daily_summary_returns_date_value(pg_db: Session) -> None:

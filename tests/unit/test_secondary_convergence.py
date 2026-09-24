@@ -212,6 +212,12 @@ def test_dashboard_query_and_presenter_are_separate(pg_db: Session) -> None:
     from src.models.video_source import VideoSource
     from src.services.dashboard import queries
     from src.services.dashboard.presenter import DashboardPresenter
+    from src.services.home_timezone import local_day_bounds
+    from src.services.summarizer.schedule import get_home_timezone
+
+    zone = get_home_timezone(pg_db)
+    day_start, day_end = local_day_bounds(zone, datetime.now(zone).date())
+    event_time = day_start + timedelta(hours=1)
 
     source = VideoSource(
         source_name="s",
@@ -224,8 +230,8 @@ def test_dashboard_query_and_presenter_are_separate(pg_db: Session) -> None:
     pg_db.flush()
     session = VideoSession(
         source_id=source.id,
-        session_start_time=datetime.utcnow() - timedelta(hours=4),
-        session_end_time=datetime.utcnow(),
+        session_start_time=event_time,
+        session_end_time=event_time + timedelta(minutes=30),
     )
     pg_db.add(session)
     pg_db.flush()
@@ -233,22 +239,23 @@ def test_dashboard_query_and_presenter_are_separate(pg_db: Session) -> None:
         EventRecord(
             source_id=source.id,
             session_id=session.id,
-            event_start_time=datetime.utcnow() - timedelta(hours=1),
-            event_end_time=datetime.utcnow() - timedelta(hours=1) + timedelta(minutes=1),
-            description="高优先级",
-            importance_level="high",
+            event_start_time=event_time,
+            description="陌生人",
+            event_type="unknown_person_appear",
         )
     )
     pg_db.commit()
 
-    today, yesterday, important = queries.event_summary_counts(pg_db)
-    summary = DashboardPresenter.event_summary(today, yesterday, important)
-    assert summary.important_event_count_24h == 1
+    summary = DashboardPresenter.event_summary(
+        attention_event_count=queries.attention_event_count(pg_db, start=day_start, end=day_end),
+        focus_counts=[],
+    )
+    assert summary.attention_event_count == 1
 
-    rows = queries.important_event_rows(pg_db)
-    important_events = DashboardPresenter.important_events(rows, "zh-CN")
-    assert len(important_events) == 1
-    assert important_events[0].camera_name == "客厅"
+    rows = queries.attention_event_rows(pg_db)
+    attention_events = DashboardPresenter.attention_events(rows, "zh-CN")
+    assert len(attention_events) == 1
+    assert attention_events[0].camera_name == "客厅"
 
 
 class _ScriptedGateway(FakeLLMGateway):
@@ -324,9 +331,7 @@ def test_qa_service_routes_to_legacy_strategy_when_no_tool_calling(
         supports_tool_calling=False,
     )
     container = bootstrap_for_tests(llm_factory=factory)
-    monkeypatch.setattr(
-        "src.tasks._container.get_container", lambda: container
-    )
+    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
 
     service = QAService(pg_db, llm_factory=factory)
     result = service.answer(
@@ -353,9 +358,7 @@ def test_qa_service_routes_to_agent_strategy_when_tool_calling(
         supports_tool_calling=True,
     )
     container = bootstrap_for_tests(llm_factory=factory)
-    monkeypatch.setattr(
-        "src.tasks._container.get_container", lambda: container
-    )
+    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
 
     service = QAService(pg_db, llm_factory=factory)
     result = service.answer(

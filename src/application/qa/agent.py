@@ -18,6 +18,7 @@ from src.application.query.service import HomeQueryService
 from src.core.i18n.locale_directive import get_language_directive, get_tone_directive
 from src.services.home_profile import build_home_context
 from src.services.llm_qos import enforce_token_quota, record_token_usage
+from src.services.provider_generation_limits import resolve_max_output_tokens
 from src.services.video_analysis.enums import EVENT_TYPE_DEFINITIONS
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,7 @@ class QAAgent:
                 messages=messages,
                 tools=QA_TOOLS,
                 temperature=0.2,
+                max_tokens=resolve_max_output_tokens(self.provider, scene_default=None),
             )
 
             record_token_usage(
@@ -266,6 +268,7 @@ class QAAgent:
         final_answer = self.gateway.chat_completion(
             messages=messages,
             temperature=0.2,
+            max_tokens=resolve_max_output_tokens(self.provider, scene_default=None),
         )
 
         record_token_usage(

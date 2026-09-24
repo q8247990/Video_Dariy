@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
-import { familyTagLabel, focusPointLabel } from '../home-profile/labels'
+import { familyTagLabel } from '../home-profile/labels'
 import { getHomeOptions, getHomeProfile, saveHomeProfile } from './api'
 import { useOnboardingDraftStore } from './state'
 
@@ -114,18 +114,25 @@ export function OnboardingPersonalizeProfilePage() {
         <div>
           <p className="text-muted">{t('onboarding.home_profile_field_focus_points')}</p>
           <div className="inline-fields">
-            {options.focus_points.map((item) => (
-              <label className="checkbox-field" key={item}>
-                <input
-                  type="checkbox"
-                  checked={homeProfile.focus_points.includes(item)}
-                  onChange={() =>
-                    setHomeProfile({ focus_points: toggleValue(homeProfile.focus_points, item) })
-                  }
-                />
-                {focusPointLabel(t, item)}
-              </label>
-            ))}
+            {options.focus_points.map((preset) => {
+              const selected = homeProfile.focus_points.some((fp) => fp.key === preset.key)
+              return (
+                <label className="checkbox-field" key={preset.key}>
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() =>
+                      setHomeProfile({
+                        focus_points: selected
+                          ? homeProfile.focus_points.filter((fp) => fp.key !== preset.key)
+                          : [...homeProfile.focus_points, { ...preset }],
+                      })
+                    }
+                  />
+                  {preset.label}
+                </label>
+              )
+            })}
           </div>
         </div>
 

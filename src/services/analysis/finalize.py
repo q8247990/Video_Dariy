@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.services.analysis.aggregator import (
+    attention_keys_for_db,
     completed_results_for_run,
     merge_session_fields,
     replace_session_events,
@@ -48,12 +49,10 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
     session: VideoSession,
     task_log: TaskLog,
     analysis_run_id: str,
-    chunk_count: int,
+    file_count: int,
     sub_chunk_count: int,
     priority: str,
     raw_mp4_num_frames: int,
-    chunk_seconds: int,
-    sub_chunk_seconds: int,
     parse_modes: list[str],
     deadline_prompts: Optional[list[str]] = None,
     replace_session_events_fn: Any = None,
@@ -67,7 +66,9 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
     # in-memory copy stale otherwise.
     db.expire(session)
     structured_results, events_to_persist = completed_results_for_run(db, session, analysis_run_id)
-    merge_session_fields(session, structured_results, events_to_persist)
+    merge_session_fields(
+        session, structured_results, events_to_persist, attention_keys=attention_keys_for_db(db)
+    )
     if replace_session_events_fn is None:
         replace_session_events_fn = replace_session_events
     replaced_deleted_count = replace_session_events_fn(db, session.id, events_to_persist)
@@ -95,16 +96,13 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
     finalize_task_log(
         task_log,
         TaskStatus.SUCCESS,
-        f"Analyzed session in {chunk_count} chunks / "
-        f"{sub_chunk_count} sub-chunks, created {len(events_to_persist)} events.",
+        f"Analyzed session across {file_count} files, created {len(events_to_persist)} events.",
         {
             "session_id": session.id,
             "events_created": len(events_to_persist),
             "events_replaced_deleted": replaced_deleted_count,
-            "chunk_count": chunk_count,
-            "sub_chunk_count": sub_chunk_count,
-            "chunk_seconds": chunk_seconds,
-            "llm_chunk_seconds": sub_chunk_seconds,
+            "file_count": file_count,
+            "recognized_sub_chunks": sub_chunk_count,
             "media_num_frames": raw_mp4_num_frames,
             "parse_modes": parse_modes,
             "priority": priority,
@@ -113,8 +111,8 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
     db.commit()
     return {
         "events_created": len(events_to_persist),
-        "chunk_count": chunk_count,
-        "sub_chunk_count": sub_chunk_count,
+        "file_count": file_count,
+        "recognized_sub_chunks": sub_chunk_count,
     }
 
 

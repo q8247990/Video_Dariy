@@ -19,12 +19,12 @@ class EventBase(BaseModel):
     title: Optional[str] = None
     summary: Optional[str] = None
     detail: Optional[str] = None
-    importance_level: Optional[str] = None
     offset_start_sec: Optional[float] = None
     offset_end_sec: Optional[float] = None
     related_entities_json: Optional[Any] = None
     observed_actions_json: Optional[Any] = None
     interpreted_state_json: Optional[Any] = None
+    focus_matches_json: Optional[Any] = None
     raw_result: Optional[Any] = None
 
 

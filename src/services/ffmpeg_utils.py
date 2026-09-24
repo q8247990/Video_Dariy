@@ -3,6 +3,45 @@ import subprocess
 import tempfile
 
 
+def probe_video_duration_seconds(path: str, timeout: int = 30) -> float | None:
+    """Return the real media duration (seconds) via ``ffprobe``.
+
+    Used by the session-build dedupe stage to replace the historical
+    hard-coded ``60``-second assumption with the file's real duration.
+    Returns ``None`` (never raises) when ``ffprobe`` is missing, the
+    file cannot be read, or the output cannot be parsed to a positive
+    number — callers fall back to whatever duration they already had.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = (result.stdout or "").strip()
+    if not raw or raw.upper() == "N/A":
+        return None
+    try:
+        duration = float(raw)
+    except ValueError:
+        return None
+    return duration if duration > 0 else None
+
+
 def build_concat_file_text(paths: list[str]) -> str:
     lines = []
     for path in paths:
@@ -74,76 +113,6 @@ def run_ffmpeg_concat_to_file(
                 f"ffmpeg concat failed. copy_error={copy_err}; reencode_error={reencode_err}"
             )
         os.replace(tmp_output, output_path)
-    finally:
-        if os.path.exists(concat_file):
-            os.unlink(concat_file)
-
-
-def run_ffmpeg_concat_to_bytes(
-    source_paths: list[str],
-    timeout: int = 300,
-) -> bytes:
-    concat_content = build_concat_file_text(source_paths).encode("utf-8")
-    with tempfile.NamedTemporaryFile(mode="wb", suffix=".txt", delete=False) as tmp:
-        tmp.write(concat_content)
-        concat_file = tmp.name
-
-    try:
-        copy_cmd = [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file,
-            "-c",
-            "copy",
-            "-movflags",
-            "frag_keyframe+empty_moov",
-            "-f",
-            "mp4",
-            "pipe:1",
-        ]
-        copy_result = subprocess.run(copy_cmd, capture_output=True, timeout=timeout)
-        if copy_result.returncode == 0 and copy_result.stdout:
-            return copy_result.stdout
-
-        reencode_cmd = [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "frag_keyframe+empty_moov",
-            "-f",
-            "mp4",
-            "pipe:1",
-        ]
-        reencode_result = subprocess.run(reencode_cmd, capture_output=True, timeout=timeout)
-        if reencode_result.returncode != 0 or not reencode_result.stdout:
-            copy_err = (copy_result.stderr or b"")[-1000:].decode("utf-8", errors="ignore")
-            reencode_err = (reencode_result.stderr or b"")[-1000:].decode("utf-8", errors="ignore")
-            raise ValueError(
-                "ffmpeg concat to bytes failed. "
-                f"copy_error={copy_err}; reencode_error={reencode_err}"
-            )
-        return reencode_result.stdout
     finally:
         if os.path.exists(concat_file):
             os.unlink(concat_file)

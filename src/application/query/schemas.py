@@ -29,7 +29,7 @@ class EventFilters:
     subjects: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     event_types: list[str] = field(default_factory=list)
-    importance_levels: list[str] = field(default_factory=list)
+    attention: Optional[bool] = None
     limit: int = 20
 
 
@@ -51,7 +51,7 @@ class EventResult:
     id: int
     event_start_time: datetime
     event_type: str = ""
-    importance_level: str = ""
+    attention: bool = False
     title: str = ""
     summary: str = ""
     subjects: list[str] = field(default_factory=list)
@@ -65,7 +65,7 @@ class SessionResult:
     summary_text: str = ""
     activity_level: str = ""
     main_subjects: list[str] = field(default_factory=list)
-    has_important_event: bool = False
+    has_attention_event: bool = False
 
 
 @dataclass

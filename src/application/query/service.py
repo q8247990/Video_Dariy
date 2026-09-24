@@ -5,7 +5,7 @@
 """
 
 import logging
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from sqlalchemy import ColumnElement, func, or_, text
 from sqlalchemy.orm import Session
@@ -21,8 +21,11 @@ from src.application.query.schemas import (
 )
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
+from src.models.home_profile import HomeProfile
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.schemas.home_profile import coerce_focus_points
+from src.services.attention import ATTENTION_EVENT_TYPES, attention_focus_keys, is_attention_event
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,35 @@ logger = logging.getLogger(__name__)
 class HomeQueryService:
     def __init__(self, db: Session):
         self.db = db
+        self._attention_cache: Optional[frozenset[str]] = None
+
+    def _attention_keys(self) -> frozenset[str]:
+        if self._attention_cache is None:
+            profile = self.db.query(HomeProfile).order_by(HomeProfile.id.asc()).first()
+            self._attention_cache = (
+                attention_focus_keys(coerce_focus_points(profile.focus_points_json))
+                if profile is not None
+                else frozenset()
+            )
+        return self._attention_cache
+
+    def _attention_condition(self) -> ColumnElement[bool]:
+        conditions: list[ColumnElement[bool]] = [
+            EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))
+        ]
+        conditions.append(
+            text(
+                "EXISTS (SELECT 1 FROM json_array_elements(event_record.related_entities_json) e "
+                "WHERE e->>'entity_type' = 'unknown_person')"
+            )
+        )
+        keys = sorted(self._attention_keys())
+        if keys:
+            keys_literal = ", ".join(f"'{key}'" for key in keys)
+            conditions.append(
+                text(f"(event_record.focus_matches_json::jsonb ?| array[{keys_literal}])")
+            )
+        return or_(*conditions)
 
     # ------------------------------------------------------------------
     # get_data_availability
@@ -84,9 +116,8 @@ class HomeQueryService:
         if filters.event_types:
             query = query.filter(EventRecord.event_type.in_(filters.event_types))
 
-        # 重要程度过滤
-        if filters.importance_levels:
-            query = query.filter(EventRecord.importance_level.in_(filters.importance_levels))
+        if filters.attention is not None:
+            query = self._apply_attention_filter(query, filters.attention)
 
         # 主体过滤
         if filters.subjects:
@@ -159,7 +190,7 @@ class HomeQueryService:
                 summary_text=row.summary_text or "",
                 activity_level=row.activity_level or "",
                 main_subjects=row.main_subjects_json or [],
-                has_important_event=bool(row.has_important_event),
+                has_attention_event=bool(row.has_attention_event),
             )
             for row in rows
         ]
@@ -199,8 +230,11 @@ class HomeQueryService:
     # 内部方法
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _event_to_result(row: EventRecord) -> EventResult:
+    def _apply_attention_filter(self, query: Any, attention: bool) -> Any:
+        condition = self._attention_condition()
+        return query.filter(condition if attention else ~condition)
+
+    def _event_to_result(self, row: EventRecord) -> EventResult:
         """将 EventRecord ORM 对象转换为 EventResult。"""
         subjects: list[str] = []
         for entity in row.related_entities_json or []:
@@ -212,7 +246,12 @@ class HomeQueryService:
             id=row.id,
             event_start_time=row.event_start_time,
             event_type=row.event_type or "",
-            importance_level=row.importance_level or "",
+            attention=is_attention_event(
+                event_type=row.event_type,
+                related_entities=row.related_entities_json,
+                focus_matches=row.focus_matches_json,
+                attention_keys=self._attention_keys(),
+            ),
             title=row.title or "",
             summary=row.summary or "",
             subjects=subjects,

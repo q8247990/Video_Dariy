@@ -117,6 +117,7 @@ def generate_single_pass_summary_payload(
     prompt: tuple[str, str],
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
+    max_tokens: int = 8192,
     locale: Optional[str] = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the single-pass LLM path; return the final structured payload.
@@ -130,6 +131,7 @@ def generate_single_pass_summary_payload(
         client=client,
         provider_id=provider_id,
         provider_name_snapshot=provider_name_snapshot,
+        max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -155,6 +157,7 @@ def generate_single_pass_summary_payload(
                 client=client,
                 provider_id=provider_id,
                 provider_name_snapshot=provider_name_snapshot,
+                max_tokens=max_tokens,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {
@@ -208,6 +211,7 @@ def generate_serial_summary_payload(
     subject_sections_payload: list[dict[str, Any]],
     missing_subjects: list[str],
     attention_candidates_payload: list[dict[str, Any]],
+    max_tokens: int = 8192,
     locale: Optional[str] = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the per-subject + rollup serial LLM path.
@@ -274,6 +278,7 @@ def generate_serial_summary_payload(
             client=client,
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
+            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": subject_system_prompt},
                 {"role": "user", "content": subject_user_prompt},
@@ -293,6 +298,7 @@ def generate_serial_summary_payload(
                 client=client,
                 provider_id=provider_id,
                 provider_name_snapshot=provider_name_snapshot,
+                max_tokens=max_tokens,
                 messages=[
                     {
                         "role": "system",
@@ -345,6 +351,7 @@ def generate_serial_summary_payload(
         client=client,
         provider_id=provider_id,
         provider_name_snapshot=provider_name_snapshot,
+        max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": rollup_system_prompt},
             {"role": "user", "content": rollup_user_prompt},
@@ -360,6 +367,7 @@ def generate_serial_summary_payload(
             client=client,
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
+            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": rollup_system_prompt},
                 {

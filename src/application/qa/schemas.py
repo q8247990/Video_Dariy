@@ -25,7 +25,7 @@ class QueryPlan:
     time_range: Optional[TimeRange] = None
     subjects: list[str] = field(default_factory=list)
     event_types: list[str] = field(default_factory=list)
-    importance_levels: list[str] = field(default_factory=list)
+    attention: Optional[bool] = None
     use_daily_summary_first: bool = True
     use_session_summary_first: bool = True
     need_event_details: bool = True
@@ -54,7 +54,7 @@ class RetrievalBudgets:
 class EventFilters:
     subjects: list[str] = field(default_factory=list)
     event_types: list[str] = field(default_factory=list)
-    importance_levels: list[str] = field(default_factory=list)
+    attention: Optional[bool] = None
 
 
 @dataclass
@@ -91,7 +91,7 @@ class SessionEvidence:
     summary_text: str = ""
     activity_level: str = ""
     main_subjects: list[str] = field(default_factory=list)
-    has_important_event: bool = False
+    has_attention_event: bool = False
     analysis_notes: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -101,7 +101,7 @@ class EventEvidence:
     session_id: int
     event_start_time: datetime
     event_type: str = ""
-    importance_level: str = ""
+    attention: bool = False
     title: str = ""
     summary: str = ""
     detail: str = ""

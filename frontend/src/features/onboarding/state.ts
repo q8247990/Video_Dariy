@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+import type { FocusPointItem } from '../../types/api'
+
 const STORAGE_KEY = 'onboarding_draft_v1'
 
 export type VideoDraft = {
@@ -27,7 +29,7 @@ export type SummaryDraft = {
 export type HomeProfileDraft = {
   home_name: string
   family_tags: string[]
-  focus_points: string[]
+  focus_points: FocusPointItem[]
   home_note: string
   system_style: string
   assistant_name: string

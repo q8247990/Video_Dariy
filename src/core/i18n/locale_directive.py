@@ -173,9 +173,9 @@ _MCP_FIELD_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "zh-CN": "事件类型列表",
         "en-US": "List of event types",
     },
-    "importance_levels": {
-        "zh-CN": "重要程度列表",
-        "en-US": "List of importance levels",
+    "attention": {
+        "zh-CN": "仅返回需关注事件",
+        "en-US": "Return only attention-worthy events",
     },
     "limit": {
         "zh-CN": "返回数量上限，默认 20",

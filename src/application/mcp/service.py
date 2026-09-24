@@ -78,7 +78,7 @@ class MCPToolService:
         subjects: Optional[list[str]] = None,
         keywords: Optional[list[str]] = None,
         event_types: Optional[list[str]] = None,
-        importance_levels: Optional[list[str]] = None,
+        attention: Optional[bool] = None,
         limit: int = 20,
     ) -> dict:
         time_range = self._parse_time_range(start_time, end_time)
@@ -87,7 +87,7 @@ class MCPToolService:
             subjects=subjects or [],
             keywords=keywords or [],
             event_types=event_types or [],
-            importance_levels=importance_levels or [],
+            attention=attention,
             limit=limit,
         )
 

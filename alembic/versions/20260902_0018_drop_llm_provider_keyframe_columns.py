@@ -115,6 +115,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError(
-        "irreversible migration - restore from verified DB backup"
-    )
+    raise NotImplementedError("irreversible migration - restore from verified DB backup")

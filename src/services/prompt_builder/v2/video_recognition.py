@@ -4,7 +4,11 @@ from datetime import datetime
 from typing import Any
 
 from src.services.prompt_builder.engine import render_template
-from src.services.video_analysis.enums import ANALYSIS_NOTE_TYPES, VIDEO_EVENT_TYPES
+from src.services.video_analysis.enums import (
+    ANALYSIS_NOTE_TYPES,
+    EVENT_TYPE_DEFINITIONS,
+    VIDEO_EVENT_TYPES,
+)
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
@@ -30,6 +34,10 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
     session_context = input_data["session_context"]
     strategy_context = input_data["strategy_context"]
     event_type_list = input_data.get("event_type_list") or sorted(VIDEO_EVENT_TYPES)
+    allowed_event_types = set(event_type_list)
+    event_type_definitions = [
+        item for item in EVENT_TYPE_DEFINITIONS if item["type"] in allowed_event_types
+    ] or EVENT_TYPE_DEFINITIONS
 
     home_profile = home_context.get("home_profile", {})
     members = home_context.get("members", [])
@@ -66,7 +74,7 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
                 session_start_time_iso=session_start_iso,
                 session_end_time_iso=session_end_iso,
                 strategy_context=strategy_context,
-                event_type_list=event_type_list,
+                event_type_definitions=event_type_definitions,
                 note_type_list=sorted(ANALYSIS_NOTE_TYPES),
             ),
         ]

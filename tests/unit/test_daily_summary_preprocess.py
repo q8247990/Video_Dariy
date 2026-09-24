@@ -24,7 +24,6 @@ def test_build_subject_event_mapping_and_missing_subjects() -> None:
         event_type="member_appear",
         summary="爸爸出现在客厅",
         title="成员出现",
-        importance_level="medium",
         related_entities_json=[
             {
                 "entity_type": "member",
@@ -44,7 +43,6 @@ def test_build_subject_event_mapping_and_missing_subjects() -> None:
         event_type="unknown_person_appear",
         summary="门口出现未知人员",
         title="未知人员出现",
-        importance_level="high",
         related_entities_json=[
             {
                 "entity_type": "unknown_person",
@@ -66,8 +64,8 @@ def test_build_subject_event_mapping_and_missing_subjects() -> None:
     assert mapped_event_ids == {11}
 
 
-def test_extract_attention_candidates_by_type_and_importance() -> None:
-    unknown_person_event = EventRecord(
+def test_extract_attention_candidates_by_rule() -> None:
+    stranger_event = EventRecord(
         id=21,
         source_id=1,
         session_id=1,
@@ -75,33 +73,41 @@ def test_extract_attention_candidates_by_type_and_importance() -> None:
         description="未知人员出现",
         event_type="unknown_person_appear",
         summary="未知人员出现",
-        importance_level="medium",
     )
-    high_event_unmapped = EventRecord(
+    normal_event = EventRecord(
         id=22,
         source_id=1,
         session_id=1,
         event_start_time=datetime(2026, 3, 13, 11, 0, 0),
-        description="高优先级场景",
+        description="成员停留",
         event_type="member_stay",
-        summary="高优先级场景",
-        importance_level="high",
+        summary="成员停留",
     )
-    mapped_high_event = EventRecord(
+    unknown_person_entity_event = EventRecord(
         id=23,
         source_id=1,
         session_id=1,
         event_start_time=datetime(2026, 3, 13, 12, 0, 0),
-        description="已映射对象事件",
+        description="画面边缘有人经过",
         event_type="member_appear",
-        summary="已映射对象事件",
-        importance_level="high",
+        summary="画面边缘有人经过",
+        related_entities_json=[{"entity_type": "unknown_person", "display_name": "陌生人"}],
+    )
+    focus_event = EventRecord(
+        id=24,
+        source_id=1,
+        session_id=1,
+        event_start_time=datetime(2026, 3, 13, 13, 0, 0),
+        description="门口放下包裹",
+        event_type="pet_activity",
+        summary="门口放下包裹",
+        focus_matches_json=["express_delivery"],
     )
 
     candidates = extract_attention_candidates(
-        [unknown_person_event, high_event_unmapped, mapped_high_event],
-        mapped_event_ids={23},
+        [stranger_event, normal_event, unknown_person_entity_event, focus_event],
+        attention_keys=frozenset({"express_delivery"}),
     )
 
     candidate_ids = {item.event_id for item in candidates}
-    assert candidate_ids == {21, 22}
+    assert candidate_ids == {21, 23, 24}

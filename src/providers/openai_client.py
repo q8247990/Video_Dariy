@@ -28,6 +28,7 @@ class OpenAIClient:
         self.timeout = timeout
         self.last_usage: dict[str, int] | None = None
         self.last_raw_response_text: str | None = None
+        self.last_finish_reason: str | None = None
         self._http_client = httpx.Client(timeout=self.timeout)
 
     def close(self) -> None:
@@ -117,7 +118,15 @@ class OpenAIClient:
             choices = data.get("choices")
             if not choices:
                 raise ValueError(f"OpenAI API returned no choices: {data}")
-            content = choices[0]["message"]["content"]
+            choice = choices[0]
+            self.last_finish_reason = choice.get("finish_reason")
+            if self.last_finish_reason == "length":
+                logger.warning(
+                    "LLM output truncated (finish_reason=length, model=%s, max_tokens=%s)",
+                    self.model_name,
+                    max_tokens,
+                )
+            content = choice["message"]["content"]
             return str(content) if content is not None else None
         except Exception:
             logger.exception(
@@ -154,6 +163,13 @@ class OpenAIClient:
             choices = data.get("choices")
             if not choices:
                 raise ValueError(f"OpenAI API returned no choices: {data}")
+            self.last_finish_reason = choices[0].get("finish_reason")
+            if self.last_finish_reason == "length":
+                logger.warning(
+                    "LLM output truncated (finish_reason=length, model=%s, max_tokens=%s)",
+                    self.model_name,
+                    max_tokens,
+                )
             message = choices[0]["message"]
             content = message.get("content")
             tool_calls = message.get("tool_calls")

@@ -28,6 +28,7 @@ from src.core.i18n import t
 from src.models.home_entity_profile import HomeEntityProfile
 from src.schemas.home_profile import HomeEntityResponse
 from src.services.home_profile import get_entity_by_id
+from src.services.provider_generation_limits import resolve_max_output_tokens
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_VISION, find_enabled_provider
 
@@ -131,7 +132,11 @@ def generate_entity_appearance_use_case(
             model_name=provider.model_name,
             timeout_seconds=provider.timeout_seconds,
         )
-        result = gateway.chat_completion(messages=messages, temperature=0.3, max_tokens=300)
+        result = gateway.chat_completion(
+            messages=messages,
+            temperature=0.3,
+            max_tokens=resolve_max_output_tokens(provider, scene_default=300),
+        )
     except Exception as exc:  # noqa: BLE001 — surface provider errors as 5002
         logger.error("Vision LLM call failed for entity %s: %s", entity_id, exc)
         return GenerateEntityAppearanceResult(

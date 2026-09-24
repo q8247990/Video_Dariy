@@ -48,10 +48,9 @@ Video directory → VideoSource → VideoFile → VideoSession → EventRecord �
 The stages that interact with the LLM directly:
 
 1. Scanning, deduplication, session merging and sealing (CPU-only, no model);
-2. **Session analysis**: A `SEALED` session is sliced into 600-second chunks
-   (`ANALYZER_SEGMENT_SECONDS`), then each chunk is sliced into 60-second sub-chunks
-   (`ANALYZER_LLM_CHUNK_SECONDS`, default 60). **Each sub-chunk triggers exactly one vision-model
-   call**;
+2. **Session analysis**: A `SEALED` session is split by file — **every video file maps to exactly
+   one sub-chunk and exactly one vision-model call** (no merging, no splitting; the historical
+   two-level chunking was removed);
 3. Daily summary, Q&A, and MCP make secondary LLM calls on top of the structured events (text-only,
    low cost — out of scope here).
 
@@ -543,10 +542,10 @@ Key points:
 Above hardware and engine, the application layer is what decides "same model, same cards, results
 that differ by several times".
 
-1. **Two-level chunking, one call per piece**: 600 s chunk (`ANALYZER_SEGMENT_SECONDS`) → 60 s
-   sub-chunk (`ANALYZER_LLM_CHUNK_SECONDS`). Cross-file clips are first `ffmpeg concat`-ed into a
-   single mp4 and then base64-encoded (`build_chunk_video_data_url`), guaranteeing a continuous
-   time axis and clear `base_offset_seconds` semantics.
+1. **One file, one call**: each video file in a session is its own sub-chunk, read and
+   base64-encoded directly (`build_video_data_url`) with no cross-file concat.
+   `base_offset_seconds` is the file's start offset inside the session. The real per-file duration
+   is probed with `ffprobe` at ingest.
 2. **Hard-coded parameters, not configurable**: `RAW_MP4_NUM_FRAMES = 120` is a constant. Any
    parameter that encodes a product decision lives as a code constant + regression test
    (`test_analyzer_raw_mp4_payload.py` asserts the payload prefix, the `num_frames` value, and

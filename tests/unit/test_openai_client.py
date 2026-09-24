@@ -217,9 +217,7 @@ def test_close_releases_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
         def close(self) -> None:
             calls.append(None)
 
-    monkeypatch.setattr(
-        "src.providers.openai_client.httpx.Client", lambda *a, **kw: _CloseSpy()
-    )
+    monkeypatch.setattr("src.providers.openai_client.httpx.Client", lambda *a, **kw: _CloseSpy())
 
     client = OpenAIClient(
         api_base_url="http://example.com/v1",

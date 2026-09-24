@@ -12,6 +12,6 @@
 - 无关注候选
 {% endif %}
 {% for item in attention_candidates %}
-- {{ "%02d" | format(loop.index) }}. [{{ item.importance_level | default("unknown", true) }}] 类型={{ item.event_type }} 次数={{ item.occurrence_count }} 标题={{ item.title }} 摘要={{ item.summary }}
+- {{ "%02d" | format(loop.index) }}. 类型={{ item.event_type }} 次数={{ item.occurrence_count }} 标题={{ item.title }} 摘要={{ item.summary }}
 {% endfor %}
 写作要求：1) 必须保留所有对象，按 activity_score 从高到低排序；2) overall_summary 120~180 字；3) 每个对象摘要 50~90 字；4) 禁止省略号和半句。

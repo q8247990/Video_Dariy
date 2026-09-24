@@ -287,15 +287,14 @@ Core code:
 Workflow:
 
 1. Tasks can only claim a session from `SEALED` state, transitioning it to `ANALYZING`
-2. The session is sliced by `ANALYZER_SEGMENT_SECONDS`, defaulting to 600 seconds (10-min session-level chunk)
-3. Each session chunk is sub-divided by `ANALYZER_LLM_CHUNK_SECONDS` (default 60 seconds) into sub-chunks; one LLM call per sub-chunk
-4. The LLM payload is fixed to `raw_mp4`: each sub-chunk is sent as base64 with `media_io_kwargs.video.num_frames` for server-side uniform sampling. The client no longer retains keyframe decoding, MAD/pHash, or JPEG preprocessing paths.
-5. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
-6. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)
-7. The returned JSON is parsed and converted into multiple `EventRecord` entries (offsets are absolute session-time, non-negative)
-8. Previous events for the session are replaced (overwrite strategy)
-9. Segment summaries are aggregated and written back to `VideoSession`
-10. Analysis status is updated to `SUCCESS`
+2. Split by file: every video file in the session maps to exactly one sub-chunk / one LLM call — no merging, no splitting (the historical two-level 600s→60s chunking was removed)
+3. The LLM payload is fixed to `raw_mp4`: each single-file sub-chunk is sent as base64 with `media_io_kwargs.video.num_frames` for server-side uniform sampling. The client no longer retains keyframe decoding, MAD/pHash, JPEG preprocessing, or cross-file concat.
+4. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
+5. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)
+6. The returned JSON is parsed and converted into multiple `EventRecord` entries (offsets are absolute session-time, non-negative)
+7. Previous events for the session are replaced (overwrite strategy)
+8. Segment summaries are aggregated and written back to `VideoSession`
+9. Analysis status is updated to `SUCCESS`
 
 Analysis and checkpoint/resume semantics:
 
@@ -517,8 +516,11 @@ Key environment variables:
 - `SESSION_PLAYBACK_MODE`
 - `MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS` (media signed-URL TTL, default 1800 seconds)
 - `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST` (Webhook SSRF-protection intranet allowlist)
-- `ANALYZER_SEGMENT_SECONDS`
-- `ANALYZER_LLM_CHUNK_SECONDS` (default 60; sub-chunk duration per LLM call)
+
+> Session analysis has no chunk/slice env vars anymore: `ANALYZER_SEGMENT_SECONDS` /
+> `ANALYZER_LLM_CHUNK_SECONDS` / `ANALYZER_VIDEO_KEYFRAME_*` were removed. The unit is the
+> video file (one file = one LLM call); the real per-file duration is probed with `ffprobe`
+> at ingest (falling back to 60s).
 
 Note: The root `.env.example` has been updated to reflect the actual PostgreSQL, Redis, MCP, and playback cache directory configuration. Refer to `src/core/config.py` and `docker-compose.yml` as the authoritative runtime references.
 
@@ -647,7 +649,7 @@ Common commands:
 python3 -m pytest tests/unit -q         # unit tests
 python3 -m pytest -m postgres           # integration tests; requires real PostgreSQL (DATABASE_URL)
 python3 -m alembic upgrade head
-python3 -m alembic heads                # expect 20260904_0022
+python3 -m alembic heads                # expect 20260923_0025
 ruff check .
 ruff format --check src tests
 ```

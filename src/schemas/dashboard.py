@@ -2,7 +2,7 @@ from datetime import date as DateType
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DashboardAction(BaseModel):
@@ -40,10 +40,15 @@ class DashboardTaskSummary(BaseModel):
     failed_task_count_24h: int
 
 
+class DashboardFocusCount(BaseModel):
+    focus_key: str
+    label: str
+    count: int
+
+
 class DashboardEventSummary(BaseModel):
-    today_event_count: int
-    yesterday_event_count: int
-    important_event_count_24h: int
+    attention_event_count: int
+    focus_counts: list[DashboardFocusCount] = Field(default_factory=list)
 
 
 class DashboardLatestDailySummary(BaseModel):
@@ -54,7 +59,7 @@ class DashboardLatestDailySummary(BaseModel):
     empty_reason: Optional[str] = None
 
 
-class DashboardImportantEvent(BaseModel):
+class DashboardAttentionEvent(BaseModel):
     id: int
     title: str
     summary: str
@@ -69,4 +74,4 @@ class DashboardOverviewResponse(BaseModel):
     task_summary: DashboardTaskSummary
     event_summary: DashboardEventSummary
     latest_daily_summary: DashboardLatestDailySummary
-    important_events: list[DashboardImportantEvent]
+    attention_events: list[DashboardAttentionEvent]

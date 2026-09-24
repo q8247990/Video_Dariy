@@ -15,7 +15,7 @@ class VideoSessionResponse(BaseModel):
     summary_text: Optional[str] = None
     activity_level: Optional[str] = None
     main_subjects_json: Optional[Any] = None
-    has_important_event: Optional[bool] = None
+    has_attention_event: Optional[bool] = None
     analysis_notes_json: Optional[Any] = None
     last_analyzed_at: Optional[datetime] = None
     created_at: datetime

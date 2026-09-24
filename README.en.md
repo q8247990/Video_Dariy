@@ -362,14 +362,11 @@ python3 -m pytest -m postgres
 
 # Migration checks
 python3 -m alembic upgrade head
-python3 -m alembic heads   # expect 20260902_0021
+python3 -m alembic heads   # expect 20260923_0025
 
 # Code checks
 ruff check .
 ruff format --check src tests
-# Known exceptions: ruff format --check has 4 pre-existing out-of-scope failures:
-#   src/application/prompt/compiler.py, src/application/qa/agent.py,
-#   tests/unit/test_i18n.py, tests/unit/test_keyframe_extractor.py
 ```
 
 </details>

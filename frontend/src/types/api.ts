@@ -199,12 +199,12 @@ export type EventRecord = {
   title: string | null
   summary: string | null
   detail: string | null
-  importance_level: 'low' | 'medium' | 'high' | null
   offset_start_sec: number | null
   offset_end_sec: number | null
   related_entities_json: RelatedEntity[] | null
   observed_actions_json: string[] | null
   interpreted_state_json: string[] | null
+  focus_matches_json: string[] | null
   description: string
   confidence_score: number | null
   raw_result: Record<string, unknown> | null
@@ -254,10 +254,15 @@ export type DashboardTaskSummary = {
   failed_task_count_24h: number
 }
 
+export type DashboardFocusCount = {
+  focus_key: string
+  label: string
+  count: number
+}
+
 export type DashboardEventSummary = {
-  today_event_count: number
-  yesterday_event_count: number
-  important_event_count_24h: number
+  attention_event_count: number
+  focus_counts: DashboardFocusCount[]
 }
 
 export type DashboardLatestDailySummary = {
@@ -268,7 +273,7 @@ export type DashboardLatestDailySummary = {
   empty_reason: string | null
 }
 
-export type DashboardImportantEvent = {
+export type DashboardAttentionEvent = {
   id: number
   title: string
   summary: string
@@ -283,7 +288,7 @@ export type DashboardOverview = {
   task_summary: DashboardTaskSummary
   event_summary: DashboardEventSummary
   latest_daily_summary: DashboardLatestDailySummary
-  important_events: DashboardImportantEvent[]
+  attention_events: DashboardAttentionEvent[]
 }
 
 export type ChatReferenceEvent = {
@@ -355,7 +360,7 @@ export type VideoSession = {
   summary_text: string | null
   activity_level: 'low' | 'medium' | 'high' | null
   main_subjects_json: string[] | null
-  has_important_event: boolean | null
+  has_attention_event: boolean | null
   analysis_notes_json: { type: string; note: string }[] | null
   last_analyzed_at: string | null
   created_at: string
@@ -416,7 +421,6 @@ export type SystemConfig = {
   latency_alert_threshold_seconds?: number
   alert_consecutive_required?: number
   alert_notify_cooldown_minutes?: number
-  default_session_merge_gap_seconds?: number
   tag_recommendation_enabled?: boolean
   mcp_enabled?: boolean
   mcp_token?: string
@@ -439,11 +443,19 @@ export type TaskLogItem = {
   updated_at: string
 }
 
+export type FocusPointItem = {
+  key: string
+  label: string
+  description: string
+  enabled: boolean
+  attention: boolean
+}
+
 export type HomeProfile = {
   id: number
   home_name: string
   family_tags: string[]
-  focus_points: string[]
+  focus_points: FocusPointItem[]
   system_style: string
   style_preference_text: string | null
   assistant_name: string
@@ -455,7 +467,7 @@ export type HomeProfile = {
 export type HomeProfilePayload = {
   home_name: string
   family_tags: string[]
-  focus_points: string[]
+  focus_points: FocusPointItem[]
   system_style: string
   style_preference_text: string
   assistant_name: string
@@ -502,7 +514,7 @@ export type PetPayload = {
 
 export type HomeOptions = {
   family_tags: string[]
-  focus_points: string[]
+  focus_points: FocusPointItem[]
   system_styles: string[]
   entity_types: string[]
   member_roles: string[]

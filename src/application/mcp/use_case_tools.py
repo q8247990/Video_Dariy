@@ -93,7 +93,7 @@ def _dispatch_tool(
             subjects=arguments.get("subjects"),
             keywords=arguments.get("keywords"),
             event_types=arguments.get("event_types"),
-            importance_levels=arguments.get("importance_levels"),
+            attention=arguments.get("attention"),
             limit=arguments.get("limit", 20),
         )
     if tool_name == "get_sessions":

@@ -38,6 +38,7 @@ from src.core.i18n.locale_directive import get_summary_title
 from src.models.task_log import TaskLog
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import TaskStatus
+from src.services.provider_generation_limits import resolve_max_output_tokens
 from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
@@ -291,6 +292,7 @@ def _run_llm_phase(
             client=client,
             provider_id=provider.id,
             provider_name_snapshot=provider.provider_name,
+            max_tokens=resolve_max_output_tokens(provider, scene_default=8192),
             target_date=target_date,
             start_dt=evidence.start_dt,
             end_dt=evidence.end_dt,
@@ -309,6 +311,7 @@ def _run_llm_phase(
             client=client,
             provider_id=provider.id,
             provider_name_snapshot=provider.provider_name,
+            max_tokens=resolve_max_output_tokens(provider, scene_default=8192),
             events=evidence.events,
             prompt=evidence.prompt,
             known_subjects=evidence.known_subjects,
