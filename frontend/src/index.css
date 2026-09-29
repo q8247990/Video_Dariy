@@ -614,6 +614,7 @@ button.capability-btn-active {
   display: grid;
   place-items: center;
   padding: 1rem;
+  overflow: auto;
 }
 
 .dialog {
@@ -622,6 +623,8 @@ button.capability-btn-active {
   border-radius: 14px;
   border: 1px solid var(--dialog-border);
   padding: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
 }
 
 .dialog.dialog-wide {

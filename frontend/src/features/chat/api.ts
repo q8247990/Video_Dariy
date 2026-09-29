@@ -1,8 +1,10 @@
 import { apiClient, unwrapApi } from '../../lib/axios'
 import type { ChatAskResponse, ChatHistoryItem, PaginatedData } from '../../types/api'
 
+const ASK_TIMEOUT_MS = 120_000
+
 export async function askQuestion(question: string): Promise<ChatAskResponse> {
-  const response = await apiClient.post('/chat/ask', { question })
+  const response = await apiClient.post('/chat/ask', { question }, { timeout: ASK_TIMEOUT_MS })
   return unwrapApi<ChatAskResponse>(response)
 }
 
