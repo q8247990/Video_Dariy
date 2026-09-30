@@ -70,6 +70,7 @@ def _seed_source(db: Session, source_name: str = "stuck-cam") -> int:
         camera_name=source_name,
         location_name="客厅",
         source_type="local_directory",
+        last_validate_status="success",
         config_json={"root_path": "/tmp/videos"},
         enabled=True,
     )

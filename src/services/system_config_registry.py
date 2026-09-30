@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
@@ -14,10 +14,8 @@ DAILY_SUMMARY_SCHEDULE: Final = "daily_summary_schedule"
 DAILY_SUMMARY_TIME: Final = "daily_summary_time"
 SCAN_INTERVAL_SECONDS: Final = "scan_interval_seconds"
 SCAN_HOT_WINDOW_HOURS: Final = "scan_hot_window_hours"
-SCAN_LATE_TOLERANCE_SECONDS: Final = "scan_late_tolerance_seconds"
-LATENCY_ALERT_THRESHOLD_SECONDS: Final = "latency_alert_threshold_seconds"
-ALERT_CONSECUTIVE_REQUIRED: Final = "alert_consecutive_required"
-ALERT_NOTIFY_COOLDOWN_MINUTES: Final = "alert_notify_cooldown_minutes"
+
+
 TAG_RECOMMENDATION_ENABLED: Final = "tag_recommendation_enabled"
 MCP_ENABLED: Final = "mcp_enabled"
 MCP_TOKEN: Final = "mcp_token"
@@ -27,6 +25,7 @@ LLM_DAILY_TOKEN_QUOTA_GLOBAL: Final = "llm_daily_token_quota_global"
 LLM_DAILY_TOKEN_QUOTA_PER_PROVIDER: Final = "llm_daily_token_quota_per_provider"
 MEDIA_MANIFEST_TTL_SECONDS: Final = "media_manifest_ttl_seconds"
 MEDIA_SEGMENT_TTL_SECONDS: Final = "media_segment_ttl_seconds"
+MEDIA_ENTITY_IMAGE_TTL_SECONDS: Final = "media_entity_image_ttl_seconds"
 HOME_TIMEZONE: Final = "home_timezone"
 
 
@@ -88,10 +87,6 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     DAILY_SUMMARY_SCHEDULE: ConfigDefinition("10:00", _string),
     SCAN_INTERVAL_SECONDS: ConfigDefinition(300, _positive_int),
     SCAN_HOT_WINDOW_HOURS: ConfigDefinition(24, _positive_int),
-    SCAN_LATE_TOLERANCE_SECONDS: ConfigDefinition(180, _non_negative_int),
-    LATENCY_ALERT_THRESHOLD_SECONDS: ConfigDefinition(600, _positive_int),
-    ALERT_CONSECUTIVE_REQUIRED: ConfigDefinition(3, _positive_int),
-    ALERT_NOTIFY_COOLDOWN_MINUTES: ConfigDefinition(60, _positive_int),
     TAG_RECOMMENDATION_ENABLED: ConfigDefinition(False, _bool),
     MCP_ENABLED: ConfigDefinition(True, _bool),
     MCP_TOKEN: ConfigDefinition("", _optional_string),
@@ -101,6 +96,7 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     LLM_DAILY_TOKEN_QUOTA_PER_PROVIDER: ConfigDefinition(0, _non_negative_int),
     MEDIA_MANIFEST_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
     MEDIA_SEGMENT_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
+    MEDIA_ENTITY_IMAGE_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
     HOME_TIMEZONE: ConfigDefinition("Asia/Shanghai", _iana_timezone),
 }
 
@@ -122,13 +118,31 @@ def validate_updates(updates: dict[str, Any]) -> dict[str, str | int | bool]:
 
 def get_config(db: Session, key: str) -> str | int | bool:
     """Read a registered setting with legacy database values parsed at this boundary."""
-    definition = REGISTRY.get(key)
-    if definition is None:
-        raise SystemConfigValidationError(f"unknown system configuration key: {key}")
-    row = db.query(SystemConfig).filter(SystemConfig.config_key == key).first()
-    if row is None or row.config_value is None:
-        return definition.default
-    return definition.parser(row.config_value)
+    return get_configs(db, (key,))[key]
+
+
+def get_configs(db: Session, keys: Iterable[str]) -> dict[str, str | int | bool]:
+    """Read several registered settings in one query.
+
+    Use this instead of calling :func:`get_config` repeatedly when a request
+    needs more than one key.
+    """
+    requested = list(dict.fromkeys(keys))
+    definitions: dict[str, ConfigDefinition] = {}
+    for key in requested:
+        definition = REGISTRY.get(key)
+        if definition is None:
+            raise SystemConfigValidationError(f"unknown system configuration key: {key}")
+        definitions[key] = definition
+
+    rows = db.query(SystemConfig).filter(SystemConfig.config_key.in_(requested)).all()
+    stored = {row.config_key: row.config_value for row in rows}
+
+    result: dict[str, str | int | bool] = {}
+    for key, definition in definitions.items():
+        raw = stored.get(key)
+        result[key] = definition.default if raw is None else definition.parser(raw)
+    return result
 
 
 def set_config(db: Session, key: str, value: Any) -> None:

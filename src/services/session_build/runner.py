@@ -12,7 +12,7 @@ Stages (in execution order)
 
 1. **acquire** — open a PG advisory transaction lock on
    ``source_id`` so concurrent ``hot`` vs ``full`` workers
-   serialize (PG only; SQLite is a no-op so unit tests pass).
+   serialize.
 2. **discover** — walk the configured root path, parse the
    Xiaomi directory layout, return sorted ``DiscoveredFile``
    rows. Empty discovery for ``ScanMode.HOT`` triggers the
@@ -64,12 +64,10 @@ logger = logging.getLogger(__name__)
 def acquire_source_advisory_lock(db: Session, source_id: int) -> None:
     """Acquire the per-source PG advisory transaction lock.
 
-    No-op for dialects other than PG; unit tests on SQLite do
-    not need any locking. The lock is released automatically
-    when the caller's transaction ends (commit or rollback).
+    The lock is released automatically when the caller's transaction
+    ends (commit or rollback).
     """
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        db.execute(select(func.pg_advisory_xact_lock(source_id)))
+    db.execute(select(func.pg_advisory_xact_lock(source_id)))
 
 
 def _priority(scan_mode: str) -> str:

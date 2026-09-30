@@ -20,10 +20,9 @@ in the application layer:
   register the table for ``alembic revision --autogenerate`` style
   workflows.
 - the ADR specifies the columns are ``TEXT`` / ``JSONB`` /
-  ``TIMESTAMPTZ``. Mapping them through ``JSON().with_variant(JSONB(),
-  "postgresql")`` keeps the SQLAlchemy type portable so the unit tests
-  can stand up an in-memory SQLite copy of the table; the migration
-  script always emits the explicit PostgreSQL DDL the ADR requires.
+  ``TIMESTAMPTZ``. The model declares ``JSONB`` on PostgreSQL via
+  ``JSON().with_variant(JSONB(), "postgresql")``; the migration emits the
+  matching explicit PostgreSQL DDL.
 - the ``OutboxEvent`` dataclass in
   ``src.application.outbox.contracts`` is what the application /
   publisher / cutover (Todo 14) import. The dataclass is deliberately
@@ -64,10 +63,7 @@ Index / constraint plan (per ADR §2, "Index / constraint plan"):
    concurrency safety net; second concurrent ``INSERT … ON CONFLICT
    DO NOTHING`` returns no row.
 5. ``INDEX (status, next_attempt_at) WHERE status='pending'`` —
-   publisher hot path. (ADR §2 lists this as partial; the
-   implementation here is a plain composite index because SQLite does
-   not support partial indexes; on PostgreSQL the migration creates
-   the explicit partial index.)
+   publisher hot path (partial index on PostgreSQL).
 6. ``INDEX (status) WHERE status='failed'`` — failure-scan index
    (Todo 24 dashboard).
 7. ``INDEX (status, published_at) WHERE status='published'`` —
@@ -94,7 +90,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    Uuid,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -130,19 +125,15 @@ class OutboxEvent(Base):
     __tablename__ = "outbox_event"
 
     # -- surrogate primary key ----------------------------------------
-    # ``BIGSERIAL`` on PostgreSQL (ADR §2); ``INTEGER`` on SQLite so
-    # the column becomes a rowid alias and autoincrements.
     id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"),
+        BigInteger,
         primary_key=True,
         autoincrement=True,
     )
 
     # -- durable identity + business-run linkage ----------------------
-    # Cross-dialect UUID: native PostgreSQL ``UUID`` (matches ADR §2);
-    # portable ``Uuid()`` fallback so SQLite unit tests can ``create_all``.
     event_id: Mapped[Any] = mapped_column(
-        Uuid().with_variant(UUID(as_uuid=True), "postgresql"),
+        UUID(as_uuid=True),
         nullable=False,
         unique=True,
     )
@@ -157,7 +148,7 @@ class OutboxEvent(Base):
     # -- Celery payload ------------------------------------------------
     task_name: Mapped[str] = mapped_column(Text, nullable=False)
     queue: Mapped[str] = mapped_column(Text, nullable=False)
-    # JSON on SQLite / JSONB on PostgreSQL; see module docstring.
+    # Stored as JSONB on PostgreSQL; see module docstring.
     args_json: Mapped[list[Any]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=False,
@@ -205,7 +196,6 @@ class OutboxEvent(Base):
             "task_log_id",
             unique=True,
             postgresql_where=text(PENDING_INDEX_PREDICATE),
-            sqlite_where=text(PENDING_INDEX_PREDICATE),
         ),
         # -- Publisher hot path (ADR §2, item 5) ---------------------
         Index(
@@ -218,7 +208,6 @@ class OutboxEvent(Base):
             "idx_outbox_event_failed",
             "status",
             postgresql_where=text("status = 'failed'"),
-            sqlite_where=text("status = 'failed'"),
         ),
         # -- Retention cleanup hot path ------------------------------
         Index(
@@ -226,7 +215,6 @@ class OutboxEvent(Base):
             "status",
             "published_at",
             postgresql_where=text("status = 'published'"),
-            sqlite_where=text("status = 'published'"),
         ),
     )
 

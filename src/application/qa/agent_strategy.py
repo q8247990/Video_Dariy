@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.application.qa.agent import QAAgent
-from src.application.qa.legacy import LegacyQAStrategy
+from src.application.qa.errors import QAProviderInvokeError
 from src.application.qa.schemas import (
     EventEvidence,
     QARequest,
@@ -87,10 +87,7 @@ def _load_referred_sessions(db: Session, session_ids: list[int]) -> list[Session
 class AgentQAStrategy:
     """QA strategy for providers that support tool calling.
 
-    Runs the agentic loop (:class:`~src.application.qa.agent.QAAgent`) and
-    falls back to :class:`LegacyQAStrategy` if the agent loop raises.
-    Kept separate from the legacy strategy so each path is independently
-    testable without changing the QA answer contract.
+    Runs the agentic loop (:class:`~src.application.qa.agent.QAAgent`).
     """
 
     def __init__(
@@ -113,9 +110,11 @@ class AgentQAStrategy:
                 timezone=request.timezone,
                 locale=request.locale,
             )
+        except QAProviderInvokeError:
+            raise
         except Exception as e:
-            logger.warning("Agent loop failed: %s, falling back to legacy", e)
-            return LegacyQAStrategy(self.db, self.gateway, self.provider).execute(question, request)
+            logger.exception("QA agent loop failed")
+            raise QAProviderInvokeError(f"QA agent call failed: {e}") from e
 
         referenced_events = _load_referred_events(self.db, agent_result.referenced_event_ids)
         referenced_sessions = _load_referred_sessions(self.db, agent_result.referenced_session_ids)

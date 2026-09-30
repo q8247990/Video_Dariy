@@ -1,109 +1,42 @@
-from datetime import datetime
-
-from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
-from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
-
-# ---------------------------------------------------------------------------
-# qa_intent prompt builder
-# ---------------------------------------------------------------------------
+from src.services.prompt_builder.v2.qa_agent import build_qa_agent_prompt
 
 
-def test_build_qa_intent_prompt_basic() -> None:
-    home_context = {
-        "home_profile": {
-            "home_name": "温馨之家",
-            "family_tags": ["有老人"],
-            "focus_points": ["安全"],
+def test_build_qa_agent_prompt_orders_static_before_dynamic() -> None:
+    prompt = build_qa_agent_prompt(
+        now_iso="2026-03-21T12:00:00+08:00",
+        timezone="Asia/Shanghai",
+        home_context={
+            "home_profile": {"home_name": "温馨之家", "family_tags": [], "focus_points": ["安全"]},
+            "members": [{"name": "爸爸", "role_type": "father"}],
+            "pets": [{"name": "布丁", "role_type": "cat"}],
         },
-        "members": [{"name": "爸爸", "role_type": "father"}],
-        "pets": [{"name": "布丁", "role_type": "cat"}],
-    }
-    system_prompt, user_prompt = build_qa_intent_prompt(
-        question="今天家里发生了什么？",
-        now=datetime(2026, 3, 21, 12, 0, 0),
-        timezone="Asia/Shanghai",
-        home_context=home_context,
+        data_availability={
+            "earliest_event_date": "2026-03-01",
+            "latest_event_date": "2026-03-20",
+            "total_event_count": 42,
+        },
+        locale="zh-CN",
     )
 
-    # Output-format contract: system prompt must instruct the model to return JSON only,
-    # and must enumerate the supported event types (data passthrough from EVENT_TYPE_DEFINITIONS).
-    assert "JSON" in system_prompt
-    assert "member_appear" in system_prompt
+    assert prompt.index("规则:") < prompt.index("当前时间:")
+    assert prompt.index("事件类型说明:") < prompt.index("当前时间:")
+    assert prompt.index("家庭概况") < prompt.index("当前时间:")
 
-    # Data passthrough: home name, members, pets, timezone, and the user's question
-    # must all reach the user prompt verbatim.
-    assert "今天家里发生了什么" in user_prompt
-    assert "爸爸" in user_prompt
-    assert "布丁" in user_prompt
-    assert "Asia/Shanghai" in user_prompt
-    assert "温馨之家" in user_prompt
+    assert "member_appear" in prompt
+    assert "温馨之家" in prompt
+    assert "爸爸" in prompt and "布丁" in prompt
+    assert "2026-03-21T12:00:00+08:00" in prompt
+    assert "42" in prompt
 
 
-def test_build_qa_intent_prompt_empty_home() -> None:
-    home_context = {
-        "home_profile": {"home_name": "", "family_tags": [], "focus_points": []},
-        "members": [],
-        "pets": [],
-    }
-    system_prompt, user_prompt = build_qa_intent_prompt(
-        question="最近有异常吗？",
-        now=datetime(2026, 3, 21, 12, 0, 0),
+def test_build_qa_agent_prompt_injects_english_directive() -> None:
+    prompt = build_qa_agent_prompt(
+        now_iso="2026-03-21T12:00:00+08:00",
         timezone="Asia/Shanghai",
-        home_context=home_context,
+        home_context={"home_profile": {}, "members": [], "pets": []},
+        data_availability={},
+        locale="en-US",
     )
 
-    # Branch fallback: with no members/pets the subject list must render the explicit
-    # "无" sentinel rather than dropping the line entirely.
-    assert "已知主体: 无" in user_prompt
-    assert "最近有异常吗" in user_prompt
-
-
-# ---------------------------------------------------------------------------
-# qa_answer prompt builder (Todo 8: services-free of application imports)
-# ---------------------------------------------------------------------------
-
-
-def test_build_qa_answer_prompt_with_evidence() -> None:
-    system_prompt, user_prompt = build_qa_answer_prompt(
-        question="昨天爸爸做了什么？",
-        now_iso="2026-03-21T12:00:00",
-        timezone="Asia/Shanghai",
-        home_context_text="家庭: 温馨之家\n成员: 爸爸",
-        query_plan_text="模式=overview | 主体=爸爸",
-        daily_summary_text="D 2026-03-20 | event_count=5 | overall=整体平稳",
-        session_text="S1 | 03-20 09:00~09:12 | activity=medium",
-        event_text="E1 | 03-20 09:03 | medium | member_appear | subject=爸爸 | summary=爸爸出现",
-    )
-
-    # System prompt still names "证据" (evidence) — the answer must be grounded in it.
-    assert "证据" in system_prompt
-
-    # Data passthrough: every evidence text block must arrive in the user prompt intact
-    # (we assert a stable fragment from each, not the surrounding label/section title).
-    assert "昨天爸爸做了什么" in user_prompt
-    assert "爸爸" in user_prompt
-    assert "D 2026-03-20 | event_count=5" in user_prompt
-    assert "S1 | 03-20 09:00" in user_prompt
-    assert "E1 | 03-20 09:03" in user_prompt
-    assert "模式=overview" in user_prompt
-    assert "家庭: 温馨之家" in user_prompt
-
-
-def test_build_qa_answer_prompt_no_evidence() -> None:
-    system_prompt, user_prompt = build_qa_answer_prompt(
-        question="今天有没有陌生人？",
-        now_iso="2026-03-21T12:00:00",
-        timezone="Asia/Shanghai",
-        home_context_text="家庭: 测试",
-        query_plan_text="",
-        daily_summary_text="",
-        session_text="",
-        event_text="",
-    )
-
-    # Branch fallback: with no evidence, the user prompt must announce that nothing
-    # was retrieved (so the model cannot silently hallucinate).
-    assert "未检索到相关记录" in user_prompt
-
-    # The original question is still rendered, even when no evidence is attached.
-    assert "今天有没有陌生人" in user_prompt
+    assert "Please respond in English." in prompt
+    assert "已知主体: 无" in prompt

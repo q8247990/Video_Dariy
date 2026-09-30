@@ -13,7 +13,7 @@ from src.services.system_config_registry import (
     MCP_TOKEN,
     REGISTRY,
     SystemConfigValidationError,
-    get_config,
+    get_configs,
     set_config,
     validate_updates,
 )
@@ -23,7 +23,7 @@ router = APIRouter()
 
 @router.get("", response_model=BaseResponse[dict])
 def get_system_config(db: DB, current_user: CurrentUser) -> Any:
-    result = {key: get_config(db, key) for key in REGISTRY}
+    result = get_configs(db, REGISTRY)
     if not result[MCP_TOKEN]:
         from src.core.config import settings
 

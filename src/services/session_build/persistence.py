@@ -106,8 +106,8 @@ def find_stuck_sealed_sessions(db: Session, source_id: int) -> list[VideoSession
     terminal ``TaskLog`` (TIMEOUT), so it is excluded here and left
     for manual retry instead of being auto-re-dispatched in a loop.
     """
-    # Hermetic SQLite contexts without the task_log table (minimal unit
-    # schemas) have nothing to cross-reference; report no stuck sessions.
+    # A session without the task_log table has nothing to cross-reference;
+    # report no stuck sessions.
     if db.bind is None or not inspect(db.bind).has_table(TaskLog.__tablename__):
         return []
 
@@ -155,6 +155,7 @@ def _create_session_with_first_file(
         session_end_time=new_session.session_end_time,
         total_duration_seconds=new_session.total_duration_seconds,
         analysis_status=SessionAnalysisStatus.OPEN,
+        merge_rule="gap_1s",
     )
     db.add(session)
     db.flush()

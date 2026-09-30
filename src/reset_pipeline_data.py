@@ -18,7 +18,6 @@ from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
-from src.models.video_source_runtime_state import VideoSourceRuntimeState
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +112,6 @@ def main() -> None:
             "daily_summary": db.query(DailySummary).count(),
             "chat_query_log": db.query(ChatQueryLog).count(),
             "mcp_call_log": db.query(McpCallLog).count(),
-            "video_source_runtime_state": db.query(VideoSourceRuntimeState).count(),
             "app_runtime_state": db.query(AppRuntimeState).count(),
         }
 
@@ -125,7 +123,7 @@ def main() -> None:
                 "outbox_event, event_tag_rel, event_record, daily_summary, "
                 "daily_summary_generation_attempt, chat_query_log, mcp_call_log, "
                 "llm_usage_log, video_session_file_rel, video_session, "
-                "video_file, task_log, video_source_runtime_state, "
+                "video_file, task_log, "
                 "pipeline_transition_log, session_analysis_checkpoint CASCADE"
             )
         )
@@ -155,7 +153,6 @@ def main() -> None:
             "daily_summary": db.query(DailySummary).count(),
             "chat_query_log": db.query(ChatQueryLog).count(),
             "mcp_call_log": db.query(McpCallLog).count(),
-            "video_source_runtime_state": db.query(VideoSourceRuntimeState).count(),
             "app_runtime_state": db.query(AppRuntimeState).count(),
         }
 

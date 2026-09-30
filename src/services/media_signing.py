@@ -16,8 +16,9 @@ from src.core.config import settings
 MediaResourceKind = Literal["file", "session_stream", "session_hls", "image"]
 
 SIGNER_VERSION: Final = "v1"
-MANIFEST_TTL_SECONDS: Final = 1_800
-SEGMENT_TTL_SECONDS: Final = 1_800
+# Media URL TTLs are runtime system configuration, not constants here:
+# ``media_manifest_ttl_seconds`` / ``media_segment_ttl_seconds`` in
+# ``src/services/system_config_registry.py`` (default 1800 s each).
 
 
 @dataclass(frozen=True, slots=True)

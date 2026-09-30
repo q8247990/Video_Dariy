@@ -156,8 +156,7 @@ def test_call_tool_search_and_media_paths(pg_db: Session) -> None:
     assert search_result["structuredContent"]["events"][0]["title"] == "门口停留"
     assert sessions_result["structuredContent"]["sessions"][0]["id"] == session_id
     # PG timestamptz round-trips a tz-aware ISO string (``+08:00``
-    # suffix); the SQLite path returned a naive string. Match the
-    # wall-clock prefix so the assertion is stable across dialects.
+    # suffix); match the wall-clock prefix so the assertion is stable.
     assert sessions_result["structuredContent"]["sessions"][0]["session_start_time"].startswith(
         "2026-02-26T15:10:00"
     )
@@ -179,6 +178,7 @@ def test_call_tool_ask_home_monitor_success(pg_db: Session, monkeypatch) -> None
         is_default_qa=True,
         supports_vision=False,
         is_default_vision=False,
+        supports_tool_calling=True,
     )
     pg_db.add(provider)
     pg_db.commit()
@@ -187,41 +187,37 @@ def test_call_tool_ask_home_monitor_success(pg_db: Session, monkeypatch) -> None
 
     _call_count = {"n": 0}
 
-    def _mock_chat_completion(
+    def _mock_chat_completion_with_tools(
         self,
         messages,
+        tools,
         temperature=0.2,
         max_tokens=None,
-        response_format=None,
-        extra_body=None,
     ):
-        del messages, temperature, max_tokens, response_format, extra_body
+        del self, messages, tools, temperature, max_tokens
         _call_count["n"] += 1
         if _call_count["n"] == 1:
-            # 意图识别阶段：返回结构化 JSON
-            return json.dumps(
+            arguments = {
+                "start_time": "2026-02-26T00:00:00",
+                "end_time": "2026-02-26T23:59:59",
+            }
+            return None, [
                 {
-                    "question_mode": "overview",
-                    "time_range": {
-                        "start": "2026-02-26T12:00:00",
-                        "end": "2026-02-26T18:00:00",
-                        "time_label": "yesterday_afternoon",
-                    },
-                    "subjects": [],
-                    "event_types": [],
-                    "use_daily_summary_first": False,
-                    "use_session_summary_first": True,
-                    "need_event_details": True,
-                    "limit": 30,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search_events", "arguments": json.dumps(arguments)},
                 },
-                ensure_ascii=False,
-            )
-        # 回答阶段
-        return "昨天下午门口有短暂停留。"
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "get_sessions", "arguments": json.dumps(arguments)},
+                },
+            ]
+        return "昨天下午门口有短暂停留。", None
 
     monkeypatch.setattr(
-        "src.providers.openai_client.OpenAIClient.chat_completion",
-        _mock_chat_completion,
+        "src.providers.openai_client.OpenAIClient.chat_completion_with_tools",
+        _mock_chat_completion_with_tools,
     )
 
     result = call_tool(

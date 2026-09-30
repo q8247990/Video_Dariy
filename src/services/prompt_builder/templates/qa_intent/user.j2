@@ -1,6 +1,0 @@
-
-家庭上下文：
-家庭名={{ home_profile.home_name | default("", true) | compact_text }}; 关注点={{ home_profile.focus_points | default([], true) | compact_list }}
-已知主体: {{ subject_names | join("、") if subject_names else "无" }}
-当前时间: {{ now_iso }}（{{ timezone }}）
-用户问题: {{ question }}

@@ -9,10 +9,7 @@ class SystemConfigUpdate(BaseModel):
     daily_summary_time: Optional[str] = None
     scan_interval_seconds: Optional[int] = None
     scan_hot_window_hours: Optional[int] = None
-    scan_late_tolerance_seconds: Optional[int] = None
-    latency_alert_threshold_seconds: Optional[int] = None
-    alert_consecutive_required: Optional[int] = None
-    alert_notify_cooldown_minutes: Optional[int] = None
+
     tag_recommendation_enabled: Optional[bool] = None
     mcp_enabled: Optional[bool] = None
     mcp_token: Optional[str] = None
@@ -22,5 +19,6 @@ class SystemConfigUpdate(BaseModel):
     llm_daily_token_quota_per_provider: Optional[int] = None
     media_manifest_ttl_seconds: Optional[int] = None
     media_segment_ttl_seconds: Optional[int] = None
+    media_entity_image_ttl_seconds: Optional[int] = None
 
     model_config = ConfigDict(extra="forbid")

@@ -36,7 +36,7 @@ def _seed_session(db: Session, durations: list[int]) -> VideoSession:
         session_start_time=start,
         session_end_time=start + timedelta(seconds=sum(durations)),
         total_duration_seconds=sum(durations),
-        analysis_status="pending",
+        analysis_status="sealed",
     )
     db.add(session)
     db.flush()

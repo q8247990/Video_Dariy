@@ -34,12 +34,16 @@ from src.services.analysis.aggregator import (
 )
 from src.services.analysis.checkpoint_failure import enforce_fencing
 from src.services.analysis.checkpoint_writer import ClaimGuards
+from src.services.analysis.webhook_events import (
+    enroll_session_analyzed_webhooks,
+    find_session_analyzed_subscribers,
+)
+from src.services.dispatch import finalize_task_log
 from src.services.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
 )
 from src.services.pipeline_state import transition_session, transition_task_log
-from src.services.task_dispatch_control import finalize_task_log
 
 
 def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize dict shape.
@@ -54,6 +58,7 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
     priority: str,
     raw_mp4_num_frames: int,
     parse_modes: list[str],
+    media_input_budget: Optional[int] = None,
     deadline_prompts: Optional[list[str]] = None,
     replace_session_events_fn: Any = None,
 ) -> dict[str, Any]:
@@ -93,6 +98,7 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
         reason="analysis_completed",
         source="analyze_session_task",
     )
+    subscribers = find_session_analyzed_subscribers(db)
     finalize_task_log(
         task_log,
         TaskStatus.SUCCESS,
@@ -104,10 +110,22 @@ def finalize_session_success(  # noqa: PLR0913 — mirrors the legacy finalize d
             "file_count": file_count,
             "recognized_sub_chunks": sub_chunk_count,
             "media_num_frames": raw_mp4_num_frames,
+            "media_input_budget": media_input_budget,
             "parse_modes": parse_modes,
             "priority": priority,
+            "webhook_subscribers": len(subscribers),
         },
     )
+    if subscribers:
+        enroll_session_analyzed_webhooks(
+            db,
+            session_id=session.id,
+            source_id=session.source_id,
+            events_created=len(events_to_persist),
+            file_count=file_count,
+            analysis_status=SessionAnalysisStatus.SUCCESS.value,
+            subscribers=subscribers,
+        )
     db.commit()
     return {
         "events_created": len(events_to_persist),
@@ -137,7 +155,7 @@ def cancel_session(  # noqa: PLR0913 — mirrors the legacy cancel dict shape.
     message: str,
 ) -> dict[str, Any]:
     """Roll an interrupted run back to SEALED and finalize the TaskLog as CANCELLED."""
-    from src.services.task_dispatch_control import finalize_cancelled_task_log
+    from src.services.dispatch import finalize_cancelled_task_log
 
     task_log = db.query(TaskLog).filter(TaskLog.id == task_log_id).first()
     if task_log is None:

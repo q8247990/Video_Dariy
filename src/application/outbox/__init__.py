@@ -83,14 +83,11 @@ Submodules
 
 from __future__ import annotations
 
-from src.application.outbox.cli import main
 from src.application.outbox.contracts import (
     DEFAULT_MAX_PAYLOAD_BYTES,
     DEFAULT_MAX_PAYLOAD_DEPTH,
-    JSONSafeValue,
     OutboxCommand,
     OutboxEvent,
-    OutboxRowDict,
     emit_event,
     new_event_id,
 )
@@ -149,7 +146,6 @@ __all__ = [
     "DEFAULT_MAX_PAYLOAD_DEPTH",
     "DEFAULT_QUEUE",
     "EnrollOutcome",
-    "JSONSafeValue",
     "JSON_SAFE_ATOMIC_TYPES",
     "JSON_SAFE_CONTAINER_TYPES",
     "OutboxCommand",
@@ -161,7 +157,6 @@ __all__ = [
     "OutboxPublisher",
     "OutboxRegistryError",
     "OutboxRepository",
-    "OutboxRowDict",
     "OutboxStateError",
     "OutboxStatus",
     "PUBLISHER_BACKLOG_DEGRADED_SECONDS",
@@ -184,7 +179,6 @@ __all__ = [
     "ensure_json_safe",
     "is_json_safe",
     "is_terminal",
-    "main",
     "new_event_id",
     "transition",
     "validate_command_payload",

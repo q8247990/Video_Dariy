@@ -23,10 +23,10 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from src.services.session_video import get_session_video_files
+from src.services.session_video import get_session_video_files, resolve_file_duration_seconds
 
 if TYPE_CHECKING:
-    from src.models.video_file import VideoFile
+    pass
 
 
 @dataclass
@@ -60,7 +60,7 @@ def build_file_sub_chunks(db: Session, session_id: int) -> list[SubChunk]:
     for index, video_file in enumerate(video_files):
         if not video_file.file_path:
             raise ValueError(f"Video file path is empty: {video_file.id}")
-        duration_seconds = _resolve_file_duration_seconds(video_file)
+        duration_seconds = resolve_file_duration_seconds(video_file)
         sub_chunks.append(
             SubChunk(
                 chunk_index=0,
@@ -83,17 +83,6 @@ def build_video_data_url(file_path: str) -> str:
         raise ValueError(f"video file {file_path} produced empty video bytes")
     video_base64 = base64.b64encode(video_bytes).decode("utf-8")
     return f"data:video/mp4;base64,{video_base64}"
-
-
-def _resolve_file_duration_seconds(video_file: VideoFile) -> int:
-    duration_seconds = video_file.duration_seconds
-    if isinstance(duration_seconds, (int, float)) and duration_seconds > 0:
-        return int(duration_seconds)
-
-    estimated = int((video_file.end_time - video_file.start_time).total_seconds())
-    if estimated > 0:
-        return estimated
-    return 60
 
 
 __all__ = [

@@ -13,7 +13,6 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.task_log import ACTIVE_DEDUPE_INDEX_PREDICATE, TaskLog
@@ -137,10 +136,8 @@ def insert_fresh_running_row(
 ) -> Optional[TaskLog]:
     """INSERT a brand-new RUNNING TaskLog and return it (or ``None`` on race).
 
-    PostgreSQL uses the partial unique index as the silent race net
+    The partial unique index is the silent race net
     (``on_conflict_do_nothing`` returns ``inserted_id=None``).
-    SQLite has no such index; we catch the resulting
-    :class:`IntegrityError` and rollback the session.
     """
     row_values = {
         "task_type": task_type,
@@ -154,33 +151,20 @@ def insert_fresh_running_row(
         "lease_expires_at": now + timedelta(seconds=lease_seconds),
         "detail_json": detail_payload,
     }
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        stmt = (
-            postgresql_insert(TaskLog)
-            .values(**row_values)
-            .on_conflict_do_nothing(
-                index_elements=[TaskLog.dedupe_key],
-                index_where=text(ACTIVE_DEDUPE_INDEX_PREDICATE),
-            )
-            .returning(TaskLog.id)
+    stmt = (
+        postgresql_insert(TaskLog)
+        .values(**row_values)
+        .on_conflict_do_nothing(
+            index_elements=[TaskLog.dedupe_key],
+            index_where=text(ACTIVE_DEDUPE_INDEX_PREDICATE),
         )
-        inserted_id = db.execute(stmt).scalar_one_or_none()
-        db.flush()
-        if inserted_id is None:
-            return None
-        return db.query(TaskLog).filter(TaskLog.id == inserted_id).one()
-
-    task_log = TaskLog(**row_values)
-    db.add(task_log)
-    try:
-        db.flush()
-    except IntegrityError:
-        # A newer active row claimed the same dedupe key between the
-        # candidate scan and this insert: drop this binding instead of
-        # crashing the worker with a UniqueViolation.
-        db.rollback()
+        .returning(TaskLog.id)
+    )
+    inserted_id = db.execute(stmt).scalar_one_or_none()
+    db.flush()
+    if inserted_id is None:
         return None
-    return task_log
+    return db.query(TaskLog).filter(TaskLog.id == inserted_id).one()
 
 
 __all__ = [

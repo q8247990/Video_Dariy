@@ -48,6 +48,9 @@
   - 初始化管理员，仅首次有效
 - `POST /api/v1/auth/login`
   - 登录，返回 JWT Token 与当前用户信息
+- `POST /api/v1/auth/change-password`
+  - 修改当前管理员密码；需 Bearer Token，Body 为 `old_password` / `new_password`
+    （新密码 ≥ 8 位），旧密码错误返回业务码 4000
 
 ### Health
 
@@ -176,6 +179,9 @@
   - 获取家庭画像
 - `PUT /`
   - 更新家庭画像
+- `GET /context`
+  - 获取家庭上下文（`home_profile` + `members` + `pets`，含签名头像 URL），
+    与 Prompt 组装使用的一致形状
 - `GET /entities`
   - 获取家庭成员/宠物实体列表
 - `POST /entities/member`
@@ -252,13 +258,15 @@
 - `GET /files/{file_id}/stream`
   - 播放单个视频文件，支持 Range 请求
 - `GET /sessions/{session_id}/playback`
-  - 获取 Session 播放信息，包括单文件列表、合并播放地址、HLS 地址
+  - 获取 Session 播放信息，包括单文件列表、`playback_url`、`hls_url` 与 `playback_mode`。
+    `playback_url` 由 `SESSION_PLAYBACK_MODE` 决定：`hls_index_only`（默认，HLS 清单）、
+    `merged_stream`（合并流）、`direct_file`（首个可用文件）
 - `GET /sessions/{session_id}/stream`
   - 播放合并后的 Session 视频
 - `GET /sessions/{session_id}/hls/index.m3u8`
-  - 获取 Session 的 HLS 清单
-- `GET /sessions/{session_id}/hls/{file_name}`
-  - 获取 HLS 媒体分片；播放 URL 必须带签名能力参数
+  - 获取 Session 的 HLS 清单；清单中的每个"分片"实际指向签名后的
+    `GET /files/{file_id}/stream`（每个文件一个签名能力 URL），不存在单独的
+    `/sessions/{session_id}/hls/{file_name}` 端点
 
 ## 12. MCP 接口
 

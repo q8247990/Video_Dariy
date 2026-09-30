@@ -6,7 +6,7 @@ references and no I/O. The function :func:`reduce_files` consumes
 the dedupe output and a snapshot of the source's currently-open
 session, and returns a :class:`ReducerPlan` describing exactly
 what the persistence stage must insert / append. Tests can call
-it against in-memory records without standing up SQLite.
+it against in-memory records without any database.
 
 Plan layout
 ===========

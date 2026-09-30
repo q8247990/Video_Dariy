@@ -157,7 +157,7 @@ export function WebhookForm({ initialValue, pending, onCancel, onSubmit }: Webho
         <input
           value={form.eventTypesText}
           onChange={(event) => setForm((old) => ({ ...old, eventTypesText: event.target.value }))}
-          placeholder="all, daily_summary_generated@1.0, question_answered@1.0"
+          placeholder="all, daily_summary_generated@1.0, session_analyzed@1.0"
         />
       </label>
 

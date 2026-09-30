@@ -417,13 +417,12 @@ export type SystemConfig = {
   daily_summary_schedule?: string
   scan_interval_seconds?: number
   scan_hot_window_hours?: number
-  scan_late_tolerance_seconds?: number
-  latency_alert_threshold_seconds?: number
-  alert_consecutive_required?: number
-  alert_notify_cooldown_minutes?: number
   tag_recommendation_enabled?: boolean
   mcp_enabled?: boolean
   mcp_token?: string
+  media_manifest_ttl_seconds?: number
+  media_segment_ttl_seconds?: number
+  media_entity_image_ttl_seconds?: number
 }
 
 export type TaskLogItem = {

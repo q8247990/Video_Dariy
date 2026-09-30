@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.application.bootstrap import Container
+from src.core.exceptions import DomainError
 from src.core.i18n import t
 from src.models.llm_provider import LLMProvider
 from src.services.llm_provider_tester import check_provider_connectivity
@@ -45,11 +46,73 @@ def _ok(
     return ProviderMutationResult(provider=provider, payload=payload)
 
 
+def _validate_update_constraints(
+    *,
+    dump: dict,
+    provider: LLMProvider,
+    locale: str,
+    next_supports_vision: bool,
+    next_supports_qa: bool,
+    next_is_default_vision: bool,
+    next_is_default_qa: bool,
+) -> Optional[ProviderMutationResult]:
+    error = _check_any_capability(
+        supports_vision=next_supports_vision, supports_qa=next_supports_qa, locale=locale
+    )
+    if error is None:
+        error = _check_qa_tool_calling(dump, provider, locale, supports_qa=next_supports_qa)
+    if error is None:
+        error = _check_cannot_disable_default(
+            is_default_vision=next_is_default_vision,
+            supports_vision=next_supports_vision,
+            is_default_qa=next_is_default_qa,
+            supports_qa=next_supports_qa,
+            enabled=dump.get("enabled"),
+            locale=locale,
+        )
+    return error
+
+
 def _ensure_provider_capabilities(dump: dict, locale: str) -> None:
     supports_vision = bool(dump.get("supports_vision", False))
     supports_qa = bool(dump.get("supports_qa", True))
     if not supports_vision and not supports_qa:
-        raise ValueError(t("provider.capability_required", locale))
+        raise DomainError(t("provider.capability_required", locale))
+    if supports_qa and not bool(dump.get("supports_tool_calling", False)):
+        raise DomainError(t("provider.qa_requires_tool_calling", locale))
+
+
+def _check_any_capability(
+    *, supports_vision: bool, supports_qa: bool, locale: str
+) -> Optional[ProviderMutationResult]:
+    if supports_vision or supports_qa:
+        return None
+    return _err(4001, t("provider.capability_required", locale))
+
+
+def _check_cannot_disable_default(
+    *,
+    is_default_vision: bool,
+    supports_vision: bool,
+    is_default_qa: bool,
+    supports_qa: bool,
+    enabled: object,
+    locale: str,
+) -> Optional[ProviderMutationResult]:
+    would_be_default = (is_default_vision and supports_vision) or (is_default_qa and supports_qa)
+    if would_be_default and enabled is False:
+        return _err(4003, t("provider.cannot_disable_default", locale))
+    return None
+
+
+def _check_qa_tool_calling(
+    dump: dict, provider: LLMProvider, locale: str, *, supports_qa: bool
+) -> Optional[ProviderMutationResult]:
+    if not supports_qa:
+        return None
+    if bool(dump.get("supports_tool_calling", provider.supports_tool_calling)):
+        return None
+    return _err(4001, t("provider.qa_requires_tool_calling", locale))
 
 
 def _apply_legacy_fields(dump: dict) -> None:
@@ -71,11 +134,6 @@ def _set_provider_type_flag(dump: dict, provider: LLMProvider) -> None:
 
 
 def create_provider_use_case(db: Session, dump: dict, locale: str) -> ProviderMutationResult:
-    try:
-        _ensure_provider_capabilities(dump, locale)
-    except ValueError as exc:
-        return _err(4001, str(exc))
-
     if not bool(dump.get("supports_vision", False)):
         dump["is_default_vision"] = False
     if not bool(dump.get("supports_qa", True)):
@@ -88,6 +146,11 @@ def create_provider_use_case(db: Session, dump: dict, locale: str) -> ProviderMu
     if dump.get("is_default_qa"):
         dump["supports_qa"] = True
         dump["enabled"] = True
+
+    try:
+        _ensure_provider_capabilities(dump, locale)
+    except ValueError as exc:
+        return _err(4001, str(exc))
 
     _apply_legacy_fields(dump)
     dump["api_key"] = encrypt_provider_api_key(dump["api_key"])
@@ -111,9 +174,6 @@ def update_provider_use_case(
 
     next_supports_vision = bool(dump.get("supports_vision", provider.supports_vision))
     next_supports_qa = bool(dump.get("supports_qa", provider.supports_qa))
-    if not next_supports_vision and not next_supports_qa:
-        return _err(4001, t("provider.capability_required", locale))
-
     next_is_default_vision = bool(dump.get("is_default_vision", provider.is_default_vision))
     next_is_default_qa = bool(dump.get("is_default_qa", provider.is_default_qa))
 
@@ -130,11 +190,17 @@ def update_provider_use_case(
         dump["supports_qa"] = True
         dump["enabled"] = True
 
-    would_be_default = (next_is_default_vision and next_supports_vision) or (
-        next_is_default_qa and next_supports_qa
+    constraint_error = _validate_update_constraints(
+        dump=dump,
+        provider=provider,
+        locale=locale,
+        next_supports_vision=bool(dump.get("supports_vision", provider.supports_vision)),
+        next_supports_qa=bool(dump.get("supports_qa", provider.supports_qa)),
+        next_is_default_vision=next_is_default_vision,
+        next_is_default_qa=next_is_default_qa,
     )
-    if would_be_default and dump.get("enabled") is False:
-        return _err(4003, t("provider.cannot_disable_default", locale))
+    if constraint_error is not None:
+        return constraint_error
 
     _set_provider_type_flag(dump, provider)
     for key, value in dump.items():
@@ -186,6 +252,9 @@ def set_default_provider_use_case(
 
     if not getattr(provider, capability_field):
         return _err(4004, t(_DEFAULT_MSG_KEY_BY_TYPE[provider_type], locale))
+
+    if capability_field == "supports_qa" and not provider.supports_tool_calling:
+        return _err(4004, t("provider.qa_requires_tool_calling", locale))
 
     db.query(LLMProvider).filter(capability_column.is_(True), LLMProvider.id != id).update(
         {default_field: False}

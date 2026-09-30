@@ -5,7 +5,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from src.application.bootstrap import Container, bootstrap_production
+from src.application.bootstrap import Container, get_production_container
 from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.config import settings
 from src.core.i18n import DEFAULT_LOCALE
@@ -16,17 +16,13 @@ from src.schemas.auth import TokenData
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
-# Module-level composition-root singleton. Bound once at import time so
-# every FastAPI dependency reuses the same LLM gateway / dispatcher /
-# Celery control bindings without going through the composition root on
-# each request. Endpoints reach into ``_container`` via the
-# ``get_container`` dependency below, which mirrors the pattern in
-# ``src/mcp/tools.py`` and keeps the API layer free of
-# ``src.infrastructure.*`` imports.
-#
+# Module-level reference to the process-wide production container
+# (``src.application.bootstrap.get_production_container``). The API, MCP,
+# and Celery entry points all share that single instance, so the process
+# holds one dispatcher / LLM gateway factory / Celery control binding.
 # Tests that need hermetic isolation override ``set_container_for_tests``
 # from a fixture before any HTTP request fires.
-_container: Container = bootstrap_production()
+_container: Container = get_production_container()
 
 
 def get_locale(request: Request) -> str:

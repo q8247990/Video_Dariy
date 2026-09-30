@@ -19,8 +19,7 @@ The function has three behavioural branches:
    ``(task_type, task_target_id, dedupe_key)`` and binds the
    earliest match.
 3. Otherwise the helper creates a fresh RUNNING row in one INSERT
-   (PG dialect uses the partial unique index as the silent race
-   net; SQLite falls back to ``IntegrityError`` rollback).
+   (the partial unique index is the silent race net).
 
 Each branch has its own helper in this module so the top-level
 function stays at the C901 budget (≤ 10 branches). The behavioural
@@ -75,9 +74,8 @@ def bind_or_create_running_task_log(
       terminal (a redelivered broker message after the row was
       finalized by the maintenance heartbeat).
     * The candidate scan and INSERT both lose the race against a
-      newer active row that claims the same dedupe-key (PG partial
-      unique index ``on_conflict_do_nothing``; SQLite
-      ``IntegrityError`` rollback).
+      newer active row that claims the same dedupe-key (partial
+      unique index ``on_conflict_do_nothing``).
 
     Behaviour is preserved verbatim from the pre-Wave-5 monolith;
     every existing unit / integration test in

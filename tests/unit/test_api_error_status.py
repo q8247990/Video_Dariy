@@ -42,6 +42,15 @@ def test_compatibility_errors_use_http_statuses_without_changing_payload() -> No
     assert external_response.json()["code"] == 5001
 
 
+def test_main_maps_only_domain_error_to_400() -> None:
+    """只有 DomainError 映射为 400；裸 ValueError 交给 500，避免掩盖编程错误。"""
+    from src.core.exceptions import DomainError
+    from src.main import app
+
+    assert DomainError in app.exception_handlers
+    assert ValueError not in app.exception_handlers
+
+
 def test_validation_error_uses_422_with_compatibility_payload() -> None:
     from src.main import app
 

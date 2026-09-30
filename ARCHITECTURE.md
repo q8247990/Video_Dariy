@@ -112,7 +112,9 @@
 特点：
 
 - 这里承载了“业务编排逻辑”，但不是完整 DDD；部分核心业务仍落在 `services` 中
-- `src/application/bootstrap.py` 当前仅保留兼容占位，没有形成真正 DI 入口
+- `src/application/bootstrap.py` 是组合根：`Container` + `bootstrap_production()` /
+  `bootstrap_for_tests()` 将 `infrastructure` 适配器绑定到 `application.ports` 的 Protocol，
+  `api` / `mcp` / `tasks` 经它注入调度器、LLM 网关与 Celery 控制面
 
 ### 4.4 `src/services/`
 
@@ -124,14 +126,13 @@
 - `analysis/`：按 claim、chunk plan、sub-chunk、checkpoint、聚合与 finalize 拆分 Session 分析
 - `summarizer/`：按调度、证据、生成、解析与 finalize 拆分日报生成
 - `dispatch/` 与 `maintenance/`：任务 claim/lease/dedupe/cancel，以及热调度、超时恢复、文件/日志清理
-- `session_analysis_video.py`：Session 切片、视频片段处理
+- `session_analysis_video.py`：文件级 sub-chunk 构建（一文件一 sub-chunk，不切不并）与 `raw_mp4` payload
 - `daily_summary/*`：日报预处理与输出解析
 - `home_profile.py`：家庭画像上下文构建
-- `dashboard.py`：仪表盘统计
+- `dashboard/`：仪表盘统计（`queries` / `presenter` 分离）
 - `provider_selector.py`：视觉模型 / QA 模型选择
 - `video_source_validator.py`：视频目录校验
 - `webhook_payload.py` / `webhook_subscription.py`：Webhook 事件载荷与订阅判断
-- `task_dispatch_control.py`：任务去重、运行态保护、任务日志绑定
 
 这是当前项目中最重要的一层，承载了大量真实业务规则。
 
@@ -267,7 +268,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 2. 若当前视频源没有同类活跃扫描任务，则派发热扫描任务
 3. `session_build.runner.run()` 经 discovery 阶段调用 `XiaomiDirectoryParser.scan_directory()` 扫描目录
 4. 使用 `VideoFile.file_path_hash` 去重，避免重复入库和重复分析
-5. 新文件按时间顺序追加到当前 open Session，若相邻片段间隔大于 61 秒则创建新 Session
+5. 新文件按时间顺序追加到当前 open Session，仅当相邻片段间隔大于 `MERGE_GAP_SECONDS`（=1 秒）时才创建新 Session
 6. 热扫描模式下保留最近 open Session，历史 open Session 被 seal
 7. 若 open Session 在 600 秒内没有新片段，也会被 seal
 8. seal 后自动派发分析任务
@@ -277,6 +278,9 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 - 合并阈值：`MERGE_GAP_SECONDS = 1`
 - 封口缓冲：`SEAL_BUFFER_SECONDS = 600`
 - 扫描模式：`hot` / `full`
+- 热扫描回溯：系统配置 `scan_hot_window_hours`（默认 24h，同时作为 FULL 扫描上界）
+- 每源扫描间隔：系统配置 `scan_interval_seconds`（默认 300s，心跳据此跳过刚扫过的源）
+- 可调度 gate：`is_source_schedulable`（启用 / 未暂停 / 已校验 / 支持的源类型）
 
 ### 5.2 Session 分析与事件生成
 
@@ -291,7 +295,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
 2. 按文件切分：session 内每个视频文件恰好对应一个 sub-chunk，一次 LLM 调用；不合并、不切割（历史的两级切块 600s→60s 已删除）
-3. LLM 载荷固定为 `raw_mp4`：直接将单文件 mp4 base64 传给视觉模型，并通过 `media_io_kwargs.video.num_frames` 请求服务端均匀采样。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径，也不再做跨文件 concat。
+3. LLM 载荷固定为 `raw_mp4`：直接将单文件 mp4 base64 传给视觉模型，并通过 `media_io_kwargs.video.num_frames` 请求服务端均匀采样（默认 120，可由模型服务 `extra_config_json.num_frames` 配置，范围 1–600）。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径，也不再做跨文件 concat。
 4. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
 5. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
 6. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
@@ -318,7 +322,6 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 - token quota 检查与 token usage 记录
 - 死锁重试与分析状态回滚
 - 失败时保留原始模型返回摘要片段，方便排查
-- 关键帧提取 ffmpeg stderr 末 1KB 截断（异常信息不污染 TaskLog）
 
 ### 5.3 家庭日报生成
 
@@ -351,25 +354,23 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 - `src/api/v1/endpoints/chat.py`
 - `src/application/qa/service.py`
-- `src/application/qa/planner.py`
-- `src/application/qa/retriever.py`
-- `src/application/qa/evidence_compressor.py`
+- `src/application/qa/agent.py`
+- `src/application/qa/tools.py`
 
 流程：
 
 1. 接收问题文本
-2. 选择 QA Provider
-3. 构建家庭上下文
-4. 用 LLM 输出 QueryPlan / RetrievalPlan
-5. 分层检索日报、Session、事件
-6. 压缩证据，减少上下文开销
-7. 再次调用模型生成最终回答
-8. 记录 `ChatQueryLog`
+2. 选择 QA Provider（必须支持 tool calling）
+3. 构建家庭上下文与数据范围的 system prompt
+4. Agentic loop：模型自主发起 tool call（`get_data_availability` / `search_events` / `get_sessions` / `get_daily_summary`），最多 2 轮
+5. 基于工具结果生成最终回答
+6. 记录 `ChatQueryLog`（含引用的事件与会话）
 
 特点：
 
-- 不是简单的全文搜索，而是“理解问题 -> 规划检索 -> 组织证据 -> 回答”
+- 基于 tool_calling 的 agentic 问答；旧的“意图解析 + 分层检索 + 证据压缩”路径已移除
 - 可返回引用的事件与 Session
+- QA Provider 在创建/编辑时校验必须支持 tool calling
 
 ### 5.5 Webhook 推送
 
@@ -386,6 +387,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 2. 系统在事件触发点构造标准载荷
 3. Celery 任务异步发送 HTTP POST
 4. 订阅匹配逻辑支持标准化的 `event_subscriptions_json`
+5. 已实现事件类型：`daily_summary_generated`（日报生成）、`session_analyzed`（分析完成）
 
 ### 5.6 MCP 能力
 
@@ -425,7 +427,7 @@ DailySummary 1 --- 1 summary_date
   - 连续录像片段形成的逻辑会话
   - 持有分析状态、摘要、活跃度、主体等字段
 - `EventRecord`
-  - 结构化事件，记录时间、动作、对象、重要程度、偏移量等
+  - 结构化事件，记录时间、动作、对象、关注标记（attention）、偏移量等
 - `DailySummary`
   - 按天汇总的结构化结果
 - `TaskLog`
@@ -509,12 +511,15 @@ DailySummary 1 --- 1 summary_date
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `ENTITY_IMAGE_ROOT`
 - `SESSION_PLAYBACK_MODE`
-- `MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS`（媒体签名 URL 有效期，默认 1800 秒）
 - `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST`（Webhook SSRF 防护的内网放行列表）
 > Session 分析已无切片相关环境变量：`ANALYZER_SEGMENT_SECONDS` /
 > `ANALYZER_LLM_CHUNK_SECONDS` / `ANALYZER_VIDEO_KEYFRAME_*` 均已删除。
 > 分析单位为视频文件（一文件一次 LLM 调用），文件真实时长在入库时由
 > `ffprobe` 探测（失败回退 60s）。
+>
+> 媒体清单/分片/实体头像有效期来自系统配置键 `media_manifest_ttl_seconds` /
+> `media_segment_ttl_seconds` / `media_entity_image_ttl_seconds`（默认均 1800 秒），
+> 由媒体播放接口、HLS 清单与实体头像签名读取，不是环境变量。
 
 说明：当前根目录 `.env.example` 已按 PostgreSQL、Redis、MCP 与播放缓存目录的实际配置同步更新，推荐以 `src/core/config.py` 和 `docker-compose.yml` 为最终运行准则。
 
@@ -558,6 +563,8 @@ Session 分析状态（`analysis_status`）主要包括：
 - `failed`
 
 `pipeline_state.py` 集中定义并执行 `VideoSession` 与 `TaskLog` 的合法状态迁移，同时写入 append-only 的 `PipelineTransitionLog` 审计。扫描构建与任务日志有各自的运行状态集合。
+
+`analysis_status` 的初始态是 `open`（不是 `pending`；`pending` 只是历史上残留的列默认值，迁移 `20260928_0027` 已将其归并为 `open`）。同一迁移为 `video_session.analysis_status` 与 `task_log.status` 增加了数据库 CHECK 约束，非法状态无法写入。
 
 ### 9.3 媒体生命周期与源删除（外键策略）
 
@@ -624,6 +631,19 @@ Session 分析状态（`analysis_status`）主要包括：
 - **至多一次 vs 至少一次**：投递为 **至少一次（at-least-once）**，消费侧
   幂等短路兜底；文中任何描述均不主张 exactly-once。
 
+### 9.9 国际化（locale 传递与资源加载）
+
+- **请求 locale 解析**：`LocaleMiddleware`（`src/main.py`）按
+  `X-Locale` > `Accept-Language`（首个语言标签）> 系统默认解析，写入
+  `request.state.locale`，响应回写 `Content-Language`。
+- **系统默认语言**：`SystemConfigLocaleProvider`（`src/application/system_config/locale_provider.py`）
+  读 `system_config.default_locale`（60s TTL 缓存），回退环境变量 `DEFAULT_LOCALE`，
+  再回退内置 `zh-CN`；由组合根在启动时绑定到 `src.core.i18n`。
+- **资源加载**：后端 `src/core/i18n/locales/{zh_CN,en_US}.json` 经 `t(key, locale)` 惰性加载；
+  前端 `frontend/src/locales/{zh-CN,en-US}.json` 经 i18next 加载，axios 透传 `Accept-Language`。
+- **AI 输出语言**：`locale_directive` 统一向 QA / 日报 / MCP / 重试 prompt 注入语言与语气指令；
+  仅影响新生成内容，历史数据不回填翻译。
+
 ## 10. 测试与质量保障
 
 后端测试位于 `tests/unit/` 与 `tests/integration/`。
@@ -631,10 +651,10 @@ Session 分析状态（`analysis_status`）主要包括：
 常用命令：
 
 ```bash
-python3 -m pytest tests/unit -q         # 单元测试
-python3 -m pytest -m postgres           # 集成测试，需真实 PostgreSQL（DATABASE_URL）
+python3 -m pytest tests/unit -q         # 单元测试（数据库用例统一依赖真实 PostgreSQL）
+python3 -m pytest -m postgres           # 集成测试，同样需真实 PostgreSQL（DATABASE_URL）
 python3 -m alembic upgrade head
-python3 -m alembic heads                # 期望 20260923_0025
+python3 -m alembic heads                # 期望 20260928_0027
 ruff check .
 ruff format --check src tests
 ```
@@ -658,8 +678,8 @@ ruff format --check src tests
 
 ### 建议关注点
 
-- `.env.example` 需要与 PostgreSQL 现状保持一致
-- `application/bootstrap.py` 可逐步演进为统一依赖注入入口
+- `.env.example`、`docker-compose.yml` 与 `src/core/config.py` 需保持三者一致
+- `application/bootstrap.py` 已是统一依赖注入入口，新增适配器继续在此绑定
 - 媒体流接口目前注释中也提到，后续可补更细粒度鉴权
 - 如果后续支持更多厂商目录格式，可继续扩展 `adapters/`
 

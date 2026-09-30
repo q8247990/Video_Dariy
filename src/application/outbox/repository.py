@@ -28,45 +28,29 @@ the caller to ``commit()``. This is the seam the cutover (Todo 14)
 relies on: business code commits ``TaskLog`` + ``OutboxEvent`` in one
 transaction; a crash anywhere between the two leaves zero rows.
 
-SQLite vs PostgreSQL
+Concurrency contract
 ====================
 
-The repository deliberately supports both dialects:
+The partial unique index ``(task_log_id) WHERE status='pending'`` is the
+structural guarantee that prevents duplicate enqueue under concurrency:
+``INSERT … ON CONFLICT (task_log_id) WHERE status='pending' DO NOTHING``
+returns no row when a parallel transaction already inserted one, and the
+caller falls back to "the original row is the one to publish".
 
-- on **PostgreSQL**, the partial unique index
-  ``(task_log_id) WHERE status='pending'`` is the structural
-  guarantee that prevents duplicate enqueue under concurrency;
-  ``INSERT … ON CONFLICT (task_log_id) WHERE status='pending' DO
-  NOTHING`` returns ``0 rows`` when a parallel transaction already
-  inserted one, and the caller falls back to "the original row is
-  the one to publish".
-- on **SQLite**, there is no partial-index-aware ``ON CONFLICT``;
-  the repository falls back to a regular ``INSERT … ON CONFLICT
-  (task_log_id) DO NOTHING``. The full ``UNIQUE (task_log_id)``
-  constraint (also part of the schema) still prevents duplicate
-  rows, so the SQLite path is safe for unit tests that exercise
-  the contract without standing up PostgreSQL.
+``try_claim_one`` uses ``SELECT … FOR UPDATE SKIP LOCKED`` so multiple
+publisher instances do not contend on the same row.
 
-Concurrency notes
-=================
-
-``try_claim_one`` uses ``SELECT … FOR UPDATE SKIP LOCKED`` on
-PostgreSQL so multiple publisher instances do not contend on the
-same row. The clause is PostgreSQL-only; on SQLite the method
-behaves as a plain SELECT + UPDATE inside an explicit transaction.
+This repository targets PostgreSQL only.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.application.outbox.contracts import (
@@ -90,8 +74,7 @@ class EnrollOutcome:
 
     Attributes:
         event: The persisted ``OutboxEvent``. ``event.id`` is filled
-            in by the BIGSERIAL sequence on PostgreSQL (or the
-            SQLite rowid on SQLite).
+            in by the BIGSERIAL sequence.
         created: True if a new row was INSERTed; False if a row for
             the same ``task_log_id`` already existed and the caller
             should treat the existing row as authoritative.
@@ -134,11 +117,10 @@ class OutboxRepository:
         """Persist a new outbox row bound to ``task_log`` in the caller tx.
 
         Uses ``INSERT … ON CONFLICT DO NOTHING`` against the partial
-        unique index on ``(task_log_id) WHERE status='pending'`` (PG)
-        or the full unique on ``task_log_id`` (SQLite). The row is
-        added to ``self._db`` but **not** committed; the caller owns
-        the transaction so the business write and the outbox INSERT
-        share one commit.
+        unique index on ``(task_log_id) WHERE status='pending'``. The
+        row is added to ``self._db`` but **not** committed; the caller
+        owns the transaction so the business write and the outbox
+        INSERT share one commit.
 
         Args:
             task_log: The ``TaskLog`` row that was just created in the
@@ -178,58 +160,17 @@ class OutboxRepository:
 
         row_values = self._row_values_from_event(event)
 
-        if self._is_postgres():
-            insert_stmt: Any = postgresql_insert(OutboxEventRow).values(**row_values)
-            insert_stmt = insert_stmt.on_conflict_do_nothing(
-                index_elements=["task_log_id"],
-                index_where=text(PENDING_INDEX_PREDICATE),
-            )
-            result = self._db.execute(
-                insert_stmt.returning(OutboxEventRow.event_id, OutboxEventRow.id)
-            )
-            returned = result.mappings().first()
-            if returned is None:
-                # A pending row already exists; caller treats the existing
-                # row as authoritative. We still need an event_id to hand
-                # back to the caller (the consumer-side bind helper uses
-                # it to look up the row), so we read it from the DB.
-                existing = self._db.execute(
-                    select(OutboxEventRow).where(OutboxEventRow.task_log_id == task_log.id)
-                ).scalar_one()
-                return EnrollOutcome(
-                    event=self._event_from_row(existing),
-                    created=False,
-                )
-            self._db.flush()
-            event_id = returned["event_id"]
-            inserted_id = returned["id"]
-            # Backfill the dataclass so callers see the DB-assigned
-            # surrogate id and the canonical event_id value.
-            object.__setattr__(event, "id", inserted_id)
-            object.__setattr__(event, "event_id", event_id)
-            return EnrollOutcome(event=event, created=True)
-
-        # SQLite path: regular UNIQUE on ``task_log_id`` (no partial).
-        # Still race-safe at the unit-test level because the index is
-        # enforced. SAVEPOINT wraps the INSERT so an IntegrityError
-        # cannot poison the caller's outer transaction.
-        insert_stmt = sqlite_insert(OutboxEventRow).values(**row_values)
-        insert_stmt = insert_stmt.on_conflict_do_nothing(index_elements=["task_log_id"])
-        nested = self._db.begin_nested()
-        try:
-            result = self._db.execute(insert_stmt)
-            nested.commit()
-        except IntegrityError:
-            nested.rollback()
-            existing = self._db.execute(
-                select(OutboxEventRow).where(OutboxEventRow.task_log_id == task_log.id)
-            ).scalar_one()
-            return EnrollOutcome(
-                event=self._event_from_row(existing),
-                created=False,
-            )
-        if _rowcount(result) == 0:
-            # ON CONFLICT DO NOTHING consumed a duplicate.
+        insert_stmt = postgresql_insert(OutboxEventRow).values(**row_values)
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=["task_log_id"],
+            index_where=text(PENDING_INDEX_PREDICATE),
+        )
+        result = self._db.execute(insert_stmt.returning(OutboxEventRow.event_id, OutboxEventRow.id))
+        returned = result.mappings().first()
+        if returned is None:
+            # A pending row already exists; the caller treats the existing
+            # row as authoritative. We still hand back its event_id because
+            # the consumer-side bind helper uses it to look the row up.
             existing = self._db.execute(
                 select(OutboxEventRow).where(OutboxEventRow.task_log_id == task_log.id)
             ).scalar_one()
@@ -238,13 +179,10 @@ class OutboxRepository:
                 created=False,
             )
         self._db.flush()
-        # SQLite increments the implicit ``rowid`` into ``id``; refresh
-        # from the row so the dataclass is consistent.
-        inserted = self._db.execute(
-            select(OutboxEventRow).where(OutboxEventRow.task_log_id == task_log.id)
-        ).scalar_one()
-        object.__setattr__(event, "id", inserted.id)
-        object.__setattr__(event, "event_id", inserted.event_id)
+        # Backfill the dataclass so callers see the DB-assigned surrogate
+        # id and the canonical event_id value.
+        object.__setattr__(event, "id", returned["id"])
+        object.__setattr__(event, "event_id", returned["event_id"])
         return EnrollOutcome(event=event, created=True)
 
     # ------------------------------------------------------------------
@@ -266,10 +204,9 @@ class OutboxRepository:
         updates it to ``status='publishing'`` with the supplied
         ``claimed_by`` and ``lease_expires_at = now() + lease_seconds``.
 
-        On PostgreSQL the SELECT uses ``FOR UPDATE SKIP LOCKED`` so
-        two publisher instances never contend. The whole operation
-        runs in a single transaction so the lease + status flip are
-        atomic.
+        The SELECT uses ``FOR UPDATE SKIP LOCKED`` so two publisher
+        instances never contend. The whole operation runs in a single
+        transaction so the lease + status flip are atomic.
 
         Returns ``None`` when no row is eligible. Returns the claimed
         :class:`OutboxEvent` (with the post-update status /
@@ -283,8 +220,7 @@ class OutboxRepository:
         lease_expiry = current + timedelta(seconds=lease_seconds)
 
         # Pick the candidate set under a row lock so concurrent
-        # publishers do not claim the same id. ``with_for_update`` on
-        # SQLite is a no-op (SQLite serializes writers anyway).
+        # publishers do not claim the same id.
         candidate_stmt = (
             select(OutboxEventRow)
             .where(
@@ -293,9 +229,8 @@ class OutboxRepository:
             )
             .order_by(OutboxEventRow.next_attempt_at, OutboxEventRow.id)
             .limit(batch_size)
+            .with_for_update(skip_locked=True)
         )
-        if self._is_postgres():
-            candidate_stmt = candidate_stmt.with_for_update(skip_locked=True)
         candidates = self._db.execute(candidate_stmt).scalars().all()
         if not candidates:
             return None
@@ -498,19 +433,14 @@ class OutboxRepository:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _is_postgres(self) -> bool:
-        bind = self._db.bind
-        return bool(bind is not None and bind.dialect.name == "postgresql")
-
     def _row_values_from_event(self, event: OutboxEvent) -> dict[str, Any]:
         """Translate the DTO into a ``dict`` for the INSERT.
 
         Args/kwargs are pre-validated and JSON-normalized by
         :func:`emit_event` so we can store them as-is; PostgreSQL
-        will serialize them into ``JSONB`` and SQLite will serialize
-        into ``TEXT``. The DB does the final encoding so we keep the
-        in-memory shape (lists/dicts) rather than pre-dumping to a
-        string.
+        serializes them into ``JSONB``. The DB does the final encoding
+        so we keep the in-memory shape (lists/dicts) rather than
+        pre-dumping to a string.
         """
         now = event.created_at or datetime.now(tz=timezone.utc)
         return {
@@ -535,19 +465,7 @@ class OutboxRepository:
         }
 
     def _event_from_row(self, row: OutboxEventRow) -> OutboxEvent:
-        """Read a row back into the DTO shape.
-
-        Handles the dialect difference for JSONB vs TEXT: on PostgreSQL
-        SQLAlchemy returns a Python ``list`` / ``dict`` already; on
-        SQLite the values come back as JSON strings, so we ``json.loads``
-        them.
-        """
-        args_json = row.args_json
-        kwargs_json = row.kwargs_json
-        if isinstance(args_json, str):
-            args_json = json.loads(args_json)
-        if isinstance(kwargs_json, str):
-            kwargs_json = json.loads(kwargs_json)
+        """Read a row back into the DTO shape (JSONB deserializes to list/dict)."""
         return OutboxEvent(
             id=row.id,
             event_id=row.event_id,
@@ -555,8 +473,8 @@ class OutboxRepository:
             dedupe_key=row.dedupe_key,
             task_name=row.task_name,
             queue=row.queue,
-            args_json=args_json,
-            kwargs_json=kwargs_json,
+            args_json=row.args_json,
+            kwargs_json=row.kwargs_json,
             status=OutboxStatus(row.status),
             attempt_count=row.attempt_count,
             next_attempt_at=row.next_attempt_at,

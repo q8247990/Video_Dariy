@@ -3,12 +3,10 @@
 Wave 5 split the pre-Wave-5 ``src/services/task_dispatch_control.py``
 and ``src/tasks/task_maintenance.py`` monoliths into discrete policy
 modules. This test file pins the cross-process / cross-transaction
-behavioural contracts the SQLite unit-test suite cannot exercise:
+behavioural contracts the unit-test suite cannot exercise:
 
 * the partial unique index that gates
-  :func:`src.services.dispatch.claim.create_pending_task_log` on
-  PostgreSQL (the unit tests use the legacy SELECT-then-INSERT
-  fallback because SQLite has no partial unique index);
+  :func:`src.services.dispatch.claim.create_pending_task_log`;
 * the transactional boundary between the maintenance policies
   (``recover_timed_out_tasks`` → ``resume_lost_analysis`` →
   ``dispatcher.dispatch_analyze_session``): one failed stage must
@@ -102,6 +100,7 @@ def test_repeated_heartbeat_no_duplicate_or_state_corruption(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
         )
         db.add(source)
@@ -255,6 +254,7 @@ def test_missing_scan_exception_does_not_pollute_other_stage_transactions(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
         )
         db.add(source)
@@ -486,6 +486,7 @@ def test_lease_expired_analysis_recovery_writes_outbox_row(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
         )
         db.add(source)

@@ -21,7 +21,7 @@ from src.application.ports.llm_gateway import LLMGatewayPort
 from src.models.llm_provider import LLMProvider
 from src.services.analysis.chunk_plan import SubChunkPlan
 from src.services.analysis.constants import RAW_MP4_NUM_FRAMES
-from src.services.provider_generation_limits import resolve_max_output_tokens
+from src.services.provider_generation_limits import resolve_max_output_tokens, resolve_num_frames
 from src.services.session_analysis_video import build_video_data_url
 from src.services.video_analysis.schemas import RecognitionResultDTO
 
@@ -86,9 +86,9 @@ def build_sub_chunk_video_url(sub_chunk: SubChunkPlan) -> str:
     return build_video_data_url(sub_chunk.file_paths[0])
 
 
-def build_sub_chunk_extra_body() -> dict[str, Any]:
+def build_sub_chunk_extra_body(num_frames: int) -> dict[str, Any]:
     """Return the ``media_io_kwargs.video.num_frames`` hint."""
-    return {"media_io_kwargs": {"video": {"num_frames": RAW_MP4_NUM_FRAMES}}}
+    return {"media_io_kwargs": {"video": {"num_frames": num_frames}}}
 
 
 def execute_sub_chunk(
@@ -128,7 +128,9 @@ def execute_sub_chunk(
     if video_data_url is None:
         video_data_url = build_sub_chunk_video_url(sub_chunk)
     if extra_body is None:
-        extra_body = build_sub_chunk_extra_body()
+        extra_body = build_sub_chunk_extra_body(
+            resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
+        )
     messages = _build_messages(
         system_prompt=system_prompt,
         user_prompt=user_prompt,

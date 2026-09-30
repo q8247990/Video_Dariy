@@ -1,15 +1,13 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
+from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from src.api.deps import DB, CurrentUser, Locale
+from src.application.qa.errors import QAProviderInvokeError, QAProviderNotConfiguredError
 from src.application.qa.schemas import QARequest
-from src.application.qa.service import (
-    QAProviderInvokeError,
-    QAProviderNotConfiguredError,
-    QAService,
-)
+from src.application.qa.service import QAService
 from src.core.i18n import t
 from src.models.chat_query_log import ChatQueryLog
 from src.schemas.chat import ChatAskRequest, ChatAskResponse, ChatQueryLogResponse
@@ -53,7 +51,12 @@ def ask_question(db: DB, current_user: CurrentUser, locale: Locale, request: Cha
 
 
 @router.get("/history", response_model=PaginatedResponse[ChatQueryLogResponse])
-def get_chat_history(db: DB, current_user: CurrentUser, page: int = 1, page_size: int = 20) -> Any:
+def get_chat_history(
+    db: DB,
+    current_user: CurrentUser,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+) -> Any:
     query = db.query(ChatQueryLog).order_by(ChatQueryLog.created_at.desc())
 
     total = query.count()

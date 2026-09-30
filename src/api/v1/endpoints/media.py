@@ -8,14 +8,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from src.api.deps import DB, CurrentUser, Locale
+from src.core.config import settings
 from src.core.i18n import t
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.schemas.response import BaseResponse
 from src.services.media_signing import (
-    MANIFEST_TTL_SECONDS,
-    SEGMENT_TTL_SECONDS,
     MediaCapability,
     MediaCapabilityError,
     MediaResourceKind,
@@ -29,8 +28,16 @@ from src.services.session_video import (
     mark_missing_video_file,
     resolve_video_file_path,
 )
+from src.services.system_config_registry import (
+    MEDIA_MANIFEST_TTL_SECONDS,
+    MEDIA_SEGMENT_TTL_SECONDS,
+    get_configs,
+)
 
 router = APIRouter()
+
+#: ``playback_url`` selection modes (``SESSION_PLAYBACK_MODE``).
+_PLAYBACK_MODES = frozenset({"hls_index_only", "merged_stream", "direct_file"})
 
 
 def _clamp_range_end(byte2: int, file_size: int) -> int:
@@ -168,6 +175,38 @@ def _no_store_headers() -> dict[str, str]:
     return {"Cache-Control": "no-store"}
 
 
+def _resolve_playback_url(
+    *,
+    configured_mode: str,
+    session_id: int,
+    files_data: list[dict],
+    segment_ttl_seconds: int,
+    hls_url: str,
+) -> tuple[str, str | None]:
+    """Return ``(mode, playback_url)`` for the configured playback mode.
+
+    Unknown modes fall back to ``hls_index_only``. ``direct_file`` points at
+    the first available segment; ``merged_stream`` at the concatenated
+    session stream.
+    """
+    mode = configured_mode.strip().lower()
+    if mode not in _PLAYBACK_MODES:
+        mode = "hls_index_only"
+
+    if mode == "merged_stream":
+        return mode, _capability_url(
+            f"/media/sessions/{session_id}/stream",
+            "session_stream",
+            session_id,
+            segment_ttl_seconds,
+        )
+    if mode == "direct_file":
+        first_available = next((fd for fd in files_data if fd["available"]), None)
+        candidate = first_available["stream_url"] if first_available else None
+        return mode, candidate if isinstance(candidate, str) else None
+    return mode, hls_url
+
+
 @router.get("/files/{file_id}/stream", response_model=None)
 def stream_video(
     file_id: int, db: DB, locale: Locale, request: Request, token: str | None = Query(default=None)
@@ -217,6 +256,10 @@ def get_session_playback(
     if not session:
         return BaseResponse(code=4002, message=t("session.not_found", locale))
 
+    ttl_config = get_configs(db, (MEDIA_SEGMENT_TTL_SECONDS, MEDIA_MANIFEST_TTL_SECONDS))
+    segment_ttl_seconds = int(ttl_config[MEDIA_SEGMENT_TTL_SECONDS])
+    manifest_ttl_seconds = int(ttl_config[MEDIA_MANIFEST_TTL_SECONDS])
+
     rels = (
         db.query(VideoSessionFileRel)
         .filter(VideoSessionFileRel.session_id == session_id)
@@ -258,7 +301,7 @@ def get_session_playback(
                         f"/media/files/{vf.id}/stream",
                         "file",
                         vf.id,
-                        SEGMENT_TTL_SECONDS,
+                        segment_ttl_seconds,
                         session.id,
                     )
                     if available
@@ -280,23 +323,28 @@ def get_session_playback(
     elif available_count != len(files_data):
         availability = "partial"
 
+    hls_url = _capability_url(
+        f"/media/sessions/{session.id}/hls/index.m3u8",
+        "session_hls",
+        session.id,
+        manifest_ttl_seconds,
+    )
+    mode, playback_url = _resolve_playback_url(
+        configured_mode=settings.SESSION_PLAYBACK_MODE,
+        session_id=session.id,
+        files_data=files_data,
+        segment_ttl_seconds=segment_ttl_seconds,
+        hls_url=hls_url,
+    )
+
     return BaseResponse(
         data={
             "session_id": session.id,
             "session_start_time": session.session_start_time,
             "session_end_time": session.session_end_time,
-            "playback_url": _capability_url(
-                f"/media/sessions/{session.id}/stream",
-                "session_stream",
-                session.id,
-                SEGMENT_TTL_SECONDS,
-            ),
-            "hls_url": _capability_url(
-                f"/media/sessions/{session.id}/hls/index.m3u8",
-                "session_hls",
-                session.id,
-                MANIFEST_TTL_SECONDS,
-            ),
+            "playback_mode": mode,
+            "playback_url": playback_url,
+            "hls_url": hls_url,
             "files": files_data,
             "availability": availability,
         }

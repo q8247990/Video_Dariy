@@ -9,8 +9,7 @@ from src.services.prompt_builder.v2.daily_summary import (
     build_subject_summary_prompt,
     compress_daily_input,
 )
-from src.services.prompt_builder.v2.qa_answer import build_qa_answer_prompt
-from src.services.prompt_builder.v2.qa_intent import build_qa_intent_prompt
+from src.services.prompt_builder.v2.qa_agent import build_qa_agent_prompt
 from src.services.prompt_builder.v2.video_recognition import (
     build_strategy_note,
     build_video_recognition_prompt,
@@ -26,6 +25,5 @@ __all__ = [
     "build_daily_task_prompt",
     "build_subject_summary_prompt",
     "compress_daily_input",
-    "build_qa_intent_prompt",
-    "build_qa_answer_prompt",
+    "build_qa_agent_prompt",
 ]

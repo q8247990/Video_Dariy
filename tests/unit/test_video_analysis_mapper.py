@@ -12,7 +12,7 @@ def test_build_event_record_with_base_offset() -> None:
         session_start_time=datetime(2026, 3, 14, 10, 0, 0),
         session_end_time=datetime(2026, 3, 14, 10, 30, 0),
         total_duration_seconds=1800,
-        analysis_status="pending",
+        analysis_status="sealed",
     )
 
     recognized_event = RecognizedEventDTO(

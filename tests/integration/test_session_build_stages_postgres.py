@@ -5,7 +5,7 @@
 These tests exercise the staged runner in
 :mod:`src.services.session_build.runner` against a real
 PostgreSQL schema migrated to the new head. They cover the
-PG-specific behaviour the SQLite unit tests in
+PG-specific behaviour the unit tests in
 ``tests/unit/test_session_build_stages.py`` cannot:
 
 * the full vs hot representative-fixture agreement — both

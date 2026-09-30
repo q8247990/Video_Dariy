@@ -1,8 +1,8 @@
 """Stage-local constants for the session-build pipeline.
 
 These constants are the externally-observable knobs of the
-pipeline; the slim Celery task in :mod:`src.tasks.session_build`
-and the pre-existing ``src.services.session_builder`` facade
+pipeline; the session-build runner (:mod:`src.services.session_build.runner`)
+and the Celery orchestration (:mod:`src.tasks._session_build_orchestration`)
 both import from here so a single change in this module flips
 every consumer in lockstep.
 
@@ -31,8 +31,8 @@ MERGE_GAP_SECONDS: int = 1
 #: is sealed once ``now - session_end_time`` exceeds this constant.
 SEAL_BUFFER_SECONDS: int = 600
 
-#: SQLite-friendly batch size for the existing-hash query; larger
-#: batches risk hitting SQLite's bound parameter limit.
+#: Batch size for the existing-hash lookup; keeps the query's bound
+#: parameter list small.
 HASH_QUERY_CHUNK_SIZE: int = 500
 
 __all__ = [

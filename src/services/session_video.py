@@ -32,6 +32,14 @@ def is_video_file_available(video_file: VideoFile) -> bool:
     return path is not None and path.is_file()
 
 
+def resolve_file_duration_seconds(video_file: VideoFile) -> int:
+    duration = video_file.duration_seconds
+    if isinstance(duration, (int, float)) and duration > 0:
+        return int(duration)
+    span = int((video_file.end_time - video_file.start_time).total_seconds())
+    return span if span > 0 else 60
+
+
 def mark_missing_video_file(video_file: VideoFile) -> None:
     if not video_file.file_missing:
         video_file.file_missing = True

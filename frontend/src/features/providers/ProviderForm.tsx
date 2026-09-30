@@ -21,6 +21,7 @@ type FormState = {
   retry_count: number
   max_model_len: string
   max_output_tokens: string
+  num_frames: string
   enabled: boolean
   supports_vision: boolean
   supports_qa: boolean
@@ -41,6 +42,7 @@ function buildExtraConfigJson(
   const entries: [string, string][] = [
     ['max_model_len', form.max_model_len],
     ['max_output_tokens', form.max_output_tokens],
+    ['num_frames', form.num_frames],
   ]
   for (const [key, raw] of entries) {
     const parsed = Number.parseInt(raw, 10)
@@ -64,10 +66,11 @@ function getInitialState(initialValue?: Provider): FormState {
     retry_count: initialValue?.retry_count ?? 3,
     max_model_len: readExtraString(extra.max_model_len),
     max_output_tokens: readExtraString(extra.max_output_tokens),
+    num_frames: readExtraString(extra.num_frames) || '120',
     enabled: initialValue?.enabled ?? true,
     supports_vision: initialValue?.supports_vision ?? false,
     supports_qa: initialValue?.supports_qa ?? true,
-    supports_tool_calling: initialValue?.supports_tool_calling ?? false,
+    supports_tool_calling: initialValue?.supports_tool_calling ?? true,
   }
 }
 
@@ -284,6 +287,18 @@ export function ProviderForm({
           />
         </label>
       </div>
+
+      <label>
+        {t('providers.form_num_frames')}
+        <input
+          type="number"
+          min={1}
+          max={600}
+          value={form.num_frames}
+          onChange={(event) => setForm((old) => ({ ...old, num_frames: event.target.value }))}
+          placeholder={t('providers.form_num_frames_placeholder')}
+        />
+      </label>
 
       <label className="checkbox-field">
         <input

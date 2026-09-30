@@ -1,10 +1,10 @@
 from datetime import date, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.exc import OperationalError
 
-from src.api.common import paginate
+from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, paginate
 from src.api.deps import DB, CurrentUser, Locale, get_container_dep
 from src.application.daily_summary import to_daily_summary_response
 from src.application.pipeline.commands import GenerateDailySummaryCommand
@@ -14,8 +14,8 @@ from src.models.daily_summary import DailySummary
 from src.models.video_session import VideoSession
 from src.schemas.daily_summary import DailySummaryResponse
 from src.schemas.response import BaseResponse, PaginatedResponse
+from src.services.dispatch import build_dedupe_key, find_duplicate_active_task
 from src.services.pipeline_constants import SessionAnalysisStatus, TaskType
-from src.services.task_dispatch_control import build_dedupe_key, find_duplicate_active_task
 
 router = APIRouter()
 
@@ -56,7 +56,11 @@ def _has_active_daily_summary_task(db: DB, target_date: date) -> bool:
 
 @router.get("", response_model=PaginatedResponse[DailySummaryResponse])
 def get_daily_summaries(
-    db: DB, current_user: CurrentUser, locale: Locale, page: int = 1, page_size: int = 20
+    db: DB,
+    current_user: CurrentUser,
+    locale: Locale,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
 ) -> Any:
     query = db.query(DailySummary).order_by(DailySummary.summary_date.desc())
 

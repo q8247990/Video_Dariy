@@ -14,12 +14,6 @@ def collect_source_deletion_orphan_report(db: Session) -> list[SourceOrphanRepor
     checks = (
         ("video_file.source_id", "video_file", "source_id", "video_source"),
         ("video_session.source_id", "video_session", "source_id", "video_source"),
-        (
-            "video_source_runtime_state.source_id",
-            "video_source_runtime_state",
-            "source_id",
-            "video_source",
-        ),
         ("event_record.source_id", "event_record", "source_id", "video_source"),
         ("event_record.session_id", "event_record", "session_id", "video_session"),
         (

@@ -8,7 +8,6 @@ from src.application.pipeline.commands import (
     SendWebhookCommand,
     SessionBuildCommand,
 )
-from src.application.pipeline.events import SessionAnalyzed, SessionSealed
 from src.application.ports.task_dispatcher import TaskDispatcherPort
 
 
@@ -33,12 +32,3 @@ class PipelineOrchestrator:
         command: GenerateDailySummaryCommand,
     ) -> Optional[str]:
         return self.dispatcher.dispatch_generate_daily_summary(db, command)
-
-    def on_session_sealed(self, db: Session, event: SessionSealed) -> Optional[str]:
-        return self.dispatcher.dispatch_analyze_session(
-            db,
-            AnalyzeSessionCommand(session_id=event.session_id, priority=event.priority),
-        )
-
-    def on_session_analyzed(self, db: Session, event: SessionAnalyzed) -> None:
-        _ = db, event

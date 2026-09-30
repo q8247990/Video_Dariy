@@ -710,7 +710,7 @@ def test_sub_chunk_runner_extra_body_constant_on_postgres(
             file_paths=(str(fake_mp4),),
         )
     ]
-    extra_body = build_sub_chunk_extra_body()
+    extra_body = build_sub_chunk_extra_body(120)
     assert extra_body["media_io_kwargs"]["video"]["num_frames"] == 120
 
     url = build_sub_chunk_video_url(plans[0])

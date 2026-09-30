@@ -1,8 +1,8 @@
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
-from src.api.common import paginate
+from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, paginate
 from src.api.deps import DB, ContainerDep, CurrentUser, Locale
 from src.application.llm_providers import (
     create_provider_use_case,
@@ -42,8 +42,8 @@ def _provider_response_builder(provider: LLMProvider) -> dict[str, Any]:
 def get_providers(
     db: DB,
     current_user: CurrentUser,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     provider_type: str | None = None,
     enabled: bool | None = None,
 ) -> Any:

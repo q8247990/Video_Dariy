@@ -432,6 +432,7 @@ def test_hot_scheduling_picks_enabled_sources(
                 camera_name="cam",
                 location_name="loc",
                 source_type="local_directory",
+                last_validate_status="success",
                 enabled=enabled,
                 source_paused=paused,
             )
@@ -443,6 +444,42 @@ def test_hot_scheduling_picks_enabled_sources(
 
     assert len(dispatched) == 2
     assert all(c.scan_mode == ScanMode.HOT for c in dispatcher.dispatched_session_build)
+
+
+def test_hot_scheduling_skips_source_scanned_within_interval(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source scanned more recently than ``scan_interval_seconds`` is skipped."""
+    db = db_session
+    now = datetime.now(timezone.utc)
+    db.add(
+        VideoSource(
+            source_name="fresh",
+            camera_name="cam",
+            location_name="loc",
+            source_type="local_directory",
+            last_validate_status="success",
+            last_scan_at=now,
+        )
+    )
+    db.add(
+        VideoSource(
+            source_name="stale",
+            camera_name="cam",
+            location_name="loc",
+            source_type="local_directory",
+            last_validate_status="success",
+            last_scan_at=None,
+        )
+    )
+    db.commit()
+
+    dispatcher = _bind_fake_dispatcher(monkeypatch)
+    dispatched = dispatch_hot_builds(db)
+
+    assert len(dispatched) == 1
+    assert [c.scan_mode for c in dispatcher.dispatched_session_build] == [ScanMode.HOT]
 
 
 # ===========================================================================
@@ -606,6 +643,7 @@ def test_heartbeat_aggregates_results_no_branching(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
             source_paused=False,
         )
@@ -748,6 +786,7 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
             source_paused=False,
         )

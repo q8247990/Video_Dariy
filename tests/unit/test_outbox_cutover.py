@@ -42,8 +42,8 @@ from src.application.pipeline.commands import (
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.outbox import OutboxEvent as OutboxEventRow
 from src.models.task_log import TaskLog
+from src.services.dispatch import create_pending_task_log
 from src.services.pipeline_constants import ScanMode, TaskStatus, TaskType
-from src.services.task_dispatch_control import create_pending_task_log
 
 SessionFactory = Callable[[], Session]
 

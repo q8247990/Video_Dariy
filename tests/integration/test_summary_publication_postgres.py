@@ -1,7 +1,7 @@
 """PostgreSQL integration tests for the daily-summary publication use case (Todo 16).
 
 These tests exercise :func:`publish_daily_summary` against a real
-PostgreSQL schema migrated to the new head. The SQLite unit tests in
+PostgreSQL schema migrated to the new head. The unit tests in
 ``tests/unit/test_summary_publication.py`` cover the algorithmic
 contract — these tests pin down the PG-specific behaviour the SQL
 dialect owns:

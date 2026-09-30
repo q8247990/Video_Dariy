@@ -3,7 +3,7 @@
 These tests exercise the persistence layer on a real PostgreSQL
 database that has been migrated to the new head (including the new
 ``pipeline_transition_log`` table from migration ``20260902_0021``).
-They cover the behaviors the SQLite unit tests cannot:
+They cover the behaviors the unit tests cannot:
 
 - Replaying a full ``VideoSession`` state chain via the audit rows
   (every successful CAS has a row, and the ``occurred_at`` order

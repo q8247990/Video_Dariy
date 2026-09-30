@@ -91,9 +91,12 @@ losing every prior write. Operators who need to roll back must
 restore the pre-upgrade backup that AGENTS.md §10 already requires.
 
 This migration is irreversible in the same sense as the prior
-``20260825_0012``, ``20260825_0014``, ``20260826_0017``,
-``20260902_0018``, ``20260902_0019``, ``20260902_0020`` and
-``20260902_0021`` revisions.
+``20260825_0012``, ``20260825_0014``, ``20260902_0018``,
+``20260902_0019``, ``20260902_0020`` and ``20260902_0021``
+revisions (their ``downgrade()`` raises). ``20260826_0017`` is
+downgradable in code but is still a destructive FK rewrite that
+aborts on orphaned references, so it also requires a verified backup
+before running.
 """
 
 from typing import Sequence, Union

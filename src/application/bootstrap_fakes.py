@@ -116,18 +116,9 @@ class FakeTaskDispatcher(TaskDispatcherPort):
             + len(self.dispatched_webhook)
         )
 
-    def reset(self) -> None:
-        """Clear all recorded dispatches and reset the task-ID counter."""
-
-        self.dispatched_session_build.clear()
-        self.dispatched_analyze_session.clear()
-        self.dispatched_daily_summary.clear()
-        self.dispatched_webhook.clear()
-        self._counter = 0
-        self._next_return = _UNSET
+    # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
 # ClockPort fake
 # ---------------------------------------------------------------------------
 

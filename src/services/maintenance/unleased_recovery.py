@@ -27,9 +27,8 @@ Concurrency safety
 ==================
 
 Both sweeps issue the PENDING-row SELECT with ``with_for_update()``
-(``SELECT ... FOR UPDATE`` on PostgreSQL, a no-op on the SQLite test
-dialect) so concurrent heartbeat/worker recoveries claim each row
-exclusively. Without the lock, two sweeps can read the same PENDING
+(``SELECT ... FOR UPDATE``) so concurrent heartbeat/worker recoveries
+claim each row exclusively. Without the lock, two sweeps can read the same PENDING
 rows, each flip them to TIMEOUT, and both inflate their
 ``pending_recovered`` counter — the double-claim the Wave-5
 ``tests/integration/test_dispatch_maintenance_postgres.py::test_concurrent_orphan_recovery_creates_one_recovery``

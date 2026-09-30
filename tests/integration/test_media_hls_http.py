@@ -9,7 +9,7 @@ HTTP 契约测试，覆盖 ``src/api/v1/endpoints/media.py`` 的 HLS 端点
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -53,11 +53,17 @@ def media_workspace(tmp_path: Path) -> Iterator[Path]:
             settings.VIDEO_ROOT_PATH = old_video_root
 
 
-def _seed_two_segment_session(db: Session, video_root: Path) -> tuple[int, int, int]:
-    """建 1 个 source + 1 个 session + 2 个 video_file。
+def _seed_two_segment_session(
+    db: Session, video_root: Path, durations: tuple[int, int] = (60, 60)
+) -> tuple[int, int, int]:
+    """建 1 个 source + 1 个 session + 2 个 video_file，按时长推导时间轴。
 
     返回 ``(session_id, file_a_id, file_b_id)``。
     """
+    first_duration, second_duration = durations
+    session_start = datetime(2026, 3, 14, 8, 0, 0)
+    first_end = session_start + timedelta(seconds=first_duration)
+    session_end = first_end + timedelta(seconds=second_duration)
     source = VideoSource(
         source_name="source-1",
         camera_name="客厅",
@@ -69,10 +75,10 @@ def _seed_two_segment_session(db: Session, video_root: Path) -> tuple[int, int, 
     db.flush()
     session = VideoSession(
         source_id=source.id,
-        session_start_time=datetime(2026, 3, 14, 8, 0, 0),
-        session_end_time=datetime(2026, 3, 14, 8, 2, 0),
-        total_duration_seconds=120,
-        analysis_status="pending",
+        session_start_time=session_start,
+        session_end_time=session_end,
+        total_duration_seconds=first_duration + second_duration,
+        analysis_status="sealed",
     )
     db.add(session)
     db.flush()
@@ -82,9 +88,9 @@ def _seed_two_segment_session(db: Session, video_root: Path) -> tuple[int, int, 
         file_path=str(video_root / "0800.mp4"),
         storage_type="local_file",
         file_format="mp4",
-        start_time=datetime(2026, 3, 14, 8, 0, 0),
-        end_time=datetime(2026, 3, 14, 8, 1, 0),
-        duration_seconds=60,
+        start_time=session_start,
+        end_time=first_end,
+        duration_seconds=first_duration,
         parse_status="parsed",
     )
     file_b = VideoFile(
@@ -93,9 +99,9 @@ def _seed_two_segment_session(db: Session, video_root: Path) -> tuple[int, int, 
         file_path=str(video_root / "0801.mp4"),
         storage_type="local_file",
         file_format="mp4",
-        start_time=datetime(2026, 3, 14, 8, 1, 0),
-        end_time=datetime(2026, 3, 14, 8, 2, 0),
-        duration_seconds=60,
+        start_time=first_end,
+        end_time=session_end,
+        duration_seconds=second_duration,
         parse_status="parsed",
     )
     db.add_all([file_a, file_b])
@@ -123,10 +129,30 @@ def test_session_playback_returns_signed_playback_and_hls_urls(
     payload = response.json()
     assert payload["code"] == 0
     data = payload["data"]
-    assert data["playback_url"].startswith(f"/media/sessions/{session_id}/stream?token=")
+    assert data["playback_mode"] == "hls_index_only"
+    assert data["playback_url"] == data["hls_url"]
     assert data["hls_url"].startswith(f"/media/sessions/{session_id}/hls/index.m3u8?token=")
     assert urlsplit(data["playback_url"]).query.startswith("token=")
     assert urlsplit(data["hls_url"]).query.startswith("token=")
+
+
+def test_session_playback_mode_selects_merged_stream_and_direct_file(
+    client: TestClient, pg_db: Session, media_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SESSION_PLAYBACK_MODE`` chooses what ``playback_url`` points at."""
+    (media_workspace / "0800.mp4").touch()
+    (media_workspace / "0801.mp4").touch()
+    session_id, file_a_id, _ = _seed_two_segment_session(pg_db, media_workspace)
+
+    monkeypatch.setattr(settings, "SESSION_PLAYBACK_MODE", "merged_stream")
+    merged = client.get(f"/api/v1/media/sessions/{session_id}/playback").json()["data"]
+    assert merged["playback_mode"] == "merged_stream"
+    assert merged["playback_url"].startswith(f"/media/sessions/{session_id}/stream?token=")
+
+    monkeypatch.setattr(settings, "SESSION_PLAYBACK_MODE", "direct_file")
+    direct = client.get(f"/api/v1/media/sessions/{session_id}/playback").json()["data"]
+    assert direct["playback_mode"] == "direct_file"
+    assert direct["playback_url"].startswith(f"/media/files/{file_a_id}/stream?token=")
 
 
 def test_session_hls_manifest_serves_signed_segment_urls_with_no_store_cache(
@@ -145,8 +171,26 @@ def test_session_hls_manifest_serves_signed_segment_urls_with_no_store_cache(
     assert response.headers["cache-control"] == "no-store"
     body = response.text
     assert "#EXTM3U" in body
+    assert "#EXT-X-TARGETDURATION:60" in body
+    assert body.count("#EXTINF:60.0,") == 2
     assert f"/api/v1/media/files/{file_a_id}/stream?token=" in body
     assert f"/api/v1/media/files/{file_b_id}/stream?token=" in body
+
+
+def test_session_hls_manifest_uses_real_file_durations(
+    client: TestClient, pg_db: Session, media_workspace: Path
+) -> None:
+    """非 60 秒文件：``EXTINF`` 与 ``TARGETDURATION`` 使用真实文件时长。"""
+    (media_workspace / "0800.mp4").touch()
+    (media_workspace / "0801.mp4").touch()
+    session_id, _, _ = _seed_two_segment_session(pg_db, media_workspace, durations=(45, 75))
+
+    hls_url = client.get(f"/api/v1/media/sessions/{session_id}/playback").json()["data"]["hls_url"]
+    body = client.get(f"/api/v1{hls_url}").text
+
+    assert "#EXT-X-TARGETDURATION:75" in body
+    assert "#EXTINF:45.0," in body
+    assert "#EXTINF:75.0," in body
 
 
 def test_session_playback_reports_partial_availability_when_a_segment_is_missing(
@@ -167,7 +211,7 @@ def test_session_playback_reports_partial_availability_when_a_segment_is_missing
         source_id=source.id,
         session_start_time=datetime(2026, 3, 14, 8, 0, 0),
         session_end_time=datetime(2026, 3, 14, 8, 2, 0),
-        analysis_status="pending",
+        analysis_status="sealed",
     )
     pg_db.add(session)
     pg_db.flush()

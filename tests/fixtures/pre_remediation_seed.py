@@ -113,7 +113,7 @@ def seed_pre_remediation(session: Session) -> dict[str, int]:
     session.add(video_session)
 
     # VideoSessionFileRel 只有裸 FK 列、无 ORM relationship，UoW 无法推断插入顺序；
-    # 显式 flush 保证父行先落库（PostgreSQL 会强制 FK，SQLite 内存库不保证暴露该问题）
+    # 显式 flush 保证父行先落库（PostgreSQL 会强制 FK）
     session.flush()
 
     session.add_all(

@@ -628,3 +628,12 @@ def test_stop_returns_502_when_revoke_raises(
         assert "broker unreachable" in body["message"]
     finally:
         api_deps._container = original
+
+
+def test_task_logs_rejects_out_of_range_pagination(client: TestClient) -> None:
+    """``page_size`` 超上限、``page`` 低于下界时由 Query 校验返回 422。"""
+    oversized = client.get("/api/v1/tasks/logs", params={"page_size": 1000})
+    underflow = client.get("/api/v1/tasks/logs", params={"page": 0})
+
+    assert oversized.status_code == 422
+    assert underflow.status_code == 422

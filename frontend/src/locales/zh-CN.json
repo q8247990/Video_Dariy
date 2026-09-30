@@ -346,6 +346,8 @@
     "form_max_model_len_placeholder": "留空使用模型默认",
     "form_max_output_tokens": "输出上限",
     "form_max_output_tokens_placeholder": "留空使用系统默认",
+    "form_num_frames": "分析帧数",
+    "form_num_frames_placeholder": "默认 120，范围 1-600",
     "form_enabled_label": "启用该服务"
   },
   "video_sources": {
@@ -634,14 +636,14 @@
     "daily_summary_time": "日报生成时间（如 10:00）",
     "scan_interval": "扫描间隔（秒）",
     "scan_hot_window": "扫描回溯时长（小时）",
-    "scan_late_tolerance": "迟到录像容忍时间（秒）",
-    "latency_alert_threshold": "延迟告警触发时长（秒）",
-    "alert_consecutive_required": "告警连续触发次数",
-    "alert_notify_cooldown": "告警通知最小间隔（分钟）",
+    
     "tag_recommendation": "启用标签推荐",
     "mcp_enabled": "启用 MCP 接口（供 AstrBot 等工具通过 /mcp 接入）",
     "mcp_token": "MCP Token（供 Streamable HTTP 鉴权）",
     "mcp_token_placeholder": "请输入 MCP Token",
+    "media_manifest_ttl": "HLS 清单有效期（秒）",
+    "media_segment_ttl": "媒体分片有效期（秒）",
+    "media_entity_image_ttl": "实体头像有效期（秒）",
     "save_button": "保存配置"
   },
   "status_tag": {

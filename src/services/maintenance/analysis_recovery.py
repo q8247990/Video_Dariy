@@ -149,11 +149,9 @@ def resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
     )
     # The OutboxEvent write targets the recovered ``task_log`` (not a fresh
     # ``PENDING`` row the dispatcher's ``create_pending_task_log`` would mint
-    # in the same session). Unit tests that drive the recovery against a
-    # minimal SQLite schema — ``tests/unit/test_task_maintenance.py`` in
-    # particular — do not create the ``outbox_event`` table; the
-    # ``inspect(...)`` guard skips the write in that hermetic context so the
-    # recovery still flips the row to ``TIMEOUT`` and records the dispatch.
+    # in the same session). The ``inspect(...)`` guard skips the write when
+    # the ``outbox_event`` table is absent, so the recovery still flips the
+    # row to ``TIMEOUT`` and records the dispatch.
     if db.bind is not None and inspect(db.bind).has_table("outbox_event"):
         outcome = enqueue_command(db, outbox_command, task_log)
         event_id_str = str(outcome.event.event_id)

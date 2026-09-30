@@ -46,21 +46,28 @@ ROOT_DOCS = [ROOT / "README.md", ROOT / "README.en.md"]
 
 
 def _expect_error_status_table() -> dict[int, int]:
-    """Parse the `_STATUS_BY_CODE` dict from src/api/error_status.py (expected output)."""
+    """Parse the `_HTTP_STATUS_BY_CODE` mapping from src/api/error_status.py.
+
+    The mapping is written as ``int(BusinessCode.NAME): <status>`` against an
+    ``IntEnum``, so the numeric business code is resolved through the enum
+    member values rather than read as a literal key.
+    """
     text = ERROR_STATUS.read_text()
-    match = re.search(r"_STATUS_BY_CODE.*?=\s*(\{.*?\})", text, re.DOTALL)
-    if not match:
-        raise SystemExit("could not parse _STATUS_BY_CODE from src/api/error_status.py")
-    table = astict(match.group(1))
+    member_values = dict(re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*(\d+)\s*$", text, re.MULTILINE))
+    body = re.search(r"_HTTP_STATUS_BY_CODE[^=]*=\s*\{(.*?)\}", text, re.DOTALL)
+    if not body:
+        raise SystemExit("could not parse _HTTP_STATUS_BY_CODE from src/api/error_status.py")
+
+    table: dict[int, int] = {}
+    for member, status in re.findall(
+        r"int\(BusinessCode\.([A-Z0-9_]+)\)\s*:\s*(\d+)", body.group(1)
+    ):
+        if member not in member_values:
+            raise SystemExit(f"unknown BusinessCode member {member} in _HTTP_STATUS_BY_CODE")
+        table[int(member_values[member])] = int(status)
+    if not table:
+        raise SystemExit("_HTTP_STATUS_BY_CODE parsed but contained no entries")
     return table
-
-
-def astict(body: str) -> dict[int, int]:
-    """Parse `{4000: 400, ...}` literal from the captured body string."""
-    result: dict[int, int] = {}
-    for key, value in re.findall(r"(\d+)\s*:\s*(\d+)", body):
-        result[int(key)] = int(value)
-    return result
 
 
 def _check_env_vars(env_text: str, failures: list[str]) -> None:

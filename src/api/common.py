@@ -11,6 +11,11 @@ from src.schemas.response import PaginatedData, PaginatedResponse, PaginationDet
 
 T = TypeVar("T", bound=BaseModel)
 
+DEFAULT_PAGE_SIZE: int = 20
+
+#: Upper bound for a client-supplied ``page_size`` (guards against oversized pages).
+MAX_PAGE_SIZE: int = 100
+
 
 def paginate(
     query: Any,

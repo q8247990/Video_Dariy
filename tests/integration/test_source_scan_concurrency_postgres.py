@@ -13,13 +13,13 @@ from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import TaskStatus, TaskType
-from src.services.session_build.runner import run as run_session_build
-from src.services.task_dispatch_control import (
+from src.services.dispatch import (
     bind_or_create_running_task_log,
     create_pending_task_log,
     record_deferred_hot_scan,
 )
+from src.services.pipeline_constants import TaskStatus, TaskType
+from src.services.session_build.runner import run as run_session_build
 
 pytestmark = pytest.mark.postgres
 

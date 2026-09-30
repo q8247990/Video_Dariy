@@ -79,8 +79,8 @@ from src.application.summary_attempt.state_machine import (
 )
 from src.application.summary_publication.repository import DailySummaryRepository
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
+from src.services.dispatch import create_pending_task_log
 from src.services.pipeline_constants import TaskType
-from src.services.task_dispatch_control import create_pending_task_log
 
 #: Event type string emitted by the daily-summary webhook payload.
 #: Mirrors ``src.services.summarizer.constants.WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED``

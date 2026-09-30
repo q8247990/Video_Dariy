@@ -1,9 +1,10 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from kombu.exceptions import OperationalError
 
+from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from src.api.deps import DB, CurrentUser, Locale, Orchestrator
 from src.application.pipeline.commands import SendWebhookCommand
 from src.core.i18n import t
@@ -39,7 +40,12 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=PaginatedResponse[WebhookResponse])
-def get_webhooks(db: DB, current_user: CurrentUser, page: int = 1, page_size: int = 20) -> Any:
+def get_webhooks(
+    db: DB,
+    current_user: CurrentUser,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+) -> Any:
     query = db.query(WebhookConfig).order_by(WebhookConfig.id.desc())
     total = query.count()
     hooks = query.offset((page - 1) * page_size).limit(page_size).all()

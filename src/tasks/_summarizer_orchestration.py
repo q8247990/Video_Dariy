@@ -36,6 +36,11 @@ from src.application.summary_publication import (
 from src.core.i18n import get_system_default_locale
 from src.core.i18n.locale_directive import get_summary_title
 from src.models.task_log import TaskLog
+from src.services.dispatch import (
+    TaskCancellationRequested,
+    ensure_task_not_cancelled,
+    finalize_task_log,
+)
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import TaskStatus
 from src.services.provider_generation_limits import resolve_max_output_tokens
@@ -67,11 +72,6 @@ from src.services.summarizer import (
 )
 from src.services.summarizer import (
     mark_running as mark_attempt_running,
-)
-from src.services.task_dispatch_control import (
-    TaskCancellationRequested,
-    ensure_task_not_cancelled,
-    finalize_task_log,
 )
 
 logger = logging.getLogger(__name__)

@@ -32,10 +32,15 @@ git clone <repo-url> && cd video_dairy
 # 2. 修改视频目录挂载（docker-compose.yml 顶部）
 #    将 ./xiaomi_video 替换为你的摄像头录像目录
 
-# 3. 启动
+# 3. 创建 .env 并填写必填项（docker-compose 会校验非空）
+#    POSTGRES_PASSWORD / SECRET_KEY / MEDIA_SIGNING_KEY /
+#    PROVIDER_KEY_ENCRYPTION_KEY / DEFAULT_ADMIN_PASSWORD
+cp .env.example .env && ${EDITOR:-vi} .env
+
+# 4. 启动
 docker compose up --build -d
 
-# 4. 打开浏览器
+# 5. 打开浏览器
 #    http://localhost:8226
 ```
 
@@ -87,7 +92,7 @@ vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
 ### 深入阅读
 
 - [本地多模态 LLM 部署最佳实践（双 3090 × Qwen3.8-27B）](llm-best-practices-zh.md) — 完整记录从
-  双 3090 PCIe P2P 驱动补丁、ReBAR VBIOS 刷写到 vLLM 部署参数、视频切片策略（60s sub-chunk +
+  双 3090 PCIe P2P 驱动补丁、ReBAR VBIOS 刷写到 vLLM 部署参数、分析粒度（一文件一 sub-chunk +
   `num_frames=120`）的实测经验与坑清单，适合在自建本地推理环境时参考。
 
 ## 部署方式
@@ -144,6 +149,7 @@ python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generat
 
 | 变量 | 说明 | 是否必改 |
 |------|------|----------|
+| `POSTGRES_PASSWORD` | PostgreSQL 容器密码（仅 docker-compose 使用，非应用配置项） | Docker 部署必填 |
 | `VIDEO_ROOT_PATH` | 视频录像目录（容器内路径） | 通过 docker-compose 挂载 |
 | `SECRET_KEY` | JWT 签名密钥 | 生产环境必改 |
 | `MEDIA_SIGNING_KEY` | 媒体 URL 签名密钥，必须不同于 `SECRET_KEY` | 生产环境必填 |
@@ -155,17 +161,33 @@ python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generat
 | `PLAYBACK_CACHE_ROOT` | HLS 播放缓存目录 | Docker 部署保持默认即可 |
 | `MCP_TOKEN` | MCP 接口鉴权 Token | 需要 MCP 时配置 |
 | `DEFAULT_LOCALE` | 界面语言（zh-CN / en-US） | 默认 zh-CN |
-| `SESSION_PLAYBACK_MODE` | 回放模式 | 默认 hls_index_only |
+| `SESSION_PLAYBACK_MODE` | 回放模式（`hls_index_only` / `merged_stream` / `direct_file`） | 默认 hls_index_only |
 | `DB_INIT_MAX_RETRIES` | 数据库初始化重试次数 | 默认 120 |
 | `DB_INIT_RETRY_INTERVAL_SECONDS` | 数据库初始化重试间隔（秒） | 默认 2 |
+
+### 国际化（多语言）
+
+系统支持 `zh-CN`（默认）与 `en-US` 两种语言。语言切换只影响**面向用户的文案与新生成内容**，
+不改动内部业务字段、状态枚举、协议字段与历史数据。
+
+- **默认语言**：系统配置 `default_locale`（设置页可改）> 环境变量 `DEFAULT_LOCALE` > 内置默认 `zh-CN`。
+- **请求 locale 优先级**：`X-Locale` 头 > `Accept-Language` 头（取首个语言标签）> 系统默认；响应回写 `Content-Language`。
+- **前端语言资源**：`frontend/src/locales/{zh-CN,en-US}.json`，经 `i18next` +
+  `i18next-browser-languagedetector` 加载，支持浏览器语言检测与本地缓存，可在设置页切换；
+  API 客户端统一透传 `Accept-Language`。
+- **后端 locale 资源**：`src/core/i18n/locales/{zh_CN,en_US}.json`，通过 `t(key, locale)` 取文案；
+  locale provider（`SystemConfigLocaleProvider`）读取系统配置并做 60s 缓存，`LocaleMiddleware` 解析请求 locale。
+- **AI 输出语言**：`src/core/i18n/locale_directive.py` 向 QA、日报、MCP 及重试 prompt 注入语言与语气指令；
+  新生成的问答与日报按请求 locale 输出，日报 fallback 文案与 MCP 工具描述同样按 locale 切换。
+- **历史数据不翻译**：已生成的日报与 AI 内容不做回填翻译，仅新请求/新生成内容按语言输出。
 
 ### 媒体签名 URL 与过期
 
 媒体播放地址（原始文件流、Session 合并流、HLS 清单与分片、实体图片）均通过 HMAC-SHA256
 签发带能力限定（资源类型、资源 ID、请求方法、过期时间、所属 Session）的签名 URL，响应带
-`Cache-Control: no-store`。清单与分片的有效期均为 1800 秒（`MANIFEST_TTL_SECONDS` /
-`SEGMENT_TTL_SECONDS`），到期后 URL 失效，必须重新获取签名地址。跨 Session 的资源会被
-作用域守卫拒绝。
+`Cache-Control: no-store`。清单、分片与实体头像的有效期分别由系统配置项
+`media_manifest_ttl_seconds` / `media_segment_ttl_seconds` / `media_entity_image_ttl_seconds`
+控制（默认均 1800 秒），到期后 URL 失效，必须重新获取签名地址。跨 Session 的资源会被作用域守卫拒绝。
 
 ### Webhook 出站安全（SSRF 防护）
 
@@ -179,10 +201,17 @@ python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generat
 时间戳均以带时区的 UTC 时间存储。迁移 `20260825_0014` 会将历史 naive 的
 `Asia/Shanghai` 墙钟时间按 `AT TIME ZONE 'Asia/Shanghai'` 重新解释为 UTC 时刻。
 
-**迁移前必须先做已验证的数据库备份**：`20260825_0012`（Provider key 加密）、
-`20260825_0014`（时间戳转 UTC）与 `20260826_0017`（外键删除策略）均为不可逆迁移
-（downgrade 抛错）；`20260826_0017` 还会在存在孤儿引用时中止。这些迁移或任何轮换操作
-失败后，唯一恢复路径是还原该备份。
+**迁移前必须先做已验证的数据库备份**：
+
+- **不可逆（downgrade 抛错）**：`20260825_0012`（Provider key 加密）、`20260825_0014`
+  （时间戳转 UTC）、`20260902_0018`（删除 Provider keyframe 列）、`20260902_0019`
+  （outbox_event）、`20260902_0020`（daily_summary_generation_attempt）、`20260902_0021`
+  （pipeline_transition_log）、`20260904_0022`（删除 webhook event_types_json）。
+- **可 downgrade 但属破坏性变更（同样先备份）**：`20260826_0017`（外键删除策略改写，遇孤儿
+  引用会中止迁移）、`20260923_0025`（删除 importance_level）、`20260928_0026`（状态 CHECK 约束 +
+  pending→open 归并）、`20260928_0027`（删除未使用的 video_source_runtime_state 表）。
+
+这些迁移或任何轮换操作失败后，唯一恢复路径是还原该备份。
 
 备份/校验/恢复一步到位（pg_dump/pg_restore 需与服务器主版本匹配）：
 
@@ -278,6 +307,7 @@ session + checkpoint 归属到 `LLMUsageLog`。日报、问答与 MCP 只消费
 ```text
 .
 ├── src/
+│   ├── adapters/             # 厂商目录解析适配（如 xiaomi_parser）
 │   ├── api/                  # FastAPI 路由与依赖
 │   ├── application/          # 应用编排、QA、MCP、Prompt 组装
 │   ├── core/                 # 配置、安全、Celery
@@ -286,6 +316,7 @@ session + checkpoint 归属到 `LLMUsageLog`。日报、问答与 MCP 只消费
 │   ├── mcp/                  # MCP 服务与工具实现
 │   ├── models/               # SQLAlchemy 模型
 │   ├── providers/            # OpenAI 兼容客户端
+│   ├── schemas/              # Pydantic 请求 / 响应模型
 │   ├── services/             # 核心业务服务
 │   └── tasks/                # Celery 任务
 ├── frontend/                 # 前端工程
@@ -351,15 +382,13 @@ Python 版本：3.10
 # 重置扫描/Session/事件/任务数据
 docker compose exec backend python -m src.reset_pipeline_data
 
-# 后端单元测试（632 项）
+# 后端测试（统一依赖真实 PostgreSQL，需设置 DATABASE_URL；不再使用 SQLite）
 python3 -m pytest tests/unit -q
-
-# 后端集成测试（需真实 PostgreSQL，DATABASE_URL）
 python3 -m pytest -m postgres
 
 # 迁移检查
 python3 -m alembic upgrade head
-python3 -m alembic heads   # 期望 20260923_0025
+python3 -m alembic heads   # 期望 20260928_0027
 
 # 代码检查
 ruff check .

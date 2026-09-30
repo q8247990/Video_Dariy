@@ -6,7 +6,7 @@ Covers the Wave-6 splits that keep each concern independently testable:
 * the shared pagination helper (``src.api.common.paginate``);
 * the provider mutation use cases (``src.application.llm_providers``);
 * the dashboard query / presenter split (``src.services.dashboard``);
-* the QA agent / legacy strategy separation (``src.application.qa``).
+* the QA agent strategy (``src.application.qa``).
 """
 
 from datetime import datetime, timedelta
@@ -31,6 +31,7 @@ def _build_provider(
     name: str = "p",
     supports_vision: bool = False,
     supports_qa: bool = True,
+    supports_tool_calling: bool = True,
     is_default_vision: bool = False,
     is_default_qa: bool = False,
     enabled: bool = True,
@@ -46,6 +47,7 @@ def _build_provider(
         enabled=enabled,
         supports_vision=supports_vision,
         supports_qa=supports_qa,
+        supports_tool_calling=supports_tool_calling,
         is_default_vision=is_default_vision,
         is_default_qa=is_default_qa,
     )
@@ -259,14 +261,11 @@ def test_dashboard_query_and_presenter_are_separate(pg_db: Session) -> None:
 
 
 class _ScriptedGateway(FakeLLMGateway):
-    """``FakeLLMGateway`` that returns scripted responses in declared order.
+    """``FakeLLMGateway`` that returns scripted tool-call payloads in order.
 
-    Each subclass override of :meth:`chat_completion` /
-    :meth:`chat_completion_with_tools` consumes the next ``replies`` /
-    ``tool_call_payloads`` entry. The agent strategy needs a content
-    reply from :meth:`chat_completion_with_tools` (to populate
-    ``answer_text``); the legacy strategy needs two content replies —
-    one for the intent parse and one for the final answer.
+    Each :meth:`chat_completion_with_tools` call consumes the next
+    ``tool_call_payloads`` entry; the agent strategy needs a content
+    reply from it to populate ``answer_text``.
     """
 
     def __init__(
@@ -315,35 +314,6 @@ def _make_factory(
     return factory
 
 
-def test_qa_service_routes_to_legacy_strategy_when_no_tool_calling(
-    pg_db: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``QAService.answer`` routes to the legacy strategy when the gateway reports
-    ``supports_tool_calling=False`` and records the parsed condition JSON.
-    """
-    pg_db.add(_build_provider(name="qa", supports_qa=True, is_default_qa=True))
-    pg_db.commit()
-
-    factory = _make_factory(
-        # Intent parse consumes the first reply (None keeps the parser's
-        # fallback path intact); the second reply drives the final answer.
-        content_replies=[None, "legacy"],
-        supports_tool_calling=False,
-    )
-    container = bootstrap_for_tests(llm_factory=factory)
-    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
-
-    service = QAService(pg_db, llm_factory=factory)
-    result = service.answer(
-        QARequest(
-            question="昨天发生了什么？",
-            now=datetime(2026, 3, 10, 8, 0, 0),
-            write_query_log=False,
-        )
-    )
-    assert result.answer_text == "legacy"
-
-
 def test_qa_service_routes_to_agent_strategy_when_tool_calling(
     pg_db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -372,3 +342,50 @@ def test_qa_service_routes_to_agent_strategy_when_tool_calling(
 
     log = pg_db.query(ChatQueryLog).filter(ChatQueryLog.user_question == "昨天发生了什么？").one()
     assert log.parsed_condition_json["mode"] == "agent"
+
+
+def test_provider_create_rejects_qa_without_tool_calling(pg_db: Session) -> None:
+    from src.application.llm_providers import create_provider_use_case
+
+    result = create_provider_use_case(
+        pg_db,
+        {
+            "provider_name": "qa-no-tools",
+            "api_base_url": "https://example.com/v1",
+            "api_key": "dummy",
+            "model_name": "m",
+            "timeout_seconds": 30,
+            "retry_count": 1,
+            "enabled": True,
+            "supports_vision": False,
+            "supports_qa": True,
+            "supports_tool_calling": False,
+        },
+        "zh-CN",
+    )
+    assert result.error_code == 4001
+    assert pg_db.query(LLMProvider).count() == 0
+
+
+def test_qa_service_rejects_provider_without_tool_calling(pg_db: Session) -> None:
+    from src.application.qa.errors import QAProviderNotConfiguredError
+
+    pg_db.add(
+        _build_provider(
+            name="qa-no-tools",
+            supports_qa=True,
+            supports_tool_calling=False,
+            is_default_qa=True,
+        )
+    )
+    pg_db.commit()
+
+    service = QAService(pg_db, llm_factory=FakeLLMGatewayFactory())
+    with pytest.raises(QAProviderNotConfiguredError):
+        service.answer(
+            QARequest(
+                question="发生了什么？",
+                now=datetime(2026, 3, 10, 8, 0, 0),
+                write_query_log=False,
+            )
+        )

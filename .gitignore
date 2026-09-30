@@ -29,6 +29,7 @@ postgres_data/
 redis_data/
 data/
 xiaomi_video/
+# docs/ 整体保持私有（工作笔记、审计登记册、ADR 与开发指南均不随版本库提交）
 docs/
 AGENTS.md
 src/home_monitor.egg-info

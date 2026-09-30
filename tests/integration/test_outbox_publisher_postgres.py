@@ -2,7 +2,7 @@
 
 These tests exercise the publisher's claim → publish → mark loop on a
 real PostgreSQL database that has been migrated to the new head. The
-SQLite unit tests in ``tests/unit/test_outbox_publisher.py`` cover the
+unit tests in ``tests/unit/test_outbox_publisher.py`` cover the
 happy / retryable / terminal classification math; this module covers
 the contract surfaces that the unit tests cannot:
 

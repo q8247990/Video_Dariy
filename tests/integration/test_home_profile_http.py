@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import io
 import os
+import time
 from collections.abc import Generator
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -609,3 +611,56 @@ def test_delete_image_not_found_returns_404(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["code"] == 4002
+
+
+def test_entity_image_ttl_follows_system_config(
+    client: TestClient,
+    pg_db: Session,
+    entity_image_root: str,
+) -> None:
+    """实体头像签名 URL 的过期时间跟随系统配置项媒体实体头像 TTL。"""
+
+    from src.services.media_signing import MediaCapability, MediaSigningService
+    from src.services.system_config_registry import (
+        MEDIA_ENTITY_IMAGE_TTL_SECONDS,
+        set_config,
+    )
+
+    member = _create_member(client, name="小米")
+    upload = client.post(
+        f"/api/v1/home-profile/entities/{member['id']}/image",
+        files={"file": ("avatar.jpg", _make_jpeg_bytes(), "image/jpeg")},
+    )
+    assert upload.status_code == 200
+
+    set_config(pg_db, MEDIA_ENTITY_IMAGE_TTL_SECONDS, 90)
+    pg_db.commit()
+
+    listing = client.get("/api/v1/home-profile/entities", params={"entity_type": "member"})
+    image_url = listing.json()["data"][0]["image_url"]
+    token = parse_qs(urlparse(image_url).query)["token"][0]
+
+    expected = MediaCapability(
+        resource_kind="image", resource_id=member["id"], method="GET", expires_at=0
+    )
+    capability = MediaSigningService.from_settings().verify(token, expected)
+
+    assert 80 <= capability.expires_at - int(time.time()) <= 95
+
+
+def test_home_context_returns_profile_members_and_pets(client: TestClient) -> None:
+    """``GET /context`` 返回 home_profile + members + pets。"""
+    _create_member(client, name="小米")
+    client.post(
+        "/api/v1/home-profile/entities/pet",
+        json={"name": "糖糖", "role_type": "cat", "age_group": "adult", "sort_order": 1},
+    )
+
+    response = client.get("/api/v1/home-profile/context")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["data"]["home_profile"]["home_name"]
+    assert [entity["name"] for entity in body["data"]["members"]] == ["小米"]
+    assert [entity["name"] for entity in body["data"]["pets"]] == ["糖糖"]

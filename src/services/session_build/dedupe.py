@@ -72,13 +72,10 @@ def query_existing_hashes(
 ) -> set[str]:
     """Return the subset of ``hashes`` already present for ``source_id``.
 
-    Implementation note: the existing PG deployment uses a single
-    ``source_id`` equality filter and a chunked ``IN (...)`` over
-    ``video_file.file_path_hash`` (the unique index is on
-    ``(source_id, file_path_hash)``). The chunk size is bounded by
-    SQLite's 999-parameter limit on the test engine; production PG
-    has no such limit but the chunked loop keeps the helper
-    symmetric across dialects.
+    Implementation note: the lookup uses a single ``source_id`` equality
+    filter and a chunked ``IN (...)`` over ``video_file.file_path_hash``
+    (the unique index is on ``(source_id, file_path_hash)``). The chunked
+    loop keeps the bound-parameter list bounded for very large scans.
     """
     existing: set[str] = set()
     distinct = sorted(set(hashes))

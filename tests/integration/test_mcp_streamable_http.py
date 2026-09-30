@@ -346,24 +346,24 @@ def test_mcp_ask_home_monitor(client: TestClient, pg_db: Session, monkeypatch) -
             is_default_qa=True,
             supports_vision=False,
             is_default_vision=False,
+            supports_tool_calling=True,
         )
     )
     pg_db.commit()
 
-    def _mock_chat_completion(
+    def _mock_chat_completion_with_tools(
         self,
         messages,
+        tools,
         temperature=0.2,
         max_tokens=None,
-        response_format=None,
-        extra_body=None,
     ):
-        del self, messages, temperature, max_tokens, response_format, extra_body
-        return "昨天下午门口有短暂停留。"
+        del self, messages, tools, temperature, max_tokens
+        return "昨天下午门口有短暂停留。", None
 
     monkeypatch.setattr(
-        "src.providers.openai_client.OpenAIClient.chat_completion",
-        _mock_chat_completion,
+        "src.providers.openai_client.OpenAIClient.chat_completion_with_tools",
+        _mock_chat_completion_with_tools,
     )
 
     session_id = _initialize(client)

@@ -23,7 +23,7 @@ Why a whitelist?
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from typing import Mapping
 
 from src.application.outbox.errors import OutboxRegistryError
 
@@ -68,16 +68,6 @@ class OutboxCommandRegistry:
         the outbox to be allowed to publish it.
         """
         cls._registry = {**cls._registry, task_name: queue}
-
-    @classmethod
-    def unregister(cls, task_name: str) -> None:
-        """Remove a task name from the whitelist.
-
-        Used by tests only. Production code MUST NOT call this; the
-        whitelist is meant to grow with the application, not shrink
-        at runtime.
-        """
-        cls._registry = {name: queue for name, queue in cls._registry.items() if name != task_name}
 
     @classmethod
     def reset_for_testing(cls) -> None:
@@ -129,15 +119,4 @@ class OutboxCommandRegistry:
         """
         return frozenset(cls._registry.keys())
 
-    @classmethod
-    def all_entries(cls) -> Iterable[tuple[str, str]]:
-        """Iterate over ``(task_name, queue)`` pairs.
-
-        Order is not stable across Python versions for ``dict``
-        iteration; consumers that need order should sort the result
-        themselves.
-        """
-        return tuple(cls._registry.items())
-
-
-__all__ = ["DEFAULT_QUEUE", "OutboxCommandRegistry"]
+    __all__ = ["DEFAULT_QUEUE", "OutboxCommandRegistry"]

@@ -111,7 +111,7 @@ Sub-modules:
 Characteristics:
 
 - This layer hosts "business orchestration logic" but is not a full DDD implementation; some core business rules still reside in `services`
-- `src/application/bootstrap.py` currently serves as a compatibility placeholder and has not evolved into a true DI entry point
+- `src/application/bootstrap.py` is the composition root: `Container` + `bootstrap_production()` / `bootstrap_for_tests()` bind `infrastructure` adapters to `application.ports` Protocols; `api` / `mcp` / `tasks` obtain the dispatcher, LLM gateway, and Celery control surface through it
 
 ### 4.4 `src/services/`
 
@@ -123,14 +123,13 @@ Key services:
 - `analysis/`: Session analysis split into claim, chunk planning, sub-chunk execution, checkpoints, aggregation, and finalization
 - `summarizer/`: Daily-summary scheduling, evidence, generation, parsing, and finalization stages
 - `dispatch/` and `maintenance/`: Task claim/lease/dedupe/cancel plus hot scheduling, recovery, and retention policies
-- `session_analysis_video.py`: Session slicing, video segment processing
+- `session_analysis_video.py`: file-level sub-chunk construction (one file per sub-chunk, no slicing or merging) and `raw_mp4` payload
 - `daily_summary/*`: Daily report preprocessing and output parsing
 - `home_profile.py`: Family profile context building
-- `dashboard.py`: Dashboard statistics
+- `dashboard/`: Dashboard statistics (`queries` / `presenter` split)
 - `provider_selector.py`: Vision model / QA model selection
 - `video_source_validator.py`: Video directory validation
 - `webhook_payload.py` / `webhook_subscription.py`: Webhook event payloads and subscription matching
-- `task_dispatch_control.py`: Task deduplication, running-state protection, task log binding
 
 This is the most important layer in the current project, housing the majority of real business rules.
 
@@ -264,7 +263,7 @@ Workflow:
 2. If no active scan task of the same type exists for a video source, a hot scan task is dispatched
 3. `session_build.runner.run()` invokes `XiaomiDirectoryParser.scan_directory()` through the discovery stage
 4. `VideoFile.file_path_hash` is used for deduplication, preventing duplicate ingestion and analysis
-5. New files are appended to the current open session in chronological order; if the gap between adjacent clips exceeds 61 seconds, a new session is created
+5. New files are appended to the current open session in chronological order; a new session is created only when the gap between adjacent clips exceeds `MERGE_GAP_SECONDS` (= 1 second)
 6. In hot scan mode, only the most recent open session is kept; older open sessions are sealed
 7. If an open session receives no new clips within 600 seconds, it is also sealed
 8. After sealing, an analysis task is automatically dispatched
@@ -288,7 +287,7 @@ Workflow:
 
 1. Tasks can only claim a session from `SEALED` state, transitioning it to `ANALYZING`
 2. Split by file: every video file in the session maps to exactly one sub-chunk / one LLM call — no merging, no splitting (the historical two-level 600s→60s chunking was removed)
-3. The LLM payload is fixed to `raw_mp4`: each single-file sub-chunk is sent as base64 with `media_io_kwargs.video.num_frames` for server-side uniform sampling. The client no longer retains keyframe decoding, MAD/pHash, JPEG preprocessing, or cross-file concat.
+3. The LLM payload is fixed to `raw_mp4`: each single-file sub-chunk is sent as base64 with `media_io_kwargs.video.num_frames` for server-side uniform sampling (default 120; configurable per model service via `extra_config_json.num_frames`, range 1–600). The client no longer retains keyframe decoding, MAD/pHash, JPEG preprocessing, or cross-file concat.
 4. Build LLM prompt per sub-chunk (preserve sub-chunk offset; `base_offset_seconds = sub_chunk.start_offset_seconds`)
 5. Call OpenAI-compatible vision model (payload injected via `chat_completion(..., extra_body={...})`)
 6. The returned JSON is parsed and converted into multiple `EventRecord` entries (offsets are absolute session-time, non-negative)
@@ -316,7 +315,6 @@ Additional mechanisms:
 - Token quota checking and token usage recording
 - Deadlock retry and analysis status rollback
 - On failure, the raw model response summary fragments are preserved for debugging
-- ffmpeg stderr tail bounded to last 1KB to keep TaskLog clean
 
 ### 5.3 Daily Family Report Generation
 
@@ -349,25 +347,23 @@ Core code:
 
 - `src/api/v1/endpoints/chat.py`
 - `src/application/qa/service.py`
-- `src/application/qa/planner.py`
-- `src/application/qa/retriever.py`
-- `src/application/qa/evidence_compressor.py`
+- `src/application/qa/agent.py`
+- `src/application/qa/tools.py`
 
 Workflow:
 
 1. Receives a question text
-2. Selects a QA Provider
-3. Builds family context
-4. Uses the LLM to produce a QueryPlan / RetrievalPlan
-5. Performs layered retrieval across daily reports, sessions, and events
-6. Compresses evidence to reduce context overhead
-7. Calls the model again to generate the final answer
-8. Records a `ChatQueryLog`
+2. Selects a QA Provider (must support tool calling)
+3. Builds the family-context / data-availability system prompt
+4. Agentic loop: the model issues tool calls (`get_data_availability` / `search_events` / `get_sessions` / `get_daily_summary`), up to 2 rounds
+5. Generates the final answer from the tool results
+6. Records a `ChatQueryLog` (with referenced events and sessions)
 
 Characteristics:
 
-- Not a simple full-text search; follows a "understand question → plan retrieval → organize evidence → answer" pipeline
+- Tool-calling agentic Q&A; the old "intent parse + layered retrieval + evidence compression" path has been removed
 - Can return referenced events and sessions
+- QA Providers are validated to support tool calling on create/edit
 
 ### 5.5 Webhook Push
 
@@ -384,6 +380,7 @@ Workflow:
 2. The system constructs standardized payloads at event trigger points
 3. Celery tasks deliver HTTP POST requests asynchronously
 4. Subscription matching logic supports standardized `event_subscriptions_json`
+5. Implemented event types: `daily_summary_generated` (daily summary), `session_analyzed` (analysis complete)
 
 ### 5.6 MCP Capabilities
 
@@ -423,7 +420,7 @@ Model descriptions:
   - A logical session formed from consecutive recording clips
   - Holds analysis status, summary, activity level, subjects, and other fields
 - `EventRecord`
-  - A structured event recording time, action, subject, importance level, offset, etc.
+  - A structured event recording time, action, subject, attention flag, offset, etc.
 - `DailySummary`
   - Structured daily summary result
 - `TaskLog`
@@ -514,13 +511,17 @@ Key environment variables:
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `ENTITY_IMAGE_ROOT`
 - `SESSION_PLAYBACK_MODE`
-- `MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS` (media signed-URL TTL, default 1800 seconds)
 - `WEBHOOK_PRIVATE_NETWORK_ALLOWLIST` (Webhook SSRF-protection intranet allowlist)
 
 > Session analysis has no chunk/slice env vars anymore: `ANALYZER_SEGMENT_SECONDS` /
 > `ANALYZER_LLM_CHUNK_SECONDS` / `ANALYZER_VIDEO_KEYFRAME_*` were removed. The unit is the
 > video file (one file = one LLM call); the real per-file duration is probed with `ffprobe`
 > at ingest (falling back to 60s).
+>
+> Media manifest/segment/entity-avatar TTLs come from the system-config keys
+> `media_manifest_ttl_seconds` / `media_segment_ttl_seconds` / `media_entity_image_ttl_seconds`
+> (default 1800 seconds each), read by the media playback endpoint, the HLS manifest, and the
+> entity-avatar signing; they are **not env vars**.
 
 Note: The root `.env.example` has been updated to reflect the actual PostgreSQL, Redis, MCP, and playback cache directory configuration. Refer to `src/core/config.py` and `docker-compose.yml` as the authoritative runtime references.
 
@@ -565,6 +566,10 @@ Session analysis states (`analysis_status`) include:
 
 `pipeline_state.py` centralizes legal `VideoSession` and `TaskLog` transitions and writes
 an append-only `PipelineTransitionLog` audit. Scan builds and task logs retain their own state sets.
+
+The initial `analysis_status` is `open` (not `pending`; `pending` was only a stale column default,
+normalised to `open` by migration `20260928_0027`). The same migration adds DB CHECK constraints on
+`video_session.analysis_status` and `task_log.status`, so an illegal state cannot be written.
 
 ### 9.3 Media Lifecycle and Source Deletion (FK Policy)
 
@@ -646,10 +651,10 @@ Backend tests are located in `tests/unit/` and `tests/integration/`.
 Common commands:
 
 ```bash
-python3 -m pytest tests/unit -q         # unit tests
-python3 -m pytest -m postgres           # integration tests; requires real PostgreSQL (DATABASE_URL)
+python3 -m pytest tests/unit -q         # unit tests (DB cases use real PostgreSQL)
+python3 -m pytest -m postgres           # integration tests; also require real PostgreSQL (DATABASE_URL)
 python3 -m alembic upgrade head
-python3 -m alembic heads                # expect 20260923_0025
+python3 -m alembic heads                # expect 20260928_0027
 ruff check .
 ruff format --check src tests
 ```
@@ -673,8 +678,8 @@ Existing test coverage includes:
 
 ### Recommendations
 
-- `.env.example` should be kept in sync with the current PostgreSQL setup
-- `application/bootstrap.py` can gradually evolve into a unified dependency injection entry point
+- `.env.example`, `docker-compose.yml`, and `src/core/config.py` should stay consistent with each other
+- `application/bootstrap.py` is already the unified dependency-injection entry point; bind new adapters there
 - Media streaming endpoints may benefit from finer-grained authentication in the future (as noted in code comments)
 - If more vendor directory formats need to be supported in the future, `adapters/` can be extended accordingly
 

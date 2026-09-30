@@ -67,8 +67,8 @@ from src.services.analysis import (
     write_token_usage,
 )
 from src.services.analysis.chunk_plan import SubChunkPlan
+from src.services.dispatch import finalize_task_log
 from src.services.pipeline_constants import TaskStatus
-from src.services.task_dispatch_control import finalize_task_log
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
@@ -278,7 +278,7 @@ def test_single_sub_chunk_builds_raw_mp4_payload_with_120_frames(tmp_path) -> No
     )
 
     url = build_sub_chunk_video_url(plan_item)
-    extra_body = build_sub_chunk_extra_body()
+    extra_body = build_sub_chunk_extra_body(RAW_MP4_NUM_FRAMES)
 
     assert url.startswith("data:video/mp4;base64,")
     import base64 as _b64

@@ -24,10 +24,8 @@ Design constraints (ADR §7 / §8 + plan §11 "Outbox 默认参数")
    :func:`bind_or_create_running_task_log` uses the same ``event_id``
    for idempotency (ADR §7).
 3. **Concurrency safety** — :meth:`OutboxRepository.try_claim_one` uses
-   ``FOR UPDATE SKIP LOCKED`` on PostgreSQL so two publisher instances
-   never contend on the same row. The SQLite unit-test path falls back
-   to ``SELECT`` + conditional ``UPDATE`` under a writer-serialized
-   connection (Todo 12 repository §"Concurrency notes").
+   ``FOR UPDATE SKIP LOCKED`` so two publisher instances never contend
+   on the same row.
 4. **Crash recovery** — every claim sets
    ``lease_expires_at = now() + lease_seconds``. A publisher that
    crashes mid-claim leaves the row in ``publishing`` until the lease
@@ -785,9 +783,6 @@ class OutboxPublisher:
         result = self._db.execute(stmt).scalar_one_or_none()
         if result is None:
             return None
-        # SQLite returns naive datetimes; normalize to UTC.
-        if isinstance(result, datetime) and result.tzinfo is None:
-            result = result.replace(tzinfo=timezone.utc)
         return int((now - result).total_seconds())
 
 

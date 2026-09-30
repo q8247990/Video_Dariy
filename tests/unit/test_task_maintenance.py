@@ -47,6 +47,7 @@ def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
         )
         db.add(source)
@@ -206,6 +207,7 @@ def test_cancelled_analysis_is_not_auto_resumed(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
         )
         db.add(source)
@@ -249,6 +251,7 @@ def test_exhausted_recovery_budget_records_terminal_reason(
             camera_name="cam",
             location_name="home",
             source_type="local_directory",
+            last_validate_status="success",
             enabled=True,
         )
         db.add(source)
@@ -290,6 +293,7 @@ def _make_source_with_files(db: Session, tmp_path, paused: bool = False):
         camera_name="living",
         location_name="home",
         source_type="local_directory",
+        last_validate_status="success",
         enabled=True,
         source_paused=paused,
     )

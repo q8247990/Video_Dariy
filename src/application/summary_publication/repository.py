@@ -18,9 +18,7 @@ publish use case receives from the summarizer (Todo 19).
 
 This repository is intentionally minimal — a single ``upsert_for_date``
 method — so the publish use case has one obvious entry point. It uses
-``INSERT … ON CONFLICT (summary_date) DO UPDATE`` on PostgreSQL and
-SQLAlchemy's equivalent ``sqlite_insert`` on SQLite so the same code
-runs against both dialects.
+``INSERT … ON CONFLICT (summary_date) DO UPDATE … RETURNING id``.
 
 Conflict target
 ===============
@@ -38,7 +36,6 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from src.models.daily_summary import DailySummary
@@ -73,13 +70,11 @@ class DailySummaryRepository:
     ) -> int:
         """Insert or update the ``daily_summary`` row for ``summary_date``.
 
-        On PostgreSQL the insert uses
-        ``INSERT … ON CONFLICT (summary_date) DO UPDATE … RETURNING id``;
-        on SQLite the same shape is emitted via
-        :func:`sqlalchemy.dialects.sqlite.insert`. The row is added to
-        the caller's session but **not** committed; the caller owns
-        the transaction so the upsert, the attempt state transition
-        and the outbox enrollment share one commit.
+        The insert uses
+        ``INSERT … ON CONFLICT (summary_date) DO UPDATE … RETURNING id``.
+        The row is added to the caller's session but **not** committed;
+        the caller owns the transaction so the upsert, the attempt state
+        transition and the outbox enrollment share one commit.
 
         Args:
             summary_date: The date the summary covers.
@@ -122,44 +117,18 @@ class DailySummaryRepository:
             "generated_at": values["generated_at"],
         }
 
-        if self._is_postgres():
-            stmt = (
-                postgresql_insert(DailySummary)
-                .values(**values)
-                .on_conflict_do_update(
-                    index_elements=[DailySummary.summary_date],
-                    set_=update_set,
-                )
-                .returning(DailySummary.id)
+        stmt = (
+            postgresql_insert(DailySummary)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=[DailySummary.summary_date],
+                set_=update_set,
             )
-            summary_id = self._db.execute(stmt).scalar_one()
-            self._db.flush()
-            return int(summary_id)
-
-        # SQLite: use the dialect-specific insert with ON CONFLICT.
-        # ``sqlite_insert`` has supported ``on_conflict_do_update``
-        # targeting a UNIQUE column since SQLAlchemy 1.4; the
-        # ``index_elements`` argument accepts the column directly
-        # here because there is no partial-index distinction.
-        insert_stmt: Any = sqlite_insert(DailySummary).values(**values)
-        insert_stmt = insert_stmt.on_conflict_do_update(
-            index_elements=[DailySummary.summary_date],
-            set_=update_set,
+            .returning(DailySummary.id)
         )
-        self._db.execute(insert_stmt)
+        summary_id = self._db.execute(stmt).scalar_one()
         self._db.flush()
-        # SQLite path does not use RETURNING; re-read by the unique
-        # column so the caller gets the canonical id.
-        row = self._db.query(DailySummary).filter(DailySummary.summary_date == summary_date).one()
-        return int(row.id)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _is_postgres(self) -> bool:
-        bind = self._db.bind
-        return bool(bind is not None and bind.dialect.name == "postgresql")
+        return int(summary_id)
 
 
 __all__ = ["DailySummaryRepository"]

@@ -4,7 +4,7 @@
 
 These tests exercise the staged helpers in :mod:`src.services.summarizer`
 against a real PostgreSQL schema migrated to the new head. They
-cover the PG-specific behaviour the SQLite unit tests in
+cover the PG-specific behaviour the unit tests in
 ``tests/unit/test_summarizer_stages.py`` cannot:
 
 * the per-date active-attempt partial unique index — the second

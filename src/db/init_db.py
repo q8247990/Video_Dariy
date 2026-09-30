@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 #: The Alembic revision this deployment expects to be at. Readiness gates
 #: (``/readyz``) compare the live schema against this head.
-EXPECTED_ALEMBIC_REVISION = "20260923_0025"
+EXPECTED_ALEMBIC_REVISION = "20260928_0027"
 
 #: Named PostgreSQL advisory-lock key used to serialize schema migration across
 #: concurrently starting backend containers. Advisory locks are scoped to a
@@ -63,7 +63,7 @@ def run_migration_locked(migrator: Callable[[], None], lock_engine: Engine | Non
     concurrently: exactly one owns the migration while the other waits on
     the lock, then finds the schema already at head. Advisory locks are
     session-scoped and held on a dedicated connection until ``migrator()``
-    returns. Non-PostgreSQL dialects (e.g. SQLite unit tests) skip the lock.
+    returns. Only PostgreSQL acquires the advisory lock.
     """
 
     target = lock_engine if lock_engine is not None else engine

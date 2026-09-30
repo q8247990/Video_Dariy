@@ -6,6 +6,11 @@
 # 4-container topology: postgres / redis / backend / frontend.
 # The backend container hosts uvicorn, two celery workers, celery beat and the
 # outbox publisher via supervisord (see supervisord.conf).
+#
+# APP_ENV defaults to `development` here for the self-host quickstart. Set
+# APP_ENV=production in .env to enable the production secret validation
+# (distinct SECRET_KEY / MEDIA_SIGNING_KEY + v1:<Fernet> PROVIDER_KEY_ENCRYPTION_KEY).
+# docker-compose.release.yml hard-codes APP_ENV=production.
 services:
   postgres:
     image: postgres:17-alpine
@@ -19,7 +24,7 @@ services:
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d home_monitor"]
       interval: 5s
@@ -54,6 +59,7 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/home_monitor
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}

@@ -33,16 +33,16 @@ from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.analysis.checkpoint_writer import ClaimGuards
 from src.services.analysis.constants import NOT_FOUND_RETRY_DELAYS_SECONDS
+from src.services.dispatch import (
+    bind_or_create_running_task_log,
+    finalize_task_log,
+)
 from src.services.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
 from src.services.pipeline_state import transition_session, transition_task_log
-from src.services.task_dispatch_control import (
-    bind_or_create_running_task_log,
-    finalize_task_log,
-)
 
 logger = logging.getLogger(__name__)
 

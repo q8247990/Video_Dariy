@@ -98,11 +98,10 @@ def find_duplicate_active_task(
       ``(task_type, task_target_id, status IN [PENDING, RUNNING])``
       ordered by ``created_at desc``.
     * All other task types: first scans for an active row whose
-      ``dedupe_key`` matches; falls back to a load-bearing legacy path
-      that scans ``dedupe_key IS NULL`` rows whose ``detail_json``
-      carries the same dedupe_key (the pre-partial-unique-index path
-      we still respect because SQLite unit tests do not create the PG
-      partial unique index).
+      ``dedupe_key`` matches; falls back to a legacy path that scans
+      ``dedupe_key IS NULL`` rows whose ``detail_json`` carries the
+      same dedupe_key (rows written before the partial unique index
+      existed).
     """
     if task_type == TaskType.SESSION_BUILD:
         return (

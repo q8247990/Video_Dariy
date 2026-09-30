@@ -108,16 +108,11 @@ Index / constraint plan
    correlation id instead of cascading the delete or blocking the
    cleanup with ``RESTRICT``.
 
-Cross-dialect notes
-===================
+Index notes
+===========
 
-``BigInteger().with_variant(Integer, "sqlite")`` makes ``id`` a rowid
-alias on SQLite so unit tests get autoincrement without a sequence.
-The partial index is declared with **both** ``postgresql_where`` and
-``sqlite_where`` so ``Base.metadata.create_all`` on an in-memory
-SQLite engine enforces the same active-attempt uniqueness the
-migration emits on PostgreSQL (SQLite has supported partial indexes
-since 3.8.0).
+The active-attempt uniqueness index is a PostgreSQL partial index
+declared with ``postgresql_where``; the migration emits the same DDL.
 """
 
 from __future__ import annotations
@@ -166,10 +161,8 @@ class DailySummaryGenerationAttempt(Base):
     __tablename__ = "daily_summary_generation_attempt"
 
     # -- surrogate primary key ----------------------------------------
-    # ``BIGSERIAL`` on PostgreSQL; ``INTEGER`` on SQLite so the column
-    # becomes a rowid alias and autoincrements without a sequence.
     id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"),
+        BigInteger,
         primary_key=True,
         autoincrement=True,
     )
@@ -223,14 +216,12 @@ class DailySummaryGenerationAttempt(Base):
             name="ck_daily_summary_attempt_status",
         ),
         # Active-attempt safety net: at most one claimed/queued/running
-        # attempt per date. Declared for both dialects so the SQLite
-        # unit tests enforce the same invariant as PostgreSQL.
+        # attempt per date (PostgreSQL partial index).
         Index(
             "uq_daily_summary_attempt_active_date",
             "summary_date",
             unique=True,
             postgresql_where=text(ACTIVE_STATUS_PREDICATE),
-            sqlite_where=text(ACTIVE_STATUS_PREDICATE),
         ),
         # Audit query path: "all attempts for date X in order".
         Index(

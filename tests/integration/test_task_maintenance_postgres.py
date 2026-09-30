@@ -26,6 +26,7 @@ def test_concurrent_lost_analysis_recovery_creates_one_resume(
             camera_name="lease-camera",
             location_name="test",
             source_type="local_directory",
+            last_validate_status="success",
             config_json={"root_path": "/tmp/videos"},
             enabled=True,
         )

@@ -3,13 +3,10 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from src.application.bootstrap import Container, bootstrap_production
+from src.application.bootstrap import Container, get_production_container
 from src.application.mcp.service import MCPInvalidArgumentError, MCPNotFoundError
 from src.application.mcp.use_case_tools import MCPToolUseCase
-from src.application.qa.service import (
-    QAProviderInvokeError,
-    QAProviderNotConfiguredError,
-)
+from src.application.qa.errors import QAProviderInvokeError, QAProviderNotConfiguredError
 from src.core.config import settings
 from src.core.i18n.locale_directive import get_mcp_field_description, get_mcp_tool_description
 from src.mcp.auth import log_mcp_call
@@ -41,7 +38,7 @@ def _build_session_playback_url(session_id: int) -> str:
 # reuses the same LLM gateway factory without going through the
 # composition root on each call. Tests that need hermetic isolation
 # override ``set_container_for_tests`` (see :func:`set_container_for_tests`).
-_container: Container = bootstrap_production()
+_container: Container = get_production_container()
 
 
 def get_container() -> Container:
@@ -255,10 +252,3 @@ def call_tool(
     result = _tool_result(response)
     log_mcp_call(db, tool_name, request_data, result, "success")
     return result
-
-
-def _required_str(arguments: dict[str, Any], key: str) -> str:
-    value = arguments.get(key)
-    if not isinstance(value, str):
-        raise MCPInvalidArgumentError(f"{key} is required")
-    return value

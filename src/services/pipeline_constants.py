@@ -16,7 +16,6 @@ class ValidationStatus(str, Enum):
 class TaskType(str, Enum):
     SESSION_BUILD = "session_build"
     SESSION_ANALYSIS = "session_analysis"
-    VIDEO_PIPELINE_ALERT = "video_pipeline_alert"
     DAILY_SUMMARY_GENERATION = "daily_summary_generation"
     WEBHOOK_PUSH = "webhook_push"
 

@@ -22,7 +22,6 @@ from src.models import (
     VideoSession,
     VideoSessionFileRel,
     VideoSource,
-    VideoSourceRuntimeState,
     WebhookConfig,
     WebhookDeliveryLog,
 )
@@ -51,7 +50,6 @@ __all__ = [
     "VideoSession",
     "VideoSessionFileRel",
     "VideoSource",
-    "VideoSourceRuntimeState",
     "WebhookConfig",
     "WebhookDeliveryLog",
 ]

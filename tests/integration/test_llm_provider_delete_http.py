@@ -75,7 +75,7 @@ def test_delete_provider_clears_historical_references_for_non_current_provider(
             provider_id=target.id,
             provider_name_snapshot=target.provider_name,
             usage_date=date(2026, 3, 24),
-            scene="qa_answer",
+            scene="qa_agent",
             prompt_tokens=10,
             completion_tokens=20,
             total_tokens=30,

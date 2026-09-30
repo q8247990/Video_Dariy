@@ -19,10 +19,10 @@ from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.services.analysis.checkpoint_writer import RESUMABLE_STATES, ClaimGuards
 from src.services.analysis.errors import LateWorkerFencingError
+from src.services.dispatch import finalize_task_log
 from src.services.llm_output_utils import truncate_text
 from src.services.pipeline_constants import TaskStatus
 from src.services.pipeline_state import transition_task_log
-from src.services.task_dispatch_control import finalize_task_log
 
 logger = logging.getLogger(__name__)
 

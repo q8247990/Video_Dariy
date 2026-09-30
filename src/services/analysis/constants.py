@@ -15,6 +15,10 @@ from __future__ import annotations
 # ``docs/adr/0009-remove-keyframe-pipeline.md``.
 RAW_MP4_NUM_FRAMES: int = 120
 
+# Webhook event emitted (via the outbox) once an analysis run finishes
+# successfully. Subscribers opt in through ``event_subscriptions_json``.
+WEBHOOK_EVENT_SESSION_ANALYZED: str = "session_analyzed"
+
 # Celery ``autoretry_for`` retry budget for the analyzer task. Used to
 # distinguish transient PG deadlocks (``40P01`` / ``40001``) from
 # permanent failures; after ``DEADLOCK_MAX_RETRIES`` the worker lets
@@ -36,4 +40,5 @@ __all__ = [
     "NOT_FOUND_RETRY_DELAYS_SECONDS",
     "POSTGRES_RETRYABLE_SQLSTATES",
     "RAW_MP4_NUM_FRAMES",
+    "WEBHOOK_EVENT_SESSION_ANALYZED",
 ]

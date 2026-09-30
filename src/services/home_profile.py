@@ -2,6 +2,7 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from src.core.exceptions import DomainError
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.home_profile import HomeProfile
 from src.schemas.home_profile import (
@@ -107,7 +108,7 @@ def update_entity(
         _validate_age_group(update_data.get("age_group"))
 
     if entity.entity_type == "member" and "breed" in update_data and update_data.get("breed"):
-        raise ValueError("member does not support breed")
+        raise DomainError("member does not support breed")
 
     for key, value in update_data.items():
         setattr(entity, key, value)
@@ -169,15 +170,15 @@ def get_options() -> dict[str, Any]:
 
 def _validate_role_type(entity_type: str, role_type: Optional[str]) -> None:
     if not role_type:
-        raise ValueError("role_type is required")
+        raise DomainError("role_type is required")
     if entity_type == "member" and role_type not in MEMBER_ROLE_OPTIONS:
-        raise ValueError("invalid member role_type")
+        raise DomainError("invalid member role_type")
     if entity_type == "pet" and role_type not in PET_ROLE_OPTIONS:
-        raise ValueError("invalid pet role_type")
+        raise DomainError("invalid pet role_type")
 
 
 def _validate_age_group(age_group: Optional[str]) -> None:
     if age_group is None:
         return
     if age_group not in AGE_GROUP_OPTIONS:
-        raise ValueError("invalid age_group")
+        raise DomainError("invalid age_group")

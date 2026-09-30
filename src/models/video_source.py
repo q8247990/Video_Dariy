@@ -9,7 +9,6 @@ from src.db.base_class import Base
 if TYPE_CHECKING:
     from src.models.video_file import VideoFile
     from src.models.video_session import VideoSession
-    from src.models.video_source_runtime_state import VideoSourceRuntimeState
 
 
 class VideoSource(Base):
@@ -39,11 +38,4 @@ class VideoSource(Base):
     )
     sessions: Mapped[list["VideoSession"]] = relationship(
         "VideoSession", back_populates="source", lazy="select", passive_deletes=True
-    )
-    runtime_state: Mapped[Optional["VideoSourceRuntimeState"]] = relationship(
-        "VideoSourceRuntimeState",
-        back_populates="source",
-        uselist=False,
-        lazy="select",
-        passive_deletes=True,
     )

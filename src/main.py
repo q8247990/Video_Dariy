@@ -15,6 +15,7 @@ from src.api.error_status import ResponseStatusMiddleware
 from src.api.v1.api import api_router
 from src.core.celery_app import celery_app  # noqa: F401
 from src.core.config import settings
+from src.core.exceptions import DomainError
 from src.core.i18n import get_system_default_locale, normalize_locale
 from src.core.logging_config import configure_logging, set_correlation_id
 from src.db.init_db import get_current_alembic_revision, get_registered_table_names, init_db
@@ -92,8 +93,8 @@ app.add_middleware(
 )
 
 
-@app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+@app.exception_handler(DomainError)
+async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"code": 4000, "message": str(exc), "data": None},

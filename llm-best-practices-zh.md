@@ -6,13 +6,18 @@
 > 以及 video_dairy 仓库 ADR 0009 与当前代码实现。
 > 文中所有数字均为实测或日志实读值，非理论估算。
 
+> **2026-09-24 更正**：正文中"60 秒 sub-chunk"是历史研究阶段的表述。当前代码
+> （`src/services/analysis/chunk_plan.py`、`src/services/session_analysis_video.py`）的分析单位是
+> **"一个视频文件 = 一个 sub-chunk = 一次 LLM 调用"**，客户端不做 60 秒切割、也不合并文件。
+> 小米录像本身约 60 秒/文件，因此下文大量 60 秒档位的实测数字仍然成立，但请勿理解为客户端在切片。
+
 ---
 
 ## 0. 摘要
 
-video_dairy 是一个离线家庭监控视频分析系统：NAS 里的摄像头录像（2560×1440）被切成 60 秒的
-sub-chunk，每块以 raw mp4 base64 连同 `num_frames=120` 发给本地多模态大模型，模型输出结构化
-JSON 事件。整个链路要同时满足三个矛盾需求：
+video_dairy 是一个离线家庭监控视频分析系统：NAS 里的摄像头录像（2560×1440）**按文件切分**，
+每个视频文件（小米录像约 60 秒/文件）作为一个 sub-chunk，以 raw mp4 base64 连同
+`num_frames=120` 发给本地多模态大模型，模型输出结构化 JSON 事件。整个链路要同时满足三个矛盾需求：
 
 - **分辨率**——要认人、认脸，不能糊；
 - **时长**——单块 1 分钟（生产切块）甚至更长的录像要覆盖全；
@@ -24,8 +29,8 @@ JSON 事件。整个链路要同时满足三个矛盾需求：
    PCIe P2P，刷 ReBAR VBIOS 把两卡 BAR1 从 256 MiB 扩到 32 GB，锁 350W 功耗消除板级保护降频。
 2. **部署**：vLLM TP=2 + Qwen3.8-27B INT4，`gpu-memory-utilization=0.9`、FP8 KV cache、
    262144 上下文、`--mm-encoder-tp-mode weights`，最终文本吞吐单流 76.7 tok/s、8 并发 434.7 tok/s。
-3. **视频参数**：吃透"100M 像素预算 → 视觉 token 恒 ≈48.8k"的不变量，用 60 秒 sub-chunk +
-   120 帧采样取代默认 32 帧均匀采样（消除 4~5 秒瞬态事件的采样混叠），关键帧方案经 A/B 验证后
+3. **视频参数**：吃透"100M 像素预算 → 视觉 token 恒 ≈48.8k"的不变量，用"单文件 sub-chunk（≈60 秒素材）
+   + 120 帧采样"取代默认 32 帧均匀采样（消除 4~5 秒瞬态事件的采样混叠），关键帧方案经 A/B 验证后
    作为研究结论保留、生产锁定 raw_mp4 单一路径。
 
 全文按"硬件 → 部署 → 视频 → 客户端"四层展开，每层都给出**最终配置**、**为什么是这个值**、
@@ -52,11 +57,11 @@ JSON 事件。整个链路要同时满足三个矛盾需求：
 | 维度 | 值 | 来源 |
 |---|---|---|
 | 输入分辨率 | 2560×1440（小米摄像头，约 20 fps） | 生产录像实测 |
-| 单 sub-chunk 时长 | 60 s | 项目常量 |
+| 单 sub-chunk 时长 | 一文件（小米录像 ≈60 s） | `session_analysis_video.build_file_sub_chunks` |
 | 视觉 token | ≈ 48.8k（100M 像素预算 / 2048，不变量） | §4.1 推导 |
 | 输出 | 结构化 JSON 事件（`temperature=0`、`json_object`、`max_tokens=8192`） | `sub_chunk_runner.py` |
 | 并发 | vision worker `concurrency=1`（`analysis_hot/analysis_full`） | 部署配置 |
-| 调用频率 | 每 60s 素材 1 次调用（1 分钟 = 1 次）；10 分钟素材 = 10 次 | 推导 |
+| 调用频率 | 每文件 1 次调用（小米录像 ≈1 分钟/文件）；10 分钟素材 ≈ 10 次 | 推导 |
 | 延迟要求 | 批量离线（NAS 积压素材回补），产品明确接受延迟；
   concurrency=1 下 1 分钟素材 ≈ 60~80s LLM 时间（实时比 ~1.0~1.3×） | 产品决策 |
 
@@ -388,15 +393,15 @@ num_frames: -1}`，让每帧带真实时间位置（模型报的时间戳与烧�
 
 **但生产最终锁定了 raw_mp4 单一路径**：
 
-- 分析粒度改为 **60 秒 sub-chunk**：60s 素材约 1200 个源帧（~20fps），`num_frames=120`
+- 分析粒度改为 **单文件 sub-chunk**（小米录像约 60 秒/文件，整文件不切割）：60s 素材约 1200 个源帧（~20fps），`num_frames=120`
   让 vLLM 端均匀采样恰好**整段全覆盖**（每 0.5s 一帧，4~5 秒的瞬态事件必然被覆盖）——
   关键帧方案要解决的"漏事件"问题，在 60s 粒度下被直接消解；
 - 120 帧落在 100M 预算内对应单帧 ~1200×675（128 帧档为 1152×640），细节识别可行
   （人物/活动识别足够，人脸级细节是权衡掉的）；
 - 客户端零 ffmpeg 解码、零 cv2/numpy 依赖，payload 构建就是读文件 + base64，vLLM 端
   零改动；
-- `RAW_MP4_NUM_FRAMES = 120` 固化为代码常量，
-  `video_preprocess_mode` 非 `raw_mp4` 的值在 422 层直接拒绝，关键帧代码/配置面全部删除。
+- `RAW_MP4_NUM_FRAMES = 120` 为默认采样帧数，可由模型服务 `extra_config_json.num_frames`
+  覆盖（范围 1–600）；`video_preprocess_mode` 非 `raw_mp4` 的值在 422 层直接拒绝，关键帧代码/配置面全部删除。
 
 **两个请求级参数的坑（vLLM 端）**：
 
@@ -404,11 +409,11 @@ num_frames: -1}`，让每帧带真实时间位置（模型报的时间戳与烧�
 - **`frames_indices` 必须升序**且与帧列表顺序一致（顺序 = 时间顺序）；`num_frames: -1`
   表示"原样使用给出的全部帧"。
 
-### 4.4 为什么 sub-chunk = 60 秒
+### 4.4 为什么采样档位对应 60 秒素材（典型单文件时长）
 
 - **采样目标固定、时长反推**：`num_frames=120` 是固定的产品决策。要在 0.5s/帧
   的时间分辨率下（研究实测：这是抓住 4~5 秒瞬态事件同时不浪费预算的甜点位）全覆盖，
-  sub-chunk 必须 ≤ 120×0.5s = 60s；取上限 60s，同时让**每单位素材的调用次数最少**
+  素材时长必须 ≤ 120×0.5s = 60s；小米单文件恰为 60s，同时让**每单位素材的调用次数最少**
   （每次调用有固定的 ~48k prefill 成本，30s 粒度 = 双倍调用 + 双倍固定开销）；
 - **耗时**：单 sub-chunk 调用 60~80s（prefill 为主）。1 分钟素材 = 1 次调用，
   实时比 ~1.0~1.3×——对 NAS 积压素材的批量回补场景，产品明确"接受延迟"，
@@ -474,9 +479,10 @@ num_frames: -1}`，让每帧带真实时间位置（模型报的时间戳与烧�
 1. **一文件一调**：session 内每个视频文件就是一个 sub-chunk，直接读取该文件 base64
    （`build_video_data_url`），无跨文件 concat，`base_offset_seconds` 即该文件在 session
    内的起始偏移。文件真实时长在入库时由 `ffprobe` 探测。
-2. **参数固化不配置化**：`RAW_MP4_NUM_FRAMES=120` 是常量。凡属产品决策的参数，
-   用代码常量 + 回归测试（`test_analyzer_raw_mp4_payload.py` 断言 payload 前缀、
-   num_frames 值、schema 422 拒绝 keyframe）锁定，而不是藏在可漂移的配置里。
+2. **默认值 + 可覆盖**：`RAW_MP4_NUM_FRAMES=120` 是默认采样帧数，模型服务可用
+   `extra_config_json.num_frames` 覆盖（1–600，见 `resolve_num_frames`）；其余产品决策参数
+   仍以代码常量 + 回归测试（`test_analyzer_raw_mp4_payload.py` 断言 payload 前缀、
+   num_frames 值、schema 422 拒绝 keyframe）锁定。
 3. **断点续跑 + 指纹围栏**：每个 sub-chunk 的 LLM 调用结果写入
    `SessionAnalysisCheckpoint`（session + analysis_run + sub_chunk 唯一键，记录输入指纹、
    状态、事件载荷、token 用量、错误）。输入指纹（prompt 双段 + video sha256 + offset +

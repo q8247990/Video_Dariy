@@ -42,7 +42,7 @@ def _persist_heartbeat_counters(db: Any, counters: dict[str, int]) -> None:
     recovered). Persisting them lets the /metrics endpoint surface the
     recovery counters without any cross-process state. Runs inside the
     heartbeat transaction; guarded to be a no-op when the table is not
-    present (hermetic SQLite unit-test contexts).
+    present.
     """
     from sqlalchemy import inspect
 

@@ -55,7 +55,7 @@ export function OnboardingBasicProviderPage() {
       enabled: true,
       supports_vision: true,
       supports_qa: true,
-      supports_tool_calling: false,
+      supports_tool_calling: true,
       is_default_vision: true,
       is_default_qa: true,
     }

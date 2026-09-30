@@ -42,6 +42,11 @@ from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.dispatch import (
+    build_dedupe_key,
+    ensure_dict_detail,
+    find_duplicate_active_task,
+)
 from src.services.pipeline_constants import (
     ScanMode,
     SessionAnalysisStatus,
@@ -49,11 +54,6 @@ from src.services.pipeline_constants import (
     TaskType,
 )
 from src.services.pipeline_state import transition_session
-from src.services.task_dispatch_control import (
-    build_dedupe_key,
-    ensure_dict_detail,
-    find_duplicate_active_task,
-)
 
 logger = logging.getLogger(__name__)
 

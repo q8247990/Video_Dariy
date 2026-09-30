@@ -24,15 +24,15 @@ from typing import Any, Optional
 from src.core.celery_app import celery_app
 from src.db.session import task_db_session
 from src.models.daily_summary import DailySummary
-from src.services.home_timezone import home_now
-from src.services.pipeline_constants import TaskType
-from src.services.summarizer import get_home_timezone
-from src.services.task_dispatch_control import (
+from src.services.dispatch import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
     finalize_cancelled_task_log,
     get_task_log_for_update,
 )
+from src.services.home_timezone import home_now
+from src.services.pipeline_constants import TaskType
+from src.services.summarizer import get_home_timezone
 from src.tasks._container import get_container
 from src.tasks._summarizer_orchestration import run_daily_summary_generation, run_dispatch_scheduled
 

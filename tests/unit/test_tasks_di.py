@@ -21,6 +21,7 @@ holder in ``finally`` blocks, so they are safe to run in any order.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -59,6 +60,7 @@ def _seed_source(db: Session) -> int:
         camera_name="di-cam",
         location_name="客厅",
         source_type="local_directory",
+        last_validate_status="success",
         config_json={"root_path": "/tmp/videos"},
         enabled=True,
     )
@@ -124,15 +126,24 @@ def test_session_build_dispatches_via_container(
     assert isinstance(dispatcher.dispatched_analyze_session[0], AnalyzeSessionCommand)
 
 
-def test_task_maintenance_dispatch_uses_container() -> None:
+def test_task_maintenance_dispatch_uses_container(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hot-build dispatch helper calls the port rather than constructing a Celery dispatcher."""
 
     dispatcher = _bind(FakeTaskDispatcher())
-    db = MagicMock()
-    db.query.return_value.filter.return_value.all.return_value = [
-        MagicMock(id=1),
-        MagicMock(id=2),
+    sources = [
+        SimpleNamespace(
+            id=source_id,
+            enabled=True,
+            source_paused=False,
+            source_type="local_directory",
+            last_validate_status="success",
+            last_scan_at=None,
+        )
+        for source_id in (1, 2)
     ]
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = sources
+    monkeypatch.setattr("src.services.maintenance.hot_scheduling.get_config", lambda _db, _key: 300)
     dispatch_hot_builds(db)
 
     assert [c.source_id for c in dispatcher.dispatched_session_build] == [1, 2]

@@ -1,7 +1,17 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base_class import Base
@@ -51,6 +61,10 @@ class TaskLog(Base):
     detail_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','running','success','skipped','failed','timeout','cancelled')",
+            name="ck_task_log_status",
+        ),
         Index("idx_task_log_status_type", "status", "task_type"),
         Index("idx_task_log_created_at", "created_at"),
         Index(

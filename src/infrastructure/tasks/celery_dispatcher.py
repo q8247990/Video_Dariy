@@ -61,14 +61,14 @@ from src.application.pipeline.commands import (
 )
 from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import ScanMode, TaskType
-from src.services.task_dispatch_control import (
+from src.services.dispatch import (
     create_pending_task_log,
     ensure_dict_detail,
     find_duplicate_active_task,
     record_deferred_hot_scan,
     supersede_active_hot_scan,
 )
+from src.services.pipeline_constants import ScanMode, TaskType
 
 # Default Celery queue the dispatcher uses when a command does not
 # specify one. The outbox registry also has its own default; the two
@@ -172,9 +172,8 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
             if active is not None:
                 return active.queue_task_id or str(active.id)
             # Defensive: a duplicate is reported by the partial unique
-            # index but ``find_duplicate_active_task`` did not find it
-            # (e.g. SQLite tests without the partial index). Fall back
-            # to the ``pending_log`` that came back from the
+            # index but ``find_duplicate_active_task`` did not find it.
+            # Fall back to the ``pending_log`` that came back from the
             # ``create`` helper.
             return pending_log.queue_task_id or str(pending_log.id)
 

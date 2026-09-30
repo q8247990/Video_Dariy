@@ -82,6 +82,30 @@ class FakeToolGateway:
         return None
 
 
+class LocaleCapturingGateway(FakeToolGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages_seen: list[dict[str, Any]] = []
+
+    def chat_completion_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        self.messages_seen = list(messages)
+        return "localized answer", []
+
+    def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int | None = None,
+    ) -> str:
+        return "localized answer"
+
+
 class FakeProvider:
     provider_name = "fake-qa"
     api_base_url = "http://localhost/v1"
@@ -219,3 +243,30 @@ def test_agent_strategy_no_tool_calls_yields_empty_references(db_session: Sessio
     assert result.referenced_sessions == []
     log = db_session.query(ChatQueryLog).one()
     assert log.referenced_event_ids_json == []
+
+
+@pytest.mark.parametrize(
+    ("locale", "expected_directive"),
+    [("en-US", "Please respond in English."), ("zh-CN", "请使用简体中文回答。")],
+)
+def test_agent_strategy_passes_locale_into_system_prompt(
+    db_session: Session, locale: str, expected_directive: str
+) -> None:
+    _, _, provider_id = _seed_data(db_session)
+    gateway = LocaleCapturingGateway()
+
+    strategy = AgentQAStrategy(db=db_session, gateway=gateway, provider=_fake_provider(provider_id))
+    strategy.execute(
+        "发生了什么",
+        QARequest(
+            question="发生了什么",
+            now=datetime(2026, 3, 15, 12, 0, 0, tzinfo=timezone.utc),
+            timezone="Asia/Shanghai",
+            write_query_log=False,
+            request_source="web",
+            locale=locale,
+        ),
+    )
+
+    system_prompt = gateway.messages_seen[0]["content"]
+    assert expected_directive in system_prompt

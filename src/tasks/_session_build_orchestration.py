@@ -26,6 +26,14 @@ from src.adapters.xiaomi_parser import XiaomiDirectoryParser
 from src.application.pipeline.commands import AnalyzeSessionCommand
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.dispatch import (
+    TaskCancellationRequested,
+    bind_or_create_running_task_log,
+    ensure_task_not_cancelled,
+    finalize_cancelled_task_log,
+    finalize_task_log,
+    get_task_log_for_update,
+)
 from src.services.pipeline_constants import (
     AnalysisPriority,
     ScanMode,
@@ -36,20 +44,14 @@ from src.services.pipeline_constants import (
 from src.services.session_build.persistence import find_stuck_sealed_sessions
 from src.services.session_build.runner import run_full, run_hot
 from src.services.session_build.types import SealedSessionInfo
-from src.services.system_config_registry import HOME_TIMEZONE, get_config
-from src.services.task_dispatch_control import (
-    TaskCancellationRequested,
-    bind_or_create_running_task_log,
-    ensure_task_not_cancelled,
-    finalize_cancelled_task_log,
-    finalize_task_log,
-    get_task_log_for_update,
+from src.services.system_config_registry import (
+    HOME_TIMEZONE,
+    SCAN_HOT_WINDOW_HOURS,
+    get_config,
 )
 from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
-
-HOT_WINDOW_HOURS = 24
 
 
 # ---------------------------------------------------------------------------
@@ -76,15 +78,19 @@ def _latest_session_end_time(db: Session, source_id: int) -> datetime | None:
     return None if row is None else row[0]
 
 
+def _hot_window_hours(db: Session) -> int:
+    return int(get_config(db, SCAN_HOT_WINDOW_HOURS))
+
+
 def _hot_scan_start(db: Session, source_id: int, now: datetime) -> datetime:
-    window_start = now - timedelta(hours=HOT_WINDOW_HOURS)
+    window_start = now - timedelta(hours=_hot_window_hours(db))
     latest = _latest_session_end_time(db, source_id)
     return window_start if latest is None else max(window_start, latest)
 
 
-def _compute_full_scan_end(now: datetime) -> datetime:
+def _compute_full_scan_end(db: Session, now: datetime) -> datetime:
     """Stable hot boundary used as the FULL-scan upper bound."""
-    return now - timedelta(hours=HOT_WINDOW_HOURS)
+    return now - timedelta(hours=_hot_window_hours(db))
 
 
 def _resolve_home_zone(db: Session) -> ZoneInfo:
@@ -295,7 +301,7 @@ def _build_full(db: Session, source_id: int, cancel_check: Callable[[], None]) -
         return {"skipped": True, "reason": "no_directories"}
 
     now = datetime.now(timezone.utc)
-    scan_end = _compute_full_scan_end(now)
+    scan_end = _compute_full_scan_end(db, now)
     scan_start = earliest_folder_time - timedelta(hours=1)
     if scan_start >= scan_end:
         return {"skipped": True, "reason": "no_range"}
@@ -352,7 +358,6 @@ def run_full_build(
 
 
 __all__ = [
-    "HOT_WINDOW_HOURS",
     "_compute_full_scan_end",
     "_dispatch_analysis_for_sealed",
     "run_full_build",

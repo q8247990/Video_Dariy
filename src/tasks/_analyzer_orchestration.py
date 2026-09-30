@@ -66,6 +66,7 @@ from src.services.analysis.finalize import (
 from src.services.analysis.ports import AnalysisPorts
 from src.services.analysis.provider import _build_provider_client
 from src.services.analysis.sub_chunk_runner import execute_sub_chunk
+from src.services.dispatch import ensure_task_not_cancelled
 from src.services.dispatch.cancel import TaskCancellationRequested
 from src.services.dispatch.lease import renew_task_lease
 from src.services.home_profile import build_home_context
@@ -73,7 +74,7 @@ from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.pipeline_constants import SourceType
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
-from src.services.task_dispatch_control import ensure_task_not_cancelled
+from src.services.provider_generation_limits import get_generation_limits, resolve_num_frames
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 
@@ -227,6 +228,7 @@ def run_session_analysis(
             sub_chunk_count, parse_modes, late_worker = loop_result
             if late_worker:
                 return {"late_worker": True, "session_id": session_id}
+            generation_limits = get_generation_limits(provider)
             try:
                 success_return = finalize_session_success(
                     db,
@@ -237,7 +239,10 @@ def run_session_analysis(
                     file_count=len(plan.sub_chunks),
                     sub_chunk_count=sub_chunk_count,
                     priority=priority,
-                    raw_mp4_num_frames=RAW_MP4_NUM_FRAMES,
+                    raw_mp4_num_frames=resolve_num_frames(
+                        provider, scene_default=RAW_MP4_NUM_FRAMES
+                    ),
+                    media_input_budget=generation_limits.input_tokens(scene_default=8192),
                     parse_modes=parse_modes,
                     replace_session_events_fn=ports.replace_session_events,
                 )
@@ -329,7 +334,9 @@ def _run_sub_chunk_loop(
             )
             last_prompt_text = user_prompt
             video_data_url = ports.video_data_url(plan_item.file_paths[0])
-            extra_body = build_sub_chunk_extra_body()
+            extra_body = build_sub_chunk_extra_body(
+                resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
+            )
             prepared, result = _run_one_sub_chunk(
                 db=db,
                 self=self,

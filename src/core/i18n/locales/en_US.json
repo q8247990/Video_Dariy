@@ -39,6 +39,7 @@
   "onboarding.default_assistant_name": "Home Assistant",
 
   "provider.capability_required": "Provider must have at least one capability enabled",
+  "provider.qa_requires_tool_calling": "QA providers must support tool calling",
   "provider.not_found": "Provider not found",
   "provider.cannot_disable_default": "Cannot disable default provider",
   "provider.cannot_delete_default": "Cannot delete default provider",
@@ -100,7 +101,7 @@
   "summary.no_sessions": "No analyzed sessions found",
   "summary.invalid_date": "Invalid date format. Use YYYY-MM-DD",
 
-  "chat.no_qa_provider": "No QA provider configured",
+  "chat.no_qa_provider": "No tool-calling-capable QA provider configured",
 
   "media.video_file_not_found": "Video file not found",
   "media.physical_file_not_found": "Physical file not found on disk",

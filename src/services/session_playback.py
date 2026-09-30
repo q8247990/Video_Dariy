@@ -9,8 +9,9 @@ from typing import Iterator
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
-from src.services.media_signing import SEGMENT_TTL_SECONDS, MediaCapability, MediaSigningService
-from src.services.session_video import get_session_video_files
+from src.services.media_signing import MediaCapability, MediaSigningService
+from src.services.session_video import get_session_video_files, resolve_file_duration_seconds
+from src.services.system_config_registry import MEDIA_SEGMENT_TTL_SECONDS, get_config
 
 
 @dataclass
@@ -33,10 +34,17 @@ def _manifest_write_lock(manifest_path: Path) -> Iterator[None]:
 
 def get_or_create_session_hls_manifest(db: Session, session_id: int) -> HlsManifestInfo:
     manifest_path = _get_session_manifest_path(session_id)
+    segment_ttl_seconds = int(get_config(db, MEDIA_SEGMENT_TTL_SECONDS))
     with _manifest_write_lock(manifest_path):
         video_files = get_session_video_files(db, session_id)
-        available_file_ids = [video.id for video in video_files if not video.file_missing]
-        _write_index_manifest(session_id, manifest_path, available_file_ids)
+        available_files = [
+            (video.id, resolve_file_duration_seconds(video))
+            for video in video_files
+            if not video.file_missing
+        ]
+        _write_index_manifest(
+            session_id, manifest_path, available_files, segment_ttl_seconds=segment_ttl_seconds
+        )
     return HlsManifestInfo(
         manifest_path=manifest_path,
         manifest_url=f"/media/sessions/{session_id}/hls/index.m3u8",
@@ -55,20 +63,27 @@ def _get_session_manifest_path(session_id: int) -> Path:
     return session_dir / "index.m3u8"
 
 
-def _write_index_manifest(session_id: int, manifest_path: Path, file_ids: list[int]) -> None:
-    if not file_ids:
+def _write_index_manifest(
+    session_id: int,
+    manifest_path: Path,
+    files: list[tuple[int, int]],
+    *,
+    segment_ttl_seconds: int,
+) -> None:
+    if not files:
         raise ValueError(f"Session {session_id} has no available video files")
 
+    target_duration = max(1, max(duration for _, duration in files))
     lines = [
         "#EXTM3U",
         "#EXT-X-VERSION:3",
-        "#EXT-X-TARGETDURATION:60",
+        f"#EXT-X-TARGETDURATION:{target_duration}",
         "#EXT-X-MEDIA-SEQUENCE:0",
     ]
     signing_service = MediaSigningService.from_settings()
-    expires_at = int(time.time()) + SEGMENT_TTL_SECONDS
-    for file_id in file_ids:
-        lines.append("#EXTINF:60.0,")
+    expires_at = int(time.time()) + segment_ttl_seconds
+    for file_id, duration in files:
+        lines.append(f"#EXTINF:{duration}.0,")
         capability = MediaCapability(
             resource_kind="file",
             resource_id=file_id,

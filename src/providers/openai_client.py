@@ -34,17 +34,6 @@ class OpenAIClient:
     def close(self) -> None:
         self._http_client.close()
 
-    def __enter__(self) -> "OpenAIClient":
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: Any,
-    ) -> None:
-        self.close()
-
     def _build_default_request_extras(self) -> dict[str, Any]:
         model_name = self.model_name.strip().lower()
         if "qwen" in model_name:

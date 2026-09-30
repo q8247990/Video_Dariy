@@ -152,7 +152,7 @@ def _redact_paths(message: str, root: str) -> str:
     """
     escaped = re.escape(root)
     pattern = re.compile(escaped + r"(?:/[^/\s]+)+")
-    return pattern.sub(lambda m: root + "/**", message)
+    return pattern.sub(lambda _: root + "/**", message)
 
 
 # ---------------------------------------------------------------------------

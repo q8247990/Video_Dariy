@@ -12,13 +12,12 @@ type FormState = {
   daily_summary_schedule: string
   scan_interval_seconds: string
   scan_hot_window_hours: string
-  scan_late_tolerance_seconds: string
-  latency_alert_threshold_seconds: string
-  alert_consecutive_required: string
-  alert_notify_cooldown_minutes: string
   tag_recommendation_enabled: boolean
   mcp_enabled: boolean
   mcp_token: string
+  media_manifest_ttl_seconds: string
+  media_segment_ttl_seconds: string
+  media_entity_image_ttl_seconds: string
 }
 
 function toFormState(data: SystemConfig): FormState {
@@ -29,23 +28,21 @@ function toFormState(data: SystemConfig): FormState {
       typeof data.scan_interval_seconds === 'number' ? String(data.scan_interval_seconds) : '300',
     scan_hot_window_hours:
       typeof data.scan_hot_window_hours === 'number' ? String(data.scan_hot_window_hours) : '24',
-    scan_late_tolerance_seconds:
-      typeof data.scan_late_tolerance_seconds === 'number'
-        ? String(data.scan_late_tolerance_seconds)
-        : '180',
-    latency_alert_threshold_seconds:
-      typeof data.latency_alert_threshold_seconds === 'number'
-        ? String(data.latency_alert_threshold_seconds)
-        : '600',
-    alert_consecutive_required:
-      typeof data.alert_consecutive_required === 'number' ? String(data.alert_consecutive_required) : '3',
-    alert_notify_cooldown_minutes:
-      typeof data.alert_notify_cooldown_minutes === 'number'
-        ? String(data.alert_notify_cooldown_minutes)
-        : '60',
     tag_recommendation_enabled: Boolean(data.tag_recommendation_enabled),
     mcp_enabled: Boolean(data.mcp_enabled),
     mcp_token: typeof data.mcp_token === 'string' ? data.mcp_token : '',
+    media_manifest_ttl_seconds:
+      typeof data.media_manifest_ttl_seconds === 'number'
+        ? String(data.media_manifest_ttl_seconds)
+        : '1800',
+    media_segment_ttl_seconds:
+      typeof data.media_segment_ttl_seconds === 'number'
+        ? String(data.media_segment_ttl_seconds)
+        : '1800',
+    media_entity_image_ttl_seconds:
+      typeof data.media_entity_image_ttl_seconds === 'number'
+        ? String(data.media_entity_image_ttl_seconds)
+        : '1800',
   }
 }
 
@@ -92,13 +89,12 @@ export function SystemConfigPage() {
             daily_summary_schedule: form.daily_summary_schedule,
             scan_interval_seconds: Number(form.scan_interval_seconds),
             scan_hot_window_hours: Number(form.scan_hot_window_hours),
-            scan_late_tolerance_seconds: Number(form.scan_late_tolerance_seconds),
-            latency_alert_threshold_seconds: Number(form.latency_alert_threshold_seconds),
-            alert_consecutive_required: Number(form.alert_consecutive_required),
-            alert_notify_cooldown_minutes: Number(form.alert_notify_cooldown_minutes),
             tag_recommendation_enabled: form.tag_recommendation_enabled,
             mcp_enabled: form.mcp_enabled,
             mcp_token: form.mcp_token,
+            media_manifest_ttl_seconds: Number(form.media_manifest_ttl_seconds),
+            media_segment_ttl_seconds: Number(form.media_segment_ttl_seconds),
+            media_entity_image_ttl_seconds: Number(form.media_entity_image_ttl_seconds),
           })
         }}
       />
@@ -111,13 +107,12 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
   daily_summary_schedule: '10:00',
   scan_interval_seconds: 300,
   scan_hot_window_hours: 24,
-  scan_late_tolerance_seconds: 180,
-  latency_alert_threshold_seconds: 600,
-  alert_consecutive_required: 3,
-  alert_notify_cooldown_minutes: 60,
   tag_recommendation_enabled: false,
   mcp_enabled: false,
   mcp_token: '',
+  media_manifest_ttl_seconds: 1800,
+  media_segment_ttl_seconds: 1800,
+  media_entity_image_ttl_seconds: 1800,
 }
 
 type SystemConfigFormProps = {
@@ -176,49 +171,37 @@ function SystemConfigForm({ initialForm, pending, onSubmit }: SystemConfigFormPr
           </label>
 
           <label>
-            {t('system_config.scan_late_tolerance')}
-            <input
-              type="number"
-              min={0}
-              value={form.scan_late_tolerance_seconds}
-              onChange={(event) =>
-                setForm((old) => ({ ...old, scan_late_tolerance_seconds: event.target.value }))
-              }
-            />
-          </label>
-
-          <label>
-            {t('system_config.latency_alert_threshold')}
+            {t('system_config.media_manifest_ttl')}
             <input
               type="number"
               min={30}
-              value={form.latency_alert_threshold_seconds}
+              value={form.media_manifest_ttl_seconds}
               onChange={(event) =>
-                setForm((old) => ({ ...old, latency_alert_threshold_seconds: event.target.value }))
+                setForm((old) => ({ ...old, media_manifest_ttl_seconds: event.target.value }))
               }
             />
           </label>
 
           <label>
-            {t('system_config.alert_consecutive_required')}
+            {t('system_config.media_segment_ttl')}
             <input
               type="number"
-              min={1}
-              value={form.alert_consecutive_required}
+              min={30}
+              value={form.media_segment_ttl_seconds}
               onChange={(event) =>
-                setForm((old) => ({ ...old, alert_consecutive_required: event.target.value }))
+                setForm((old) => ({ ...old, media_segment_ttl_seconds: event.target.value }))
               }
             />
           </label>
 
           <label>
-            {t('system_config.alert_notify_cooldown')}
+            {t('system_config.media_entity_image_ttl')}
             <input
               type="number"
-              min={1}
-              value={form.alert_notify_cooldown_minutes}
+              min={30}
+              value={form.media_entity_image_ttl_seconds}
               onChange={(event) =>
-                setForm((old) => ({ ...old, alert_notify_cooldown_minutes: event.target.value }))
+                setForm((old) => ({ ...old, media_entity_image_ttl_seconds: event.target.value }))
               }
             />
           </label>

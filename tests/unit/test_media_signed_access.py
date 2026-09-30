@@ -1,8 +1,10 @@
+import time
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import FastAPI
@@ -17,6 +19,12 @@ from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.media_signing import MediaCapability, MediaSigningService
+from src.services.system_config_registry import (
+    MEDIA_MANIFEST_TTL_SECONDS,
+    MEDIA_SEGMENT_TTL_SECONDS,
+    get_config,
+    set_config,
+)
 
 
 @pytest.fixture
@@ -71,7 +79,7 @@ def _seed_playable_session(db: Session, video_path: Path) -> tuple[int, int]:
         session_start_time=datetime(2026, 3, 14, 8, 0, 0),
         session_end_time=datetime(2026, 3, 14, 8, 1, 0),
         total_duration_seconds=60,
-        analysis_status="pending",
+        analysis_status="sealed",
     )
     db.add(session)
     db.flush()
@@ -181,3 +189,52 @@ def test_range_headers_have_documented_http_contract(
         assert response.content == expected_body
     else:
         assert response.headers["content-range"] == "bytes */10"
+
+
+def _token_expiry(url: str, kind: str, resource_id: int, session_parent_id: int | None) -> int:
+    """Decode the signed URL's token and return its absolute expiry instant."""
+    token = parse_qs(urlparse(url).query)["token"][0]
+    expected = MediaCapability(
+        resource_kind=kind,
+        resource_id=resource_id,
+        method="GET",
+        expires_at=0,
+        session_parent_id=session_parent_id,
+    )
+    return MediaSigningService.from_settings().verify(token, expected).expires_at
+
+
+def test_media_ttl_defaults_to_1800_when_unconfigured(pg_db: Session) -> None:
+    assert get_config(pg_db, MEDIA_SEGMENT_TTL_SECONDS) == 1800
+    assert get_config(pg_db, MEDIA_MANIFEST_TTL_SECONDS) == 1800
+
+
+def test_media_ttl_system_config_controls_signed_url_expiry(
+    client: TestClient, db_session: Session, media_workspace: Path
+) -> None:
+    """播放接口与 HLS 清单的签名 URL 过期时间跟随系统配置项。"""
+    video_path = media_workspace / "clip.mp4"
+    video_path.write_bytes(b"abcdefghij")
+    session_id, file_id = _seed_playable_session(db_session, video_path)
+
+    set_config(db_session, MEDIA_SEGMENT_TTL_SECONDS, 120)
+    set_config(db_session, MEDIA_MANIFEST_TTL_SECONDS, 240)
+    db_session.commit()
+
+    playback = client.get(f"/api/v1/media/sessions/{session_id}/playback").json()["data"]
+    now = int(time.time())
+
+    segment_expiry = _token_expiry(playback["files"][0]["stream_url"], "file", file_id, session_id)
+    manifest_expiry = _token_expiry(playback["hls_url"], "session_hls", session_id, None)
+    playback_expiry = _token_expiry(playback["playback_url"], "session_hls", session_id, None)
+
+    assert 100 <= segment_expiry - now <= 125
+    assert 220 <= manifest_expiry - now <= 245
+    assert playback_expiry == manifest_expiry
+
+    manifest = client.get(f"/api/v1{playback['hls_url']}")
+    assert manifest.status_code == 200
+    first_segment = next(
+        line for line in manifest.text.splitlines() if line and not line.startswith("#")
+    )
+    assert 100 <= _token_expiry(first_segment, "file", file_id, session_id) - now <= 125

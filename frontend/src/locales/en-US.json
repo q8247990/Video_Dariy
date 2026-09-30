@@ -346,6 +346,8 @@
     "form_max_model_len_placeholder": "Leave blank for model default",
     "form_max_output_tokens": "Output Limit",
     "form_max_output_tokens_placeholder": "Leave blank for system default",
+    "form_num_frames": "Analysis Frames",
+    "form_num_frames_placeholder": "Default 120, range 1-600",
     "form_enabled_label": "Enable this service"
   },
   "video_sources": {
@@ -634,14 +636,14 @@
     "daily_summary_time": "Daily summary time (e.g. 10:00)",
     "scan_interval": "Scan interval (seconds)",
     "scan_hot_window": "Scan lookback (hours)",
-    "scan_late_tolerance": "Late file tolerance (seconds)",
-    "latency_alert_threshold": "Latency alert threshold (seconds)",
-    "alert_consecutive_required": "Consecutive failures before alert",
-    "alert_notify_cooldown": "Alert notification cooldown (minutes)",
+    
     "tag_recommendation": "Enable tag recommendations",
     "mcp_enabled": "Enable MCP endpoint (for tools like AstrBot via /mcp)",
     "mcp_token": "MCP Token (for Streamable HTTP authentication)",
     "mcp_token_placeholder": "Enter MCP Token",
+    "media_manifest_ttl": "HLS manifest lifetime (seconds)",
+    "media_segment_ttl": "Media segment lifetime (seconds)",
+    "media_entity_image_ttl": "Entity avatar lifetime (seconds)",
     "save_button": "Save Configuration"
   },
   "status_tag": {

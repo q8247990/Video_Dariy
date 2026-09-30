@@ -9,8 +9,8 @@ from src.core.celery_app import celery_app
 from src.db.session import task_db_session
 from src.models.webhook_config import WebhookConfig
 from src.models.webhook_delivery_log import WebhookDeliveryLog
+from src.services.dispatch import bind_or_create_running_task_log, finalize_task_log
 from src.services.pipeline_constants import TaskStatus, TaskType
-from src.services.task_dispatch_control import bind_or_create_running_task_log, finalize_task_log
 from src.services.webhook_payload import is_webhook_event_payload, to_json_safe
 from src.services.webhook_subscription import webhook_subscribes
 from src.services.webhook_url_policy import WebhookUrlPolicyError, validate_webhook_url

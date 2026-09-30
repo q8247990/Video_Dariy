@@ -82,9 +82,8 @@ def engine_factory(pg_db_factory: Callable[[], Session]):
     """
 
     def _factory() -> tuple[Any, Callable[[], Session]]:
-        # The legacy SQLite version returned ``(engine, sessionmaker)``.
-        # Under PostgreSQL we share a single engine across every
-        # ``session_factory()`` call, so the first tuple slot is ``None``
+        # We share a single engine across every ``session_factory()``
+        # call, so the first tuple slot is ``None``
         # (callers that previously used ``engine.dispose()`` are gone
         # because ``pg_engine`` is session-scoped via the fixture).
         return None, pg_db_factory
@@ -519,7 +518,7 @@ def test_dedupe_unique_index_race_silently_skips(db_session) -> None:
     # row was committed). The savepoint around the
     # ``INSERT`` in ``insert_file`` swallows the
     # ``IntegrityError`` and the dedupe returns ``None``.
-    # We can't easily race two threads on SQLite, so we
+    # We don't race two threads here, so we
     # assert the call returns no rows for file_a.
     inserted = dedupe.dedupe_files(
         db_session,

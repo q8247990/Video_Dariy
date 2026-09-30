@@ -1,10 +1,10 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from kombu.exceptions import OperationalError
 
-from src.api.common import paginate
+from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, paginate
 from src.api.deps import DB, ContainerDep, CurrentUser, Locale, Orchestrator
 from src.application.pipeline.commands import (
     AnalyzeSessionCommand,
@@ -23,13 +23,13 @@ from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.schemas.response import BaseResponse, PaginatedResponse
 from src.schemas.task_log import TaskLogResponse
+from src.services.dispatch import is_singleton_task_running
 from src.services.pipeline_constants import (
     ScanMode,
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
-from src.services.task_dispatch_control import is_singleton_task_running
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 def get_task_logs(
     db: DB,
     current_user: CurrentUser,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     task_type: str | None = None,
     status: str | None = None,
 ) -> Any:

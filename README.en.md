@@ -32,10 +32,15 @@ git clone <repo-url> && cd video_dairy
 # 2. Update the video directory mount (top of docker-compose.yml)
 #    Replace ./xiaomi_video with your camera recording directory
 
-# 3. Start
+# 3. Create .env and fill the required values (docker-compose validates them):
+#    POSTGRES_PASSWORD / SECRET_KEY / MEDIA_SIGNING_KEY /
+#    PROVIDER_KEY_ENCRYPTION_KEY / DEFAULT_ADMIN_PASSWORD
+cp .env.example .env && ${EDITOR:-vi} .env
+
+# 4. Start
 docker compose up --build -d
 
-# 4. Open your browser
+# 5. Open your browser
 #    http://localhost:8226
 ```
 
@@ -88,8 +93,9 @@ After startup, go to "Settings → Model Connection" in the admin console and en
 
 - [Best Practices for Local Multimodal LLM Deployment (Dual 3090 × Qwen3.8-27B)](llm-best-practices-en.md) — A
   full record of the measured experience and pitfall list, from dual-3090 PCIe P2P driver patches and
-  ReBAR VBIOS flashing, through vLLM deployment parameters, to the video chunking strategy (60s
-  sub-chunks + `num_frames=120`). Useful when setting up a local inference environment.
+  ReBAR VBIOS flashing, through vLLM deployment parameters, to the analysis granularity (one
+  video file per sub-chunk + `num_frames=120`). Useful when setting up a local inference
+  environment.
 
 ## Deployment
 
@@ -159,6 +165,7 @@ are stored as ciphertext only; responses return a mask. Keyless local vLLM provi
 | `PROVIDER_KEY_ENCRYPTION_KEY` | Provider API-key at-rest encryption key, `v1:<Fernet key>` format | Required for production |
 | `DEFAULT_ADMIN_USERNAME` | Default admin username | Recommended |
 | `DEFAULT_ADMIN_PASSWORD` | Default admin password | Recommended |
+| `POSTGRES_PASSWORD` | PostgreSQL container password (docker-compose only; not an app setting) | Required for Docker |
 | `DATABASE_URL` | PostgreSQL connection string | Keep default for Docker |
 | `REDIS_URL` | Redis connection string | Keep default for Docker |
 | `PLAYBACK_CACHE_ROOT` | HLS playback cache directory | Keep default for Docker |
@@ -169,9 +176,10 @@ are stored as ciphertext only; responses return a mask. Keyless local vLLM provi
 Media playback addresses (raw file streams, session merged streams, HLS manifests and
 segments, entity images) are signed URLs carrying a scoped capability (resource kind,
 resource id, request method, expiry, parent session) verified via HMAC-SHA256. Responses set
-`Cache-Control: no-store`. Manifest and segment URLs are valid for 1800 seconds
-(`MANIFEST_TTL_SECONDS` / `SEGMENT_TTL_SECONDS`), after which they expire and must be
-re-acquired. Cross-session access is rejected by the scope guard.
+`Cache-Control: no-store`. Manifest, segment, and entity-avatar URL lifetimes are controlled
+by the system config keys `media_manifest_ttl_seconds` / `media_segment_ttl_seconds` /
+`media_entity_image_ttl_seconds` (default 1800 seconds each); after expiry the URL is invalid
+and must be re-acquired. Cross-session access is rejected by the scope guard.
 
 ### Webhook Outbound Security (SSRF Protection)
 
@@ -187,11 +195,18 @@ validated via ZoneInfo). All timestamps are stored as timezone-aware UTC. Migrat
 `20260825_0014` reinterprets legacy naive `Asia/Shanghai` wall-clock timestamps as UTC
 instants via `AT TIME ZONE 'Asia/Shanghai'`.
 
-**Take a verified DB backup before migrating**: `20260825_0012` (provider-key encryption),
-`20260825_0014` (timestamps to UTC), and `20260826_0017` (FK deletion policy) are all
-irreversible (downgrade raises); `20260826_0017` also aborts if orphaned references are
-found. After any failed migration or rotation, restoring that backup is the only recovery
-path.
+**Take a verified DB backup before migrating**:
+
+- **Irreversible (downgrade raises)**: `20260825_0012` (provider-key encryption),
+  `20260825_0014` (timestamps to UTC), `20260902_0018` (drop provider keyframe columns),
+  `20260902_0019` (outbox_event), `20260902_0020` (daily_summary_generation_attempt),
+  `20260902_0021` (pipeline_transition_log), `20260904_0022` (drop webhook event_types_json).
+- **Downgradable but destructive (back up anyway)**: `20260826_0017` (FK deletion-policy
+  rewrite; aborts if orphaned references exist), `20260923_0025` (drop importance_level),
+  `20260928_0026` (status CHECK constraints + pending→open normalization), `20260928_0027`
+  (drop the unused `video_source_runtime_state` table).
+
+After any failed migration or rotation, restoring that backup is the only recovery path.
 
 Backup / verify / restore in one pass (`pg_dump` / `pg_restore` must match the server major
 version):
@@ -294,6 +309,7 @@ Video Directory → VideoSource → VideoFile → VideoSession → EventRecord �
 ```text
 .
 ├── src/
+│   ├── adapters/             # Vendor directory parsers (e.g. xiaomi_parser)
 │   ├── api/                  # FastAPI routes and dependencies
 │   ├── application/          # Orchestration, QA, MCP, prompt assembly
 │   ├── core/                 # Configuration, security, Celery
@@ -302,6 +318,7 @@ Video Directory → VideoSource → VideoFile → VideoSession → EventRecord �
 │   ├── mcp/                  # MCP server and tool implementations
 │   ├── models/               # SQLAlchemy models
 │   ├── providers/            # OpenAI-compatible client
+│   ├── schemas/              # Pydantic request / response models
 │   ├── services/             # Core business services
 │   └── tasks/                # Celery tasks
 ├── frontend/                 # Frontend project
@@ -354,15 +371,13 @@ Python version: 3.10
 # Reset scan/session/event/task data
 docker compose exec backend python -m src.reset_pipeline_data
 
-# Backend unit tests (632)
+# Backend tests (all DB tests use real PostgreSQL; set DATABASE_URL; no SQLite)
 python3 -m pytest tests/unit -q
-
-# Backend integration tests (requires real PostgreSQL, DATABASE_URL)
 python3 -m pytest -m postgres
 
 # Migration checks
 python3 -m alembic upgrade head
-python3 -m alembic heads   # expect 20260923_0025
+python3 -m alembic heads   # expect 20260928_0027
 
 # Code checks
 ruff check .

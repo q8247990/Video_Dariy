@@ -95,15 +95,6 @@ can transition multiple times in the same millisecond (e.g.
 crash-loop retries within one second), and rejecting later rows
 would lose the very transitions the audit exists to capture.
 
-Cross-dialect notes
-===================
-
-``BigInteger().with_variant(Integer, "sqlite")`` mirrors the
-``daily_summary_generation_attempt`` / ``outbox_event`` pattern:
-``BIGSERIAL`` on PostgreSQL, ``INTEGER`` on SQLite so the column is a
-rowid alias and autoincrements without a sequence. The SQLite unit
-tests therefore exercise the same column contract as production
-PostgreSQL — just through an in-memory engine.
 """
 
 from __future__ import annotations
@@ -117,7 +108,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     String,
     func,
 )
@@ -144,10 +134,8 @@ class PipelineTransitionLog(Base):
     __tablename__ = "pipeline_transition_log"
 
     # -- surrogate primary key ----------------------------------------
-    # ``BIGSERIAL`` on PostgreSQL; ``INTEGER`` on SQLite so the column
-    # becomes a rowid alias and autoincrements without a sequence.
     id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"),
+        BigInteger,
         primary_key=True,
         autoincrement=True,
     )

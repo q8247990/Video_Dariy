@@ -1,7 +1,17 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base_class import Base
@@ -22,7 +32,7 @@ class VideoSession(Base):
     session_end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     total_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     merge_rule: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    analysis_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    analysis_status: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
     summary_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     activity_level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     main_subjects_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
@@ -39,6 +49,10 @@ class VideoSession(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "analysis_status IN ('open','sealed','analyzing','partial','success','failed')",
+            name="ck_video_session_analysis_status",
+        ),
         Index("idx_video_session_source_start", "source_id", "session_start_time"),
         Index("idx_video_session_status", "analysis_status"),
         Index(

@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
+from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from src.api.deps import DB, CurrentUser, Locale
 from src.core.i18n import t
 from src.models.event_record import EventRecord
@@ -18,8 +19,8 @@ router = APIRouter()
 def get_sessions(
     db: DB,
     current_user: CurrentUser,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     source_id: int | None = None,
     analysis_status: str | None = None,
     start_time: datetime | None = None,

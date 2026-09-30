@@ -5,11 +5,9 @@ of :func:`src.services.dispatch.dedupe.find_duplicate_active_task`.
 It returns the new (or pre-existing) TaskLog and a ``created`` flag so
 the caller knows whether to enqueue the matching outbox event.
 
-The PostgreSQL partial unique index
-``ux_task_log_active_dedupe_key`` (created in the outbox cutover
-migration) provides the cross-process concurrency safety net; under
-SQLite (unit tests) the helper falls back to a SELECT-then-INSERT
-path that the partial unique index would have caught.
+The partial unique index ``ux_task_log_active_dedupe_key`` (created in
+the outbox cutover migration) provides the cross-process concurrency
+safety net.
 """
 
 from __future__ import annotations
@@ -57,50 +55,32 @@ def create_pending_task_log(
     """
     detail_payload, dedupe_key = _ensure_dedupe_key(task_type, task_target_id, detail_json)
 
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        stmt = (
-            postgresql_insert(TaskLog)
-            .values(
-                task_type=task_type,
-                task_target_id=task_target_id,
-                dedupe_key=dedupe_key,
-                status=TaskStatus.PENDING,
-                recovery_attempt=int(detail_payload.get("recovery_attempt") or 0),
-                detail_json=detail_payload,
-            )
-            .on_conflict_do_nothing(
-                index_elements=[TaskLog.dedupe_key],
-                index_where=text(ACTIVE_DEDUPE_INDEX_PREDICATE),
-            )
-            .returning(TaskLog.id)
+    stmt = (
+        postgresql_insert(TaskLog)
+        .values(
+            task_type=task_type,
+            task_target_id=task_target_id,
+            dedupe_key=dedupe_key,
+            status=TaskStatus.PENDING,
+            recovery_attempt=int(detail_payload.get("recovery_attempt") or 0),
+            detail_json=detail_payload,
         )
-        inserted_id = db.execute(stmt).scalar_one_or_none()
-        db.flush()
-        if inserted_id is None:
-            existing = find_duplicate_active_task(db, task_type, task_target_id, dedupe_key)
-            if existing is None:
-                raise RuntimeError(f"Active task log not found for dedupe_key={dedupe_key}")
-            return existing, False
-
-        created = db.query(TaskLog).filter(TaskLog.id == inserted_id).one()
-        return created, True
-
-    existing = find_duplicate_active_task(db, task_type, task_target_id, dedupe_key)
-    if existing is not None:
+        .on_conflict_do_nothing(
+            index_elements=[TaskLog.dedupe_key],
+            index_where=text(ACTIVE_DEDUPE_INDEX_PREDICATE),
+        )
+        .returning(TaskLog.id)
+    )
+    inserted_id = db.execute(stmt).scalar_one_or_none()
+    db.flush()
+    if inserted_id is None:
+        existing = find_duplicate_active_task(db, task_type, task_target_id, dedupe_key)
+        if existing is None:
+            raise RuntimeError(f"Active task log not found for dedupe_key={dedupe_key}")
         return existing, False
 
-    task_log = TaskLog(
-        task_type=task_type,
-        task_target_id=task_target_id,
-        dedupe_key=dedupe_key,
-        status=TaskStatus.PENDING,
-        recovery_attempt=int(detail_payload.get("recovery_attempt") or 0),
-        detail_json=detail_payload,
-    )
-    db.add(task_log)
-    db.flush()
-    db.refresh(task_log)
-    return task_log, True
+    created = db.query(TaskLog).filter(TaskLog.id == inserted_id).one()
+    return created, True
 
 
 __all__ = ["create_pending_task_log"]

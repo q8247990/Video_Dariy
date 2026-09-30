@@ -28,7 +28,7 @@ discrete policy modules in this package:
   :func:`supersede_active_hot_scan`. The HOT↔FULL precedence rule.
 
 Each policy module is independently testable against a minimal
-SQLite TaskLog table; the existing
+TaskLog table; the existing
 ``tests/unit/test_task_dispatch_binding.py`` is the load-bearing
 specification that every split must keep passing without
 modification.

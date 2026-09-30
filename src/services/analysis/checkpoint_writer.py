@@ -49,8 +49,8 @@ from src.models.llm_provider import LLMProvider
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.services.analysis.chunk_plan import SubChunkPlan, sub_chunk_fingerprint
 from src.services.analysis.errors import LateWorkerFencingError
+from src.services.dispatch import renew_task_lease
 from src.services.llm_qos import record_token_usage
-from src.services.task_dispatch_control import renew_task_lease
 from src.services.video_analysis.schemas import RecognitionResultDTO
 
 # State machine values for ``SessionAnalysisCheckpoint.state``.

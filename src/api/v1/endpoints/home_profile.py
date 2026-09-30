@@ -6,6 +6,7 @@ from typing import Any, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
 
 from src.api.deps import DB, ContainerDep, CurrentUser, Locale
 from src.application.home_profile import (
@@ -15,7 +16,9 @@ from src.application.home_profile import (
 from src.core.config import settings
 from src.core.i18n import t
 from src.models.home_entity_profile import HomeEntityProfile
+from src.models.home_profile import HomeProfile
 from src.schemas.home_profile import (
+    HomeContextResponse,
     HomeEntityResponse,
     HomeEntityUpdate,
     HomeOptionsResponse,
@@ -37,7 +40,12 @@ from src.services.home_profile import (
     update_entity,
 )
 from src.services.media_signing import MediaCapability, MediaCapabilityError, MediaSigningService
-from src.services.system_config_registry import HOME_PROFILE_INITIALIZED, set_config
+from src.services.system_config_registry import (
+    HOME_PROFILE_INITIALIZED,
+    MEDIA_ENTITY_IMAGE_TTL_SECONDS,
+    get_config,
+    set_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,30 +60,31 @@ def _entity_image_path(entity_id: int) -> str:
     return os.path.join(settings.ENTITY_IMAGE_ROOT, f"entity_{entity_id}.jpg")
 
 
-def _entity_image_url(entity_id: int) -> str:
+def _entity_image_ttl_seconds(db: Session) -> int:
+    return int(get_config(db, MEDIA_ENTITY_IMAGE_TTL_SECONDS))
+
+
+def _entity_image_url(entity_id: int, ttl_seconds: int) -> str:
     capability = MediaCapability(
         resource_kind="image",
         resource_id=entity_id,
         method="GET",
-        expires_at=int(time.time()) + 1_800,
+        expires_at=int(time.time()) + ttl_seconds,
     )
     return MediaSigningService.from_settings().signed_url(
         f"{settings.API_V1_STR}/home-profile/entities/{entity_id}/image", capability
     )
 
 
-def _build_entity_response(entity: HomeEntityProfile) -> HomeEntityResponse:
+def _build_entity_response(entity: HomeEntityProfile, ttl_seconds: int) -> HomeEntityResponse:
     data = HomeEntityResponse.model_validate(entity)
     if entity.image_path and os.path.exists(entity.image_path):
-        data.image_url = _entity_image_url(entity.id)
+        data.image_url = _entity_image_url(entity.id, ttl_seconds)
     return data
 
 
-@router.get("", response_model=BaseResponse[HomeProfileResponse])
-def get_home_profile(db: DB, current_user: CurrentUser) -> Any:
-    profile = get_or_create_home_profile(db)
-    db.commit()
-    data = HomeProfileResponse.model_validate(
+def _build_home_profile_response(profile: HomeProfile) -> HomeProfileResponse:
+    return HomeProfileResponse.model_validate(
         {
             "id": profile.id,
             "home_name": profile.home_name,
@@ -89,7 +98,13 @@ def get_home_profile(db: DB, current_user: CurrentUser) -> Any:
             "updated_at": profile.updated_at,
         }
     )
-    return BaseResponse(data=data)
+
+
+@router.get("", response_model=BaseResponse[HomeProfileResponse])
+def get_home_profile(db: DB, current_user: CurrentUser) -> Any:
+    profile = get_or_create_home_profile(db)
+    db.commit()
+    return BaseResponse(data=_build_home_profile_response(profile))
 
 
 @router.put("", response_model=BaseResponse[HomeProfileResponse])
@@ -98,21 +113,32 @@ def put_home_profile(db: DB, current_user: CurrentUser, payload: HomeProfileUpse
     set_config(db, HOME_PROFILE_INITIALIZED, True)
     db.commit()
     db.refresh(profile)
-    data = HomeProfileResponse.model_validate(
-        {
-            "id": profile.id,
-            "home_name": profile.home_name,
-            "family_tags": profile.family_tags_json or [],
-            "focus_points": profile.focus_points_json or [],
-            "system_style": profile.system_style,
-            "style_preference_text": profile.style_preference_text,
-            "assistant_name": profile.assistant_name,
-            "home_note": profile.home_note,
-            "created_at": profile.created_at,
-            "updated_at": profile.updated_at,
-        }
+    return BaseResponse(data=_build_home_profile_response(profile))
+
+
+@router.get("/context", response_model=BaseResponse[HomeContextResponse])
+def get_home_context(db: DB, current_user: CurrentUser) -> Any:
+    """Full home profile + entities with freshly signed avatar URLs.
+
+    Mirrors the context the analyzer / QA prompts are built from; useful for
+    the admin UI and MCP callers that need the normalized shape.
+    """
+    profile = get_or_create_home_profile(db)
+    db.commit()
+    ttl_seconds = _entity_image_ttl_seconds(db)
+    return BaseResponse(
+        data=HomeContextResponse(
+            home_profile=_build_home_profile_response(profile),
+            members=[
+                _build_entity_response(entity, ttl_seconds)
+                for entity in list_entities(db, entity_type="member")
+            ],
+            pets=[
+                _build_entity_response(entity, ttl_seconds)
+                for entity in list_entities(db, entity_type="pet")
+            ],
+        )
     )
-    return BaseResponse(data=data)
 
 
 @router.get("/entities", response_model=BaseResponse[list[HomeEntityResponse]])
@@ -126,7 +152,8 @@ def get_home_entities(
     if entity_type is not None and entity_type not in {"member", "pet"}:
         return BaseResponse(code=4000, message=t("entity.invalid_entity_type", locale))
     entities = list_entities(db, entity_type=entity_type, include_disabled=include_disabled)
-    data = [_build_entity_response(item) for item in entities]
+    ttl_seconds = _entity_image_ttl_seconds(db)
+    data = [_build_entity_response(item, ttl_seconds) for item in entities]
     return BaseResponse(data=data)
 
 
@@ -137,7 +164,7 @@ def create_home_member(db: DB, current_user: CurrentUser, payload: MemberCreate)
         db.commit()
     except ValueError as exc:
         return BaseResponse(code=4001, message=str(exc))
-    return BaseResponse(data=_build_entity_response(entity))
+    return BaseResponse(data=_build_entity_response(entity, _entity_image_ttl_seconds(db)))
 
 
 @router.post("/entities/pet", response_model=BaseResponse[HomeEntityResponse])
@@ -147,7 +174,7 @@ def create_home_pet(db: DB, current_user: CurrentUser, payload: PetCreate) -> An
         db.commit()
     except ValueError as exc:
         return BaseResponse(code=4001, message=str(exc))
-    return BaseResponse(data=_build_entity_response(entity))
+    return BaseResponse(data=_build_entity_response(entity, _entity_image_ttl_seconds(db)))
 
 
 @router.put("/entities/{entity_id}", response_model=BaseResponse[HomeEntityResponse])
@@ -166,7 +193,7 @@ def update_home_entity(
 
     if entity is None:
         return BaseResponse(code=4002, message=t("entity.not_found", locale))
-    return BaseResponse(data=_build_entity_response(entity))
+    return BaseResponse(data=_build_entity_response(entity, _entity_image_ttl_seconds(db)))
 
 
 @router.delete("/entities/{entity_id}", response_model=BaseResponse[dict])
@@ -242,7 +269,7 @@ async def upload_entity_image(
     entity.image_path = save_path
     db.commit()
     db.refresh(entity)
-    return BaseResponse(data=_build_entity_response(entity))
+    return BaseResponse(data=_build_entity_response(entity, _entity_image_ttl_seconds(db)))
 
 
 @router.delete("/entities/{entity_id}/image", response_model=BaseResponse[HomeEntityResponse])
@@ -260,7 +287,7 @@ def delete_entity_image(entity_id: int, db: DB, current_user: CurrentUser, local
     entity.image_path = None
     db.commit()
     db.refresh(entity)
-    return BaseResponse(data=_build_entity_response(entity))
+    return BaseResponse(data=_build_entity_response(entity, _entity_image_ttl_seconds(db)))
 
 
 @router.post(
@@ -280,7 +307,9 @@ def generate_entity_appearance(
         locale=locale,
         container=container,
         entity_image_path_resolver=_entity_image_path,
-        entity_response_builder=_build_entity_response,
+        entity_response_builder=lambda entity: _build_entity_response(
+            entity, _entity_image_ttl_seconds(db)
+        ),
     )
     if result.error_code != 0:
         return BaseResponse(code=result.error_code, message=result.error_message)

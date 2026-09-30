@@ -3,7 +3,7 @@
 These tests exercise the persistence layer on a real PostgreSQL
 database that has been migrated to the new head (including the new
 ``outbox_event`` table from migration ``20260902_0019``). They cover
-the behaviors that the SQLite unit tests cannot:
+the behaviors that the unit tests cannot:
 
 - atomicity across the ``task_log`` and ``outbox_event`` writes — a
   caller ``commit()`` makes both rows visible, a ``rollback()``

@@ -176,6 +176,23 @@ class _CeleryTaskControl(TaskControlPort):
 # ---------------------------------------------------------------------------
 
 
+_production_container: Optional[Container] = None
+
+
+def get_production_container() -> Container:
+    """Return the process-wide production container, built once on first use.
+
+    Every entry point (``src.api.deps``, ``src.mcp.tools``,
+    ``src.tasks._container``) resolves through this single instance, so the
+    process holds exactly one dispatcher / LLM gateway factory / Celery
+    control binding rather than one per module.
+    """
+    global _production_container
+    if _production_container is None:
+        _production_container = bootstrap_production()
+    return _production_container
+
+
 def bootstrap_production() -> Container:
     """Wire production adapters into a :class:`Container`.
 
@@ -344,5 +361,6 @@ __all__ = [
     "Container",
     "bootstrap_for_tests",
     "bootstrap_production",
+    "get_production_container",
     "install_test_locale_provider",
 ]

@@ -55,6 +55,22 @@ class LocaleProvider(Protocol):
 # ---------------------------------------------------------------------------
 
 
+def _fallback_locale() -> str:
+    """Locale to use when the DB has no ``default_locale`` row.
+
+    Precedence: the DB-configured value wins (handled by the caller); this
+    fallback resolves from the ``DEFAULT_LOCALE`` environment variable
+    (``settings.DEFAULT_LOCALE``), then the compiled i18n default.
+    """
+    from src.core.config import settings
+    from src.core.i18n import DEFAULT_LOCALE, normalize_locale
+
+    try:
+        return normalize_locale(settings.DEFAULT_LOCALE)
+    except Exception:
+        return DEFAULT_LOCALE
+
+
 class SystemConfigLocaleProvider(LocaleProvider):
     """Production adapter: reads ``system_config.default_locale`` with TTL cache.
 
@@ -118,15 +134,13 @@ class SystemConfigLocaleProvider(LocaleProvider):
         the legacy ``get_system_default_locale`` behaviour.
         """
 
-        # Lazy imports to keep load order clean and to avoid forcing ORM
-        # imports when a test binds a static/fake provider instead.
-        from src.core.i18n import DEFAULT_LOCALE, normalize_locale
+        fallback = _fallback_locale()
 
         try:
             from src.db.session import SessionLocal
             from src.models.system_config import SystemConfig
         except Exception:
-            return DEFAULT_LOCALE
+            return fallback
 
         try:
             if self._session_factory is not None:
@@ -134,12 +148,12 @@ class SystemConfigLocaleProvider(LocaleProvider):
             else:
                 db = SessionLocal()
         except Exception:
-            return DEFAULT_LOCALE
+            return fallback
 
         try:
             row = db.query(SystemConfig).filter(SystemConfig.config_key == self.CONFIG_KEY).first()
         except Exception:
-            return DEFAULT_LOCALE
+            return fallback
         finally:
             try:
                 db.close()
@@ -149,16 +163,18 @@ class SystemConfigLocaleProvider(LocaleProvider):
                 pass
 
         if row is None or not row.config_value:
-            return DEFAULT_LOCALE
+            return fallback
 
         raw = row.config_value
         # Defensive: SystemConfig.config_value is typed as JSON, so the
         # configured value could in theory be a non-string. Normalise via
         # str() and then through the core i18n helper.
+        from src.core.i18n import normalize_locale
+
         try:
             return normalize_locale(str(raw))
         except Exception:
-            return DEFAULT_LOCALE
+            return fallback
 
 
 # ---------------------------------------------------------------------------

@@ -1,12 +1,11 @@
-"""pytest 全局基础设施：PostgreSQL 集成测试门禁与夹具。
+"""pytest 全局基础设施：PostgreSQL 测试门禁与夹具。
 
-PostgreSQL 集成测试使用 ``@pytest.mark.postgres`` 标记，并通过环境变量
-``DATABASE_URL`` 显式指定目标数据库：
+项目测试统一依赖真实 PostgreSQL，通过环境变量 ``DATABASE_URL`` 指定目标库：
 
-- 默认运行（未设置 ``DATABASE_URL`` 且未显式选择 ``postgres`` 标记）：
-  postgres 测试会被**显式跳过**（skip reason 中说明原因），不影响 SQLite 单元测试。
-- ``pytest -m postgres`` 但未设置 ``DATABASE_URL``：
-  以**明确的 setup 失败**告终（不是静默跳过），防止 CI 误以为跑过 PG 测试。
+- 任何依赖数据库夹具（``pg_*`` / ``postgres_*``）的测试都会自动打上
+  ``postgres`` 标记。
+- 未设置 ``DATABASE_URL`` 时以**明确的 setup 失败**告终（不是静默跳过），
+  避免误以为测试已经运行。
 - 每次运行使用独立的一次性 schema（``vd_test_<uuid>``），结束后 ``DROP SCHEMA ... CASCADE``，
   不在运行之间共享任何凭据或数据状态。
 """
@@ -33,8 +32,6 @@ POSTGRES_MISSING_URL_MESSAGE = (
     "（例如 postgresql+psycopg://user:pass@127.0.0.1:5432/dbname）。"
     "测试会在该库中创建一次性 schema 并在结束时删除；不会使用任何默认凭据。"
 )
-
-POSTGRES_SKIP_REASON = f"未设置 {DATABASE_URL_ENV}，显式跳过 PostgreSQL 集成测试"
 
 
 def _database_url() -> str | None:
@@ -68,16 +65,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     postgres_items = [item for item in items if item.get_closest_marker("postgres")]
     if not postgres_items:
         return
-    if _database_url():
-        return
-    markexpr = (config.option.markexpr or "").replace(" ", "")
-    postgres_selected = "postgres" in markexpr and "notpostgres" not in markexpr
-    if postgres_selected:
-        # 用户显式要求跑 PG 测试但没给 DATABASE_URL：明确失败，而不是静默跳过。
+    if not _database_url():
+        # 测试统一依赖 PostgreSQL：缺 DATABASE_URL 直接失败，而不是静默跳过。
         raise pytest.UsageError(POSTGRES_MISSING_URL_MESSAGE)
-    skip_marker = pytest.mark.skip(reason=POSTGRES_SKIP_REASON)
-    for item in postgres_items:
-        item.add_marker(skip_marker)
 
 
 def run_alembic_upgrade_head(database_url: str, schema: str) -> None:
@@ -178,16 +168,15 @@ def postgres_session(postgres_engine: Engine) -> Iterator[Session]:
 # ---------------------------------------------------------------------------
 # 全 PG 统一测试基建
 #
-# 项目统一用真实 PostgreSQL 做测试（不再用 SQLite）。以下 fixture 供
+# 项目统一用真实 PostgreSQL 做测试。以下 fixture 供
 # tests/unit/ 与 tests/integration/ 的测试共用：
 #
 #   * ``pg_engine``         —— 已执行 alembic upgrade head 的一次性 schema engine
-#   * ``pg_db``             —— 函数级 Session，外层事务回滚（替代旧 SQLite session）
+#   * ``pg_db``             —— 函数级 Session，外层事务回滚
 #   * ``pg_db_factory``     —— 返回一个函数，调用一次得到一个独立 Session
 #
 # 所有使用这些 fixture 的测试会自动带上 postgres 标记（见
-# ``pytest_collection_modifyitems`` 下方的标记逻辑），从而仅在
-# ``pytest -m postgres`` 且设置 DATABASE_URL 时运行。
+# ``pytest_collection_modifyitems`` 下方的标记逻辑）。
 # ---------------------------------------------------------------------------
 
 

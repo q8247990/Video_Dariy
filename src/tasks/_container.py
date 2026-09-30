@@ -24,12 +24,12 @@ infrastructure dependency.
 
 from __future__ import annotations
 
-from src.application.bootstrap import Container, bootstrap_production
+from src.application.bootstrap import Container, get_production_container
 from src.services.analysis.ports import AnalysisPorts, build_analysis_ports
 
 # Module-level composition-root singleton. Mirrors ``src/api/deps.py`` and
 # ``src/mcp/tools.py`` so all three entry points share one wiring pattern.
-_container: Container = bootstrap_production()
+_container: Container = get_production_container()
 
 # Module-level analyzer-pipeline ports holder. The task layer reads the
 # :class:`~src.services.analysis.ports.AnalysisPorts` bundle through
@@ -65,7 +65,7 @@ def reset_container_for_tests() -> None:
     """Restore the production binding after :func:`set_container_for_tests`."""
 
     global _container
-    _container = bootstrap_production()
+    _container = get_production_container()
 
 
 def get_analysis_ports() -> AnalysisPorts:

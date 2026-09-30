@@ -3,8 +3,8 @@
 These tests exercise the persistence layer on a real PostgreSQL
 database that has been migrated to the new head (including the new
 ``daily_summary_generation_attempt`` table from migration
-``20260902_0020``). They cover the behaviors that the SQLite unit
-tests cannot:
+``20260902_0020``). They cover the behaviors that the unit tests
+cannot:
 
 - Two concurrent ``INSERT … ON CONFLICT DO NOTHING`` claims for the
   same ``summary_date`` produce exactly one active row — the partial

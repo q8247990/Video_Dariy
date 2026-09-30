@@ -39,11 +39,6 @@ from src.application.outbox.payload_validator import (
 from src.application.outbox.registry import DEFAULT_QUEUE, OutboxCommandRegistry
 from src.application.outbox.state_machine import OutboxStatus
 
-#: Marker type for JSON-safe payloads. Used in type hints only; the
-#: runtime guard is :func:`validate_command_payload`.
-JSONSafeValue = Any
-
-
 #: Process-local set of event IDs that have already been emitted via
 #: :func:`emit_event` in this Python process. The DB unique constraint
 #: on ``event_id`` is the source of truth; this set is purely a fast
@@ -218,11 +213,6 @@ class OutboxEvent:
         return cls(**kwargs)
 
 
-#: Alias for the kwargs shape produced by :meth:`OutboxEvent.to_row_dict`.
-#: Used in type hints only; the runtime guard is the dataclass itself.
-OutboxRowDict = dict[str, Any]
-
-
 def new_event_id() -> UUID:
     """Return a fresh event_id UUID.
 
@@ -306,10 +296,8 @@ def emit_event(
 __all__ = [
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_MAX_PAYLOAD_DEPTH",
-    "JSONSafeValue",
     "OutboxCommand",
     "OutboxEvent",
-    "OutboxRowDict",
     "emit_event",
     "new_event_id",
 ]

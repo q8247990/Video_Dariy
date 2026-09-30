@@ -48,6 +48,14 @@ _HTTP_STATUS_BY_CODE: Final[dict[int, int]] = {
 }
 
 
+#: Responses larger than this are streamed through without body inspection.
+#: Business-code payloads are small error envelopes; buffering multi-megabyte
+#: list responses purely to read a `code` field is wasted memory. Oversized
+#: responses are assumed success (HTTP 200), which is the only realistic case
+#: for a body that large.
+_MAX_INSPECT_BYTES: Final[int] = 1_048_576
+
+
 def status_for_response_code(code: int) -> int | None:
     return _HTTP_STATUS_BY_CODE.get(code)
 
@@ -61,6 +69,10 @@ class ResponseStatusMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         content_type = response.headers.get("content-type", "")
         if "application/json" not in content_type or response.status_code != 200:
+            return response
+
+        content_length = response.headers.get("content-length")
+        if content_length is not None and int(content_length) > _MAX_INSPECT_BYTES:
             return response
 
         starlette_response = cast(StarletteResponse, response)

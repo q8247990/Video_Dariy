@@ -6,14 +6,21 @@
 > `AGENTS.md` (operations status), plus video_dairy ADR 0009 and the current code implementation.
 > Every figure cited below is measured or read from production logs, not theoretical estimates.
 
+> **2026-09-24 correction**: "60-second sub-chunk" in this document is a historical research-phase
+> phrasing. The current code (`src/services/analysis/chunk_plan.py`,
+> `src/services/session_analysis_video.py`) uses **one video file = one sub-chunk = one LLM call**;
+> the client neither slices footage into 60 s pieces nor merges files. Xiaomi recordings are
+> themselves ~60 s per file, so the many 60-second measured figures below remain valid — just do
+> not read them as client-side slicing.
+
 ---
 
 ## 0. Summary
 
-video_dairy is an offline home surveillance video analysis system. Camera footage (2560×1440) on the
-NAS is sliced into 60-second sub-chunks; each chunk is sent to a local multimodal LLM as raw mp4
-base64 with `num_frames=120`, and the model emits structured JSON events. The pipeline must satisfy
-three competing demands simultaneously:
+video_dairy is an offline home surveillance video analysis system. Camera footage (2560×1440) is
+**split by file**; each video file (Xiaomi recordings are ~60 s per file) becomes one sub-chunk,
+sent to a local multimodal LLM as raw mp4 base64 with `num_frames=120`, and the model emits
+structured JSON events. The pipeline must satisfy three competing demands simultaneously:
 
 - **Resolution** — must be sharp enough to recognize people and faces;
 - **Duration** — every minute of footage (or longer) in a single production chunk must be covered;
@@ -28,9 +35,10 @@ We took a complete hardware + software path to get there:
    262144 context, `--mm-encoder-tp-mode weights`. Final text throughput: 76.7 tok/s single-stream,
    434.7 tok/s at 8 concurrent streams.
 3. **Video parameters**: Internalized the invariant "100M pixel budget → ~48.8k vision tokens
-   constant" and replaced the default 32-frame uniform sampling with 60-second sub-chunks + 120
-   frames (eliminating 4–5 second transient-event aliasing). The keyframe pipeline was kept as a
-   research conclusion after A/B validation; production locked onto the raw_mp4 single path.
+   constant" and replaced the default 32-frame uniform sampling with "one file per sub-chunk
+   (≈60 s of footage) + 120 frames" (eliminating 4–5 second transient-event aliasing). The keyframe
+   pipeline was kept as a research conclusion after A/B validation; production locked onto the
+   raw_mp4 single path.
 
 This document is organized into four layers — Hardware, Deployment, Video, Client — and each layer
 provides the **final configuration**, **why that value**, **alternatives tried and dropped**, and a
@@ -59,11 +67,11 @@ Workload profile of a single vision call (this is the constraint source for ever
 | Dimension | Value | Source |
 |---|---|---|
 | Input resolution | 2560×1440 (Xiaomi camera, ~20 fps) | Production recording measurements |
-| Sub-chunk duration | 60 s | Project constant |
+| Sub-chunk duration | one file (Xiaomi recordings ≈60 s) | `session_analysis_video.build_file_sub_chunks` |
 | Vision tokens | ~48.8k (100M pixel budget / 2048, an invariant) | §4.1 derivation |
 | Output | Structured JSON event (`temperature=0`, `json_object`, `max_tokens=8192`) | `sub_chunk_runner.py` |
 | Concurrency | Vision worker `concurrency=1` (`analysis_hot` / `analysis_full`) | Deployment config |
-| Call frequency | 1 call per 60 s of footage (1 min = 1 call; 10 min = 10 calls) | Derived |
+| Call frequency | 1 call per file (Xiaomi ≈1 min/file; 10 min ≈ 10 calls) | Derived |
 | Latency requirement | Batch offline (backfilling NAS backlog); product explicitly accepts latency; at concurrency=1, 1 minute of footage ≈ 60–80 s LLM time (realtime ratio ~1.0–1.3×) | Product decision |
 
 Key point: **The information density of every 48k vision tokens** determines recognition quality,
@@ -444,7 +452,7 @@ captions). On the NAS (N5105, 4-core soft decode) this costs ~25–30 s per 5-mi
 
 **But production ultimately locked onto the raw_mp4 single path**:
 
-- Analysis granularity was changed to **60-second sub-chunks**: 60 s of footage contains ~1200
+- Analysis granularity is **one file per sub-chunk** (Xiaomi ≈60 s/file, no slicing): 60 s of footage contains ~1200
   source frames (~20 fps); `num_frames=120` lets vLLM's uniform sampling cover the *entire*
   segment (one frame per 0.5 s, so a 4–5 second transient is necessarily included) — the
   "missed events" problem the keyframe path set out to solve simply dissolves at 60 s
@@ -454,7 +462,8 @@ captions). On the NAS (N5105, 4-core soft decode) this costs ~25–30 s per 5-mi
   detail is the deliberate trade-off);
 - Zero ffmpeg decode and zero cv2 / numpy dependencies on the client; payload construction is
   read-file + base64, and vLLM is unchanged;
-- `RAW_MP4_NUM_FRAMES = 120` is a code constant, and any `video_preprocess_mode` value other
+- `RAW_MP4_NUM_FRAMES = 120` is the default sampling frame count, overridable per model service
+  via `extra_config_json.num_frames` (range 1–600). Any `video_preprocess_mode` value other
   than `raw_mp4` is rejected at the 422 layer. All keyframe code / config surface is removed.
 
 **Two request-level gotchas (vLLM-side)**:
@@ -464,12 +473,12 @@ captions). On the NAS (N5105, 4-core soft decode) this costs ~25–30 s per 5-mi
 - **`frames_indices` must be sorted ascending** and consistent with the frame list order (the
   order is the temporal order); `num_frames: -1` means "use exactly the frames you were given".
 
-### 4.4 Why sub-chunk = 60 Seconds
+### 4.4 Why the Sampling Band Maps to 60 s of Footage (Typical Single-File Length)
 
 - **Sampling target is fixed, duration derived**: `num_frames=120` is a fixed product decision. To
   get full coverage at a 0.5 s/frame temporal resolution (research-validated as the sweet spot for
-  catching 4–5 second transient events without wasting budget), the sub-chunk must be
-  ≤ 120 × 0.5 s = 60 s; we take the upper bound 60 s, which also **minimizes calls per unit of
+  catching 4–5 second transient events without wasting budget), the footage must be
+  ≤ 120 × 0.5 s = 60 s; Xiaomi's single file is exactly 60 s, which also **minimizes calls per unit of
   footage** (each call carries a fixed ~48k prefill cost; 30 s granularity means double the
   calls and double the fixed overhead);
 - **Latency**: a single sub-chunk call takes 60–80 s (prefill-dominated). 1 minute of footage =
@@ -546,10 +555,11 @@ that differ by several times".
    base64-encoded directly (`build_video_data_url`) with no cross-file concat.
    `base_offset_seconds` is the file's start offset inside the session. The real per-file duration
    is probed with `ffprobe` at ingest.
-2. **Hard-coded parameters, not configurable**: `RAW_MP4_NUM_FRAMES = 120` is a constant. Any
-   parameter that encodes a product decision lives as a code constant + regression test
-   (`test_analyzer_raw_mp4_payload.py` asserts the payload prefix, the `num_frames` value, and
-   that the 422 layer rejects the `keyframe` mode) — not in drifting config.
+2. **Default + overridable**: `RAW_MP4_NUM_FRAMES = 120` is the default sampling frame count and
+   can be overridden per model service via `extra_config_json.num_frames` (1–600, see
+   `resolve_num_frames`). Other product-decision parameters still live as a code constant +
+   regression test (`test_analyzer_raw_mp4_payload.py` asserts the payload prefix, the
+   `num_frames` value, and that the 422 layer rejects the `keyframe` mode).
 3. **Checkpoint resume + fingerprint fence**: every sub-chunk's LLM result is written to
    `SessionAnalysisCheckpoint` (unique work key session + analysis_run + sub_chunk, storing input
    fingerprint, state, event payload, token usage, error). An input-fingerprint change (prompt
@@ -637,7 +647,7 @@ Re-Size BAR on), Gen3 x8+ link or better.
    +30–50%);
 7. Model-side `longest_edge=100M` + `weights` mode; use real footage to A/B test detail
    recognition and VRAM headroom;
-8. Client side: follow §4.3 / §5 (60 s sub-chunks, `num_frames=120`, checkpoint resume,
+8. Client side: follow §4.3 / §5 (one file per sub-chunk, `num_frames=120`, checkpoint resume,
    concurrency=1).
 
 **Order-of-magnitude cost** (dual 3090, this configuration): text throughput 76.7–434.7 tok/s

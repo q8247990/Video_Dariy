@@ -40,26 +40,18 @@ same transaction as the business write (the ``DailySummary`` upsert and
 the outbox row in Todo 16). ``flush()`` is called where the caller
 needs server-assigned values, never ``commit()``.
 
-Dialect notes
-=============
+Concurrency notes
+=================
 
-- On **PostgreSQL**, ``claim`` uses
-  ``INSERT … ON CONFLICT (summary_date) WHERE status IN (…) DO NOTHING
-  RETURNING id``: zero returned rows means a parallel transaction
-  already holds the active slot.
-- On **SQLite** (unit tests), the same statement is emitted through
-  the SQLite dialect's ``on_conflict_do_nothing`` — SQLite has
-  supported partial-index conflict targets since 3.24 — and the
-  insert / conflict decision is read from ``rowcount`` because the
-  SQLite branch does not use ``RETURNING`` (keeping the supported
-  SQLite floor at 3.24 rather than 3.35).
+- ``claim`` uses ``INSERT … ON CONFLICT (summary_date) WHERE status IN (…)
+  DO NOTHING RETURNING id``: zero returned rows means a parallel
+  transaction already holds the active slot.
 - ``mark_*`` take a plain row lock (``FOR UPDATE``, **not**
-  ``SKIP LOCKED``) on PostgreSQL before the conditional UPDATE. The
-  publisher's claim loop wants ``SKIP LOCKED`` because skipping a
-  contended row is free (another worker owns it); a finalizer must
-  *wait* for the lock instead, otherwise a concurrent cancel would
-  silently no-op and the attempt would be left dangling in
-  ``running`` forever.
+  ``SKIP LOCKED``) before the conditional UPDATE. The publisher's claim
+  loop wants ``SKIP LOCKED`` because skipping a contended row is free
+  (another worker owns it); a finalizer must *wait* for the lock instead,
+  otherwise a concurrent cancel would silently no-op and the attempt would
+  be left dangling in ``running`` forever.
 """
 
 from __future__ import annotations
@@ -70,7 +62,6 @@ from typing import Any, Optional
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from src.application.summary_attempt.errors import DailySummaryAttemptError
@@ -411,57 +402,30 @@ class DailySummaryAttemptRepository:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _is_postgres(self) -> bool:
-        bind = self._db.bind
-        return bool(bind is not None and bind.dialect.name == "postgresql")
-
     def _insert_claim(self, values: dict[str, Any]) -> Optional[int]:
         """Run the ``ON CONFLICT DO NOTHING`` insert; return the new id.
 
-        Returns ``None`` when the insert was skipped because another
-        active attempt already holds the ``summary_date`` slot. The two
-        dialect branches differ only in how the outcome is read back:
-        PostgreSQL uses ``RETURNING id`` (no row → conflict); SQLite
-        uses ``rowcount`` plus ``inserted_primary_key`` so the SQLite
-        floor stays at 3.24 (``ON CONFLICT``) instead of 3.35
-        (``RETURNING``).
+        Returns ``None`` when the insert was skipped because another active
+        attempt already holds the ``summary_date`` slot (``RETURNING id``
+        yields no row on conflict).
 
-        A conflict on any *other* constraint (e.g. the FK to
-        ``task_log``) is deliberately **not** caught here: swallowing it
-        would make an invalid ``task_log_id`` look like a lost race.
+        A conflict on any *other* constraint (e.g. the FK to ``task_log``)
+        is deliberately **not** caught here: swallowing it would make an
+        invalid ``task_log_id`` look like a lost race.
         """
-        if self._is_postgres():
-            pg_stmt = (
-                postgresql_insert(DailySummaryGenerationAttempt)
-                .values(**values)
-                .on_conflict_do_nothing(
-                    index_elements=["summary_date"],
-                    index_where=_active_index_predicate(),
-                )
-                .returning(DailySummaryGenerationAttempt.id)
-            )
-            returned = self._db.execute(pg_stmt).mappings().first()
-            if returned is None:
-                return None
-            return int(returned["id"])
-
-        sqlite_stmt = (
-            sqlite_insert(DailySummaryGenerationAttempt)
+        stmt = (
+            postgresql_insert(DailySummaryGenerationAttempt)
             .values(**values)
             .on_conflict_do_nothing(
                 index_elements=["summary_date"],
                 index_where=_active_index_predicate(),
             )
+            .returning(DailySummaryGenerationAttempt.id)
         )
-        result = self._db.execute(sqlite_stmt)
-        if _rowcount(result) == 0:
+        returned = self._db.execute(stmt).mappings().first()
+        if returned is None:
             return None
-        # mypy stubs do not expose ``inserted_primary_key`` on ``Result``;
-        # the runtime populates it (mirrors the ``_rowcount`` helper above).
-        primary_key = getattr(result, "inserted_primary_key", None)
-        if primary_key is None or primary_key[0] is None:
-            return None
-        return int(primary_key[0])
+        return int(returned["id"])
 
     def _transition(
         self,
@@ -480,10 +444,9 @@ class DailySummaryAttemptRepository:
         than raising. Callers treat ``None`` as "someone else already
         finalized this attempt", which is a normal race, not a bug.
 
-        On PostgreSQL the row is locked with a plain ``FOR UPDATE``
-        first so two finalizers serialize instead of one silently
-        losing (``SKIP LOCKED`` would be wrong here — see the module
-        docstring).
+        The row is locked with a plain ``FOR UPDATE`` first so two
+        finalizers serialize instead of one silently losing
+        (``SKIP LOCKED`` would be wrong here — see the module docstring).
         """
         sources = allowed_sources_for(target)
         if not sources:
@@ -495,14 +458,13 @@ class DailySummaryAttemptRepository:
         now = datetime.now(tz=timezone.utc)
         source_values = sorted(status.value for status in sources)
 
-        if self._is_postgres():
-            lock_stmt = (
-                select(DailySummaryGenerationAttempt.id)
-                .where(DailySummaryGenerationAttempt.id == attempt_id)
-                .with_for_update()
-            )
-            if self._db.execute(lock_stmt).scalars().first() is None:
-                return None
+        lock_stmt = (
+            select(DailySummaryGenerationAttempt.id)
+            .where(DailySummaryGenerationAttempt.id == attempt_id)
+            .with_for_update()
+        )
+        if self._db.execute(lock_stmt).scalars().first() is None:
+            return None
 
         update_values: dict[str, Any] = dict(values or {})
         if stamp_finished:

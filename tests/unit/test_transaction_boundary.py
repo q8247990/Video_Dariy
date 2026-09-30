@@ -5,7 +5,7 @@ transaction. ``commit()`` here is a savepoint release (the data stays
 in the outer transaction until the fixture rolls back at teardown),
 and ``rollback()`` would roll back the entire outer transaction
 — including setup rows that a prior ``commit()`` thought it had
-persisted. To keep the SQLite-era "commit → flush a change → rollback
+persisted. To keep the "commit → flush a change → rollback
 reverts only the change" semantics we need an explicit ``SAVEPOINT``
 around the post-commit work, so we use ``begin_nested()`` +
 ``nested.rollback()`` for the savepoint; the outer ``pg_db.commit()``
@@ -20,6 +20,7 @@ from src.models.home_entity_profile import HomeEntityProfile
 from src.models.home_profile import HomeProfile
 from src.models.task_log import TaskLog
 from src.schemas.home_profile import HomeEntityUpdate, HomeProfileUpsert
+from src.services.dispatch import create_pending_task_log
 from src.services.home_profile import (
     create_member,
     create_pet,
@@ -28,7 +29,6 @@ from src.services.home_profile import (
     save_home_profile,
     update_entity,
 )
-from src.services.task_dispatch_control import create_pending_task_log
 
 
 def test_get_or_create_home_profile_flush_is_rollbackable(pg_db: Session) -> None:
@@ -61,9 +61,8 @@ def test_save_home_profile_flush_is_rollbackable(pg_db: Session) -> None:
         assistant_name="bot",
         home_note="",
     )
-    # ``begin_nested()`` is the PostgreSQL analogue of the SQLite
-    # session.transaction semantics that the original test relied on:
-    # the subsequent flush lives in a SAVEPOINT, and the explicit
+    # ``begin_nested()`` provides the SAVEPOINT semantics the test relies
+    # on: the subsequent flush lives in a SAVEPOINT, and the explicit
     # ``rollback()`` reverts only that SAVEPOINT (preserving the
     # commit before it). A bare ``pg_db.rollback()`` would also
     # revert the prior commit because the fixture owns the outer

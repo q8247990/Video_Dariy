@@ -405,9 +405,8 @@ def test_publish_rollback_leaves_no_summary_no_attempt_no_outbox(
     ``commit()``. The fixture's outer BEGIN means the setup rows live
     in the same transaction as the publish writes here, so on rollback
     everything disappears together; we therefore verify the publish
-    writes vanish (the use case guarantee) rather than the SQLite-era
-    "setup stays / publish disappears" split, which was an artefact of
-    SQLite's commit being durable at ``session.commit()`` time.
+    writes vanish (the use case guarantee) rather than asserting a
+    "setup stays / publish disappears" split.
     """
     task_log = _new_task_log(pg_db)
     attempt = _new_running_attempt(pg_db, task_log_id=task_log.id, target=date(2026, 9, 2))
