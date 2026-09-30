@@ -7,8 +7,7 @@ on a clean baseline without per-test ``create_all`` cost.
 
 They exercise :func:`publish_daily_summary` against the full model
 surface (``daily_summary``, ``daily_summary_generation_attempt``,
-``task_log``, ``outbox_event``) and verify the atomicity contract from
-ADR ``docs/adr/0011-transactional-outbox-and-task-lifecycle.md`` §1 —
+``task_log``, ``outbox_event``) and verify the atomicity contract —
 the three writes (upsert summary + finalise attempt + enroll outbox)
 share one transaction, so a ``rollback()`` leaves zero rows behind.
 

@@ -7,9 +7,7 @@ process (Todo 13) consume this contract without standing up a database.
 The contract is at-least-once. Consumers MUST be idempotent; the
 broker ``task_id`` is fixed to ``event_id`` so duplicate publishes
 short-circuit at the worker via the existing
-``bind_or_create_running_task_log`` helper. See ADR
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md`` for the
-full contract.
+``bind_or_create_running_task_log`` helper.
 
 Submodules
 ==========

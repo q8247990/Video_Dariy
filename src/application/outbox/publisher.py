@@ -1,8 +1,7 @@
 """Outbox publisher — claim → publish → mark the durable outbox rows.
 
 This module is the **publisher** half of the PostgreSQL transactional
-outbox defined in ADR ``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``
-(Wave 3, Todo 13). The contract layer (Todo 11) froze the field list,
+outbox (Wave 3, Todo 13). The contract layer (Todo 11) froze the field list,
 the state machine, the retry parameters and the failure matrix. The
 persistence layer (Todo 12) shipped the SQLAlchemy model, the Alembic
 migration and the :class:`~src.application.outbox.repository.OutboxRepository`

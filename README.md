@@ -240,8 +240,7 @@ python3 -m scripts.backup_restore_db restore --database-url "<临时库url>" --d
   `OutboxEvent` 承担发布意图（1:1，原子落库），独立 publisher 进程负责
   broker 投递。`DailySummaryGenerationAttempt` 按日记录日报生成尝试（
   append-only），`PipelineTransitionLog` 记录管道状态机审计（不随
-  `TaskLog` 7 天清理丢失）。详见 ADR `docs/adr/0011-*` 与
-  `docs/adr/0012-*`。
+  `TaskLog` 7 天清理丢失）。
 
 ### 部分分析与断点续跑
 
@@ -327,10 +326,6 @@ session + checkpoint 归属到 `LLMUsageLog`。日报、问答与 MCP 只消费
 ```
 
 更完整的架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。
-
-**审计治理**：历次审计的完整发现登记册维护在工作文件 `docs/finding-register.md`（按仓库约定
-`docs/` 被 gitignore，仅作内部跟踪，不随版本库提交），部署与二次开发时如遇相关问题可对照该
-登记册回溯状态与责任人。
 
 ### 本地开发
 

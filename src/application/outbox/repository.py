@@ -1,8 +1,7 @@
 """Outbox repository — the SQLAlchemy bridge for ``outbox_event``.
 
 This module owns the **persistence-side** mechanics of the
-transactional outbox defined in ADR
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``. The
+transactional outbox. The
 DTO contract (Todo 11) is the in-memory shape use cases / tests
 reason about; this module is the SQLAlchemy implementation that:
 

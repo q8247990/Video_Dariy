@@ -1,8 +1,7 @@
 """Daily-summary attempt state machine.
 
 The states and transitions mirror the *shape* of the outbox state
-machine (ADR ``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``
-§4) — a small frozen transition table plus ``can_transition`` /
+machine — a small frozen transition table plus ``can_transition`` /
 ``transition`` / ``is_terminal`` helpers — but the **values are a
 separate enum**. An outbox row tracks broker publication
 (``pending → publishing → published``); an attempt row tracks business

@@ -19,8 +19,7 @@ This module is the seam that turns a *successful*
 
 All three writes happen in the **caller's** transaction. The caller
 owns the commit; a ``rollback()`` between any two writes leaves zero
-rows behind, satisfying the atomicity contract from ADR
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``.
+rows behind, satisfying the atomicity contract.
 
 Failure / cancellation paths
 ============================

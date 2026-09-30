@@ -1,10 +1,9 @@
 """SQLAlchemy model for the transactional outbox.
 
 The ``outbox_event`` table is the durable side of the PostgreSQL
-transactional outbox described in
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``. ADR §2
-freezes the field list and the index / constraint plan; this module
-mirrors that contract verbatim. The application-level DTO
+transactional outbox. The field list and the index / constraint plan
+are frozen by the contract layer; this module mirrors that contract
+verbatim. The application-level DTO
 (``src.application.outbox.contracts.OutboxEvent``) is the in-memory
 shape used by use cases and tests; this module is the SQLAlchemy
 mapping that the repository (Todo 12) and the Alembic migration (Todo

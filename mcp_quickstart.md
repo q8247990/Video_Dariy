@@ -274,7 +274,3 @@ curl -sS -X POST "http://127.0.0.1:8226/mcp" \
 1. 有 `supports_qa=true` 的 provider
 2. 该 provider 已启用
 3. 已设置为默认 QA provider
-
----
-
-深入排障见：[docs/develop/mcp_debug.md](docs/develop/mcp_debug.md)

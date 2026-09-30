@@ -274,7 +274,3 @@ This usually means the QA Provider is not configured or unavailable. Verify:
 1. There is a provider with `supports_qa=true`
 2. That provider is enabled
 3. It is set as the default QA provider
-
----
-
-For in-depth troubleshooting, see: [docs/develop/mcp_debug.en.md](docs/develop/mcp_debug.en.md)

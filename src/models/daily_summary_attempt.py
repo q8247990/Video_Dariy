@@ -32,8 +32,7 @@ Lifecycle
 =========
 
 The status column mirrors the shape (not the values) of the outbox
-state machine from ADR
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md`` §4:
+state machine:
 a short list of states, a frozen transition table, and a CHECK
 constraint that keeps unknown values out of the column. The values
 themselves are deliberately a **separate** enum from

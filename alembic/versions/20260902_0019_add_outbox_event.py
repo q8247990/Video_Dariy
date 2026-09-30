@@ -7,8 +7,7 @@ Create Date: 2026-09-02 14:00:00.000000
 Why this migration exists
 -------------------------
 This migration creates the ``outbox_event`` table that backs the
-transactional outbox designed in ADR
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``. The
+transactional outbox. The
 field list, the index / constraint plan, and the state machine are
 all frozen by the contract layer (Todo 11); this migration is the
 PostgreSQL realization of that contract.

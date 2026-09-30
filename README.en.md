@@ -238,8 +238,7 @@ python3 -m scripts.backup_restore_db restore --database-url "<temp-db-url>" --du
   `OutboxEvent` owns the publish intent (1:1, committed atomically), and a standalone
   publisher process drives the broker. `DailySummaryGenerationAttempt` records daily-summary
   attempts (append-only); `PipelineTransitionLog` is an append-only pipeline state-machine
-  audit that survives the 7-day `TaskLog` cleanup. See ADR `docs/adr/0011-*` and
-  `docs/adr/0012-*`.
+  audit that survives the 7-day `TaskLog` cleanup.
 
 ### Partial Analysis and Checkpoint Resume
 
@@ -329,11 +328,6 @@ Video Directory → VideoSource → VideoFile → VideoSession → EventRecord �
 ```
 
 For a more complete architecture overview, see [ARCHITECTURE.en.md](ARCHITECTURE.en.md).
-
-**Audit governance**: the full audit finding register is maintained in the working file
-`docs/finding-register.md` (per repo convention `docs/` is gitignored and tracked only
-internally, not committed). Operators and secondary developers can consult it to trace the
-status and owner of past findings.
 
 ### Local Development
 

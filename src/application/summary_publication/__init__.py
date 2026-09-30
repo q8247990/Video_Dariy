@@ -13,8 +13,7 @@ Atomicity contract
 
 All three writes happen in the **caller's** transaction. The caller
 owns the commit; a ``rollback()`` between any two writes leaves zero
-rows behind (ADR
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md`` §1).
+rows behind.
 The publisher (Todo 13) picks the outbox rows up from the durable
 table and publishes them to the broker — that is a separate
 transaction.

@@ -6,7 +6,7 @@ historical two-level split — a 600 s ``SessionVideoChunk`` layer that
 was then packed into ``<= 60 s`` sub-chunks with a cross-file
 ``ffmpeg concat`` fallback — was removed: the 600 s layer never
 reached the model, and the packing merged short files into a single
-call. See ``docs/todo.md`` for the decision record.
+call.
 
 Payloads are always ``data:video/mp4`` with a ``num_frames`` hint
 (``RAW_MP4_NUM_FRAMES``). The historical keyframe path lives only in

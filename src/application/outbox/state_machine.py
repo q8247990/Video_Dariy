@@ -1,8 +1,6 @@
 """Outbox state machine.
 
-States and transitions are documented in §3 of
-``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``. The
-state machine is intentionally small (four states) and the
+The state machine is intentionally small (four states) and the
 ``ALLOWED_TRANSITIONS`` mapping is the single source of truth; the
 :meth:`OutboxStatus.is_allowed` accessor on the enum is a convenience
 that calls :func:`can_transition`.

@@ -11,8 +11,7 @@ from __future__ import annotations
 
 # Number of frames the vLLM vision backend samples from a sub-chunk video
 # payload. The product decision keeps raw_mp4 at 120 frames; do not
-# re-introduce a keyframe-only path here — see
-# ``docs/adr/0009-remove-keyframe-pipeline.md``.
+# re-introduce a keyframe-only path here.
 RAW_MP4_NUM_FRAMES: int = 120
 
 # Webhook event emitted (via the outbox) once an analysis run finishes

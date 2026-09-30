@@ -31,8 +31,6 @@ class OutboxError(Exception):
 class OutboxStateError(OutboxError):
     """Raised when a state transition is not in the allowed set.
 
-    The state machine is documented in §3 of
-    ``docs/adr/0011-transactional-outbox-and-task-lifecycle.md``.
     The publisher loop and the consumer-side bind helper translate
     this exception into "the row is already terminal; skip" rather
     than "the caller's transition was illegal". The mgmt API path
