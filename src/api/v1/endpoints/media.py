@@ -185,13 +185,15 @@ def _resolve_playback_url(
 ) -> tuple[str, str | None]:
     """Return ``(mode, playback_url)`` for the configured playback mode.
 
-    Unknown modes fall back to ``hls_index_only``. ``direct_file`` points at
+    Unknown modes fall back to ``merged_stream``. ``direct_file`` points at
     the first available segment; ``merged_stream`` at the concatenated
-    session stream.
+    session stream. ``hls_index_only`` is kept selectable but is not the
+    default: its playlist exposes whole (non-fragmented) MP4 files, which
+    MSE/hls.js cannot append.
     """
     mode = configured_mode.strip().lower()
     if mode not in _PLAYBACK_MODES:
-        mode = "hls_index_only"
+        mode = "merged_stream"
 
     if mode == "merged_stream":
         return mode, _capability_url(

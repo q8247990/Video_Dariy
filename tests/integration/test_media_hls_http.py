@@ -129,8 +129,8 @@ def test_session_playback_returns_signed_playback_and_hls_urls(
     payload = response.json()
     assert payload["code"] == 0
     data = payload["data"]
-    assert data["playback_mode"] == "hls_index_only"
-    assert data["playback_url"] == data["hls_url"]
+    assert data["playback_mode"] == "merged_stream"
+    assert data["playback_url"].startswith(f"/media/sessions/{session_id}/stream?token=")
     assert data["hls_url"].startswith(f"/media/sessions/{session_id}/hls/index.m3u8?token=")
     assert urlsplit(data["playback_url"]).query.startswith("token=")
     assert urlsplit(data["hls_url"]).query.startswith("token=")

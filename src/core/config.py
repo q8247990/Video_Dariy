@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     VIDEO_ROOT_PATH: str = "/data/videos"
     PLAYBACK_CACHE_ROOT: str = "/data/hls"
     ENTITY_IMAGE_ROOT: str = "/data/images"
-    SESSION_PLAYBACK_MODE: str = "hls_index_only"
+    SESSION_PLAYBACK_MODE: str = "merged_stream"
 
     # Analysis
     ANALYSIS_LEASE_SECONDS: int = 300
