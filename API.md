@@ -259,8 +259,10 @@
   - 播放单个视频文件，支持 Range 请求
 - `GET /sessions/{session_id}/playback`
   - 获取 Session 播放信息，包括单文件列表、`playback_url`、`hls_url` 与 `playback_mode`。
-    `playback_url` 由 `SESSION_PLAYBACK_MODE` 决定：`hls_index_only`（默认，HLS 清单）、
-    `merged_stream`（合并流）、`direct_file`（首个可用文件）
+    `playback_url` 由 `SESSION_PLAYBACK_MODE` 决定：`merged_stream`（默认，合并后的渐进式
+    视频流）、`direct_file`（首个可用文件）、`hls_index_only`（HLS 清单）
+  - 注意：`hls_index_only` 的清单把整段**非分片** MP4 当作 HLS 分片，浏览器 MSE/hls.js
+    无法追加播放，因此不再作为默认；如需该模式请另行评估转码方案
 - `GET /sessions/{session_id}/stream`
   - 播放合并后的 Session 视频
 - `GET /sessions/{session_id}/hls/index.m3u8`

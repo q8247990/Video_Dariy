@@ -161,7 +161,7 @@ python3 -c "from cryptography.fernet import Fernet; print('v1:' + Fernet.generat
 | `PLAYBACK_CACHE_ROOT` | HLS 播放缓存目录 | Docker 部署保持默认即可 |
 | `MCP_TOKEN` | MCP 接口鉴权 Token | 需要 MCP 时配置 |
 | `DEFAULT_LOCALE` | 界面语言（zh-CN / en-US） | 默认 zh-CN |
-| `SESSION_PLAYBACK_MODE` | 回放模式（`hls_index_only` / `merged_stream` / `direct_file`） | 默认 hls_index_only |
+| `SESSION_PLAYBACK_MODE` | 回放模式（`merged_stream` / `direct_file` / `hls_index_only`） | 默认 merged_stream |
 | `DB_INIT_MAX_RETRIES` | 数据库初始化重试次数 | 默认 120 |
 | `DB_INIT_RETRY_INTERVAL_SECONDS` | 数据库初始化重试间隔（秒） | 默认 2 |
 
