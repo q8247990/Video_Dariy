@@ -18,7 +18,7 @@ from src.schemas.llm_provider import (
     LLMProviderUpdate,
     LLMProviderUsageDailyItem,
 )
-from src.schemas.response import BaseResponse, PaginatedResponse
+from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
 from src.services.llm_qos import get_daily_usage_stats, provider_availability
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
@@ -31,11 +31,12 @@ router = APIRouter()
 
 def _provider_response_builder(provider: LLMProvider) -> dict[str, Any]:
     availability_status, availability_message = provider_availability(provider)
-    return {
-        **provider.__dict__,
-        "availability_status": availability_status,
-        "availability_message": availability_message,
-    }
+    payload = LLMProviderResponse.model_validate(provider).model_dump()
+    payload.update(
+        availability_status=availability_status,
+        availability_message=availability_message,
+    )
+    return payload
 
 
 @router.get("", response_model=PaginatedResponse[LLMProviderResponse])
@@ -52,13 +53,14 @@ def get_providers(
         try:
             capability_field = capability_field_for_provider_type(provider_type)
         except ValueError as e:
-            return paginate(
-                db.query(LLMProvider).filter(LLMProvider.id < 0),
-                page=page,
-                page_size=page_size,
-                schema=LLMProviderResponse,
-                transform=_provider_response_builder,
-            ).model_copy(update={"code": 4001, "message": str(e)})
+            return PaginatedResponse[LLMProviderResponse](
+                code=4001,
+                message=str(e),
+                data=PaginatedData(
+                    list=[],
+                    pagination=PaginationDetails(page=page, page_size=page_size, total=0),
+                ),
+            )
         capability_column = getattr(LLMProvider, capability_field)
         query = query.filter(capability_column.is_(True))
     if enabled is not None:

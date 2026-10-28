@@ -6,12 +6,13 @@ from sqlalchemy import func
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from src.application.bootstrap_fakes import FakeTaskDispatcher
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.maintenance import recover_timed_out_tasks
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 
 pytestmark = pytest.mark.postgres
 
@@ -68,9 +69,18 @@ def test_concurrent_lost_analysis_recovery_creates_one_resume(
         "src.core.celery_app.celery_app.control.revoke", lambda *args, **kwargs: None
     )
 
+    dispatched: list[int] = []
+
+    class RecordingDispatcher(FakeTaskDispatcher):
+        def dispatch_analyze_session(self, db: object, command: object) -> str | None:
+            dispatched.append(command.session_id)  # type: ignore[attr-defined]
+            return super().dispatch_analyze_session(db, command)
+
     def recover() -> None:
         with local_session() as db:
-            recover_timed_out_tasks(db, datetime.now(timezone.utc))
+            recover_timed_out_tasks(
+                db, datetime.now(timezone.utc), dispatcher=RecordingDispatcher()
+            )
             db.commit()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -89,14 +99,5 @@ def test_concurrent_lost_analysis_recovery_creates_one_resume(
             .scalar()
             == 1
         )
-        assert (
-            db.query(func.count(TaskLog.id))
-            .filter(
-                TaskLog.task_type == TaskType.SESSION_ANALYSIS,
-                TaskLog.task_target_id == session_id,
-                TaskLog.status == TaskStatus.PENDING,
-            )
-            .scalar()
-            == 1
-        )
+        assert dispatched == [session_id]
         assert db.query(SessionAnalysisCheckpoint).filter_by(session_id=session_id).count() == 1

@@ -1,12 +1,12 @@
-"""MCP 工具服务层。
+"""MCP tool service layer.
 
-调用共享查询层 HomeQueryService 实现数据查询，
-保留 ask_home_monitor 作为自然语言问答入口。
+Delegates data queries to ``HomeQueryService`` and keeps
+``ask_home_monitor`` as the natural-language entry point.
 """
 
 import dataclasses
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from src.application.query.schemas import (
     TimeRange,
 )
 from src.application.query.service import HomeQueryService
+from src.services.home_timezone import get_home_timezone
 
 
 class MCPNotFoundError(ValueError):
@@ -43,8 +44,8 @@ class MCPToolService:
         db: Session,
         stream_url_builder: Callable[[int], str],
         session_playback_url_builder: Callable[[int], str],
-        llm_factory: Optional[LLMGatewayFactoryPort] = None,
-        qa_service_factory: Optional[Callable[[Session, Any], Any]] = None,
+        llm_factory: LLMGatewayFactoryPort | None = None,
+        qa_service_factory: Callable[[Session, Any], Any] | None = None,
     ):
         self.db = db
         self.stream_url_builder = stream_url_builder
@@ -73,12 +74,12 @@ class MCPToolService:
     def search_events(
         self,
         *,
-        start_time: Optional[str],
-        end_time: Optional[str],
-        subjects: Optional[list[str]] = None,
-        keywords: Optional[list[str]] = None,
-        event_types: Optional[list[str]] = None,
-        attention: Optional[bool] = None,
+        start_time: str | None,
+        end_time: str | None,
+        subjects: list[str] | None = None,
+        keywords: list[str] | None = None,
+        event_types: list[str] | None = None,
+        attention: bool | None = None,
         limit: int = 20,
     ) -> dict:
         time_range = self._parse_time_range(start_time, end_time)
@@ -110,9 +111,9 @@ class MCPToolService:
     def get_sessions(
         self,
         *,
-        start_time: Optional[str],
-        end_time: Optional[str],
-        subjects: Optional[list[str]] = None,
+        start_time: str | None,
+        end_time: str | None,
+        subjects: list[str] | None = None,
         limit: int = 20,
     ) -> dict:
         time_range = self._parse_time_range(start_time, end_time)
@@ -140,7 +141,7 @@ class MCPToolService:
     def get_daily_summary(
         self,
         start_date: str,
-        end_date: Optional[str] = None,
+        end_date: str | None = None,
     ) -> dict:
         try:
             sd = datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -177,14 +178,17 @@ class MCPToolService:
         if self._qa_service_factory is not None:
             service = self._qa_service_factory(self.db, self._llm_factory)
         else:
+            from src.application.qa.errors import QAProviderNotConfiguredError
             from src.application.qa.service import QAService
 
+            if self._llm_factory is None:
+                raise QAProviderNotConfiguredError("QA requires a configured LLM gateway factory")
             service = QAService(self.db, llm_factory=self._llm_factory)
         result = service.answer(
             QARequest(
                 question=clean_question,
                 now=datetime.now(timezone.utc),
-                timezone="Asia/Shanghai",
+                timezone=get_home_timezone(self.db).key,
                 write_query_log=False,
                 request_source="mcp",
                 locale=locale or "zh-CN",
@@ -212,8 +216,8 @@ class MCPToolService:
 
     @staticmethod
     def _parse_time_range(
-        start_time: Optional[str],
-        end_time: Optional[str],
+        start_time: str | None,
+        end_time: str | None,
     ) -> TimeRange:
         """解析 ISO datetime 字符串为 TimeRange。"""
         if not start_time or not end_time:

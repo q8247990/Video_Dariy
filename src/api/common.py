@@ -1,9 +1,10 @@
-"""API 层公共工具函数。
+"""Shared API helpers.
 
-提供统一的 GET 列表分页辅助，消除各端点手写 count/offset/limit 的重复。
+Provides the pagination helper used by every GET list endpoint so the
+count/offset/limit pattern is not reimplemented per route.
 """
 
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel
 
@@ -23,7 +24,7 @@ def paginate(
     page_size: int,
     schema: type[T],
     *,
-    transform: Optional[Callable[[Any], Any]] = None,
+    transform: Callable[[Any], Any] | None = None,
 ) -> PaginatedResponse[T]:
     """对 SQLAlchemy query 执行分页并返回 PaginatedResponse。
 

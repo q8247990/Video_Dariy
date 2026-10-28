@@ -1,12 +1,14 @@
-"""v2: QA Agentic Loop 的 system prompt 构建器（Jinja2 模板版）。
+"""QA agentic-loop system prompt builder (Jinja2 templates).
 
-内容按"固定在前、易变在后"排列，便于服务端 KV 前缀缓存复用：
+Sections are ordered most-stable-first so the model server can reuse its
+KV prefix cache:
 
-1. 静态：角色 / 规则 / 事件类型说明（``qa_agent/system_rules.j2``）
-2. 半静态：家庭上下文与已知主体（复用 ``shared/home_context.j2``）
-3. 动态：当前时间 / 时区 / 系统数据范围（``qa_agent/context.j2``）
+1. static: role / rules / event-type reference (``qa_agent/system_rules.j2``)
+2. semi-static: home context and known subjects (``shared/home_context.j2``)
+3. dynamic: current time / timezone / data range (``qa_agent/context.j2``)
 
-约定：``src.services`` 不反向 import ``src.application``，本函数只消费 primitives / dict。
+The builder consumes primitives and dicts only; ``src.services`` never
+imports ``src.application``.
 """
 
 from typing import Any

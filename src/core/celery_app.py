@@ -51,7 +51,7 @@ def _wire_correlation_signals() -> None:
 
         task_prerun.connect(_on_task_prerun)
         task_postrun.connect(_on_task_postrun)
-    except Exception:  # noqa: BLE001  (signal wiring must never break boot)
+    except Exception:
         # Non-Celery import contexts / tests ignore correlation wiring.
         return
 
@@ -63,7 +63,11 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-    timezone="Asia/Shanghai",
+    # Celery only needs a stable reference zone. Every business-time decision
+    # (daily-summary due time, local-day windows) is computed from the
+    # DB-configured ``home_timezone`` inside the task, and both beat entries
+    # fire on fixed 60s intervals, so infrastructure stays in UTC.
+    timezone="UTC",
     enable_utc=True,
     task_track_started=True,
     # Ack only after execution: a lost worker returns the message to its

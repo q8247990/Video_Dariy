@@ -12,12 +12,12 @@ per-stage contracts the slim Celery task in
 * :func:`reducer.reduce_files` — the **pure** reducer.
   Callers feed it in-memory records (no DB) and the function
   must produce the same session graph for hot and full builds.
-* :func:`seal_policy.select_sessions_to_seal` — the **pure**
+* :func:`runner.select_sessions_to_seal` — the **pure**
   half of the seal stage. Tests pin the open→sealed decision
   for ``ScanMode.HOT`` (latest-keep-all-else-seal) and
   ``ScanMode.FULL`` (seal everything), plus the buffer
   fallback (``SEAL_BUFFER_SECONDS`` elapsed).
-* :func:`dedupe.dedupe_files` — the file-path hash dedupe.
+* :func:`discovery.dedupe_files` — the file-path hash dedupe.
   Existing rows are skipped; the ``(source_id, file_path_hash)``
   unique index race is silent; post-dedupe ``InsertedFile``
   list is returned.
@@ -42,20 +42,19 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import ScanMode, SessionAnalysisStatus
 from src.models.video_file import VideoFile, build_file_path_hash
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import ScanMode, SessionAnalysisStatus
 from src.services.session_build import (
     EXTEND,
     NEW_SESSION,
     DiscoveredFile,
-    dedupe,
+    discovery,
     reducer,
     runner,
-    seal_policy,
 )
-from src.services.session_build.constants import (
+from src.services.session_build.types import (
     MERGE_GAP_SECONDS,
     SEAL_BUFFER_SECONDS,
 )
@@ -301,7 +300,7 @@ def test_seal_policy_full_mode_seals_every_open_session() -> None:
         _fake_open_session(2, datetime(2026, 3, 15, 9, 0, 0)),
         _fake_open_session(3, datetime(2026, 3, 15, 11, 0, 0)),
     ]
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.FULL,
         open_sessions=open_sessions,
         now_utc=now,
@@ -318,7 +317,7 @@ def test_seal_policy_hot_mode_seals_all_but_latest() -> None:
         _fake_open_session(2, latest_end),
         _fake_open_session(3, datetime(2026, 3, 15, 9, 0, 0)),
     ]
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.HOT,
         open_sessions=open_sessions,
         now_utc=now,
@@ -335,7 +334,7 @@ def test_seal_policy_hot_mode_seals_prior_sessions_keeps_latest_in_buffer() -> N
         _fake_open_session(2, datetime(2026, 3, 15, 11, 55, 0)),
         _fake_open_session(3, datetime(2026, 3, 15, 9, 0, 0)),
     ]
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.HOT,
         open_sessions=open_sessions,
         now_utc=now,
@@ -350,7 +349,7 @@ def test_seal_policy_hot_mode_keeps_latest_open_when_buffer_not_elapsed() -> Non
         _fake_open_session(1, datetime(2026, 3, 15, 10, 0, 0)),
         _fake_open_session(2, latest_end),
     ]
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.HOT,
         open_sessions=open_sessions,
         now_utc=now,
@@ -365,7 +364,7 @@ def test_seal_policy_hot_mode_seals_latest_when_buffer_elapsed() -> None:
         _fake_open_session(1, datetime(2026, 3, 15, 10, 0, 0)),
         _fake_open_session(2, latest_end),
     ]
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.HOT,
         open_sessions=open_sessions,
         now_utc=now,
@@ -377,7 +376,7 @@ def test_seal_policy_hot_mode_with_single_session_buffer_only() -> None:
     now = datetime(2026, 3, 15, 12, 0, 0)
     only_end = now - timedelta(seconds=SEAL_BUFFER_SECONDS + 10)
     open_sessions = [_fake_open_session(1, only_end)]
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.HOT,
         open_sessions=open_sessions,
         now_utc=now,
@@ -386,7 +385,7 @@ def test_seal_policy_hot_mode_with_single_session_buffer_only() -> None:
 
 
 def test_seal_policy_hot_mode_empty_returns_empty() -> None:
-    decision = seal_policy.select_sessions_to_seal(
+    decision = runner.select_sessions_to_seal(
         scan_mode=ScanMode.HOT,
         open_sessions=[],
         now_utc=datetime(2026, 3, 15, 12, 0, 0),
@@ -444,7 +443,7 @@ def test_dedupe_skips_existing_files(db_session) -> None:
     db_session.commit()
 
     file_b = _discovered(base + timedelta(seconds=61), "b")
-    inserted = dedupe.dedupe_files(
+    inserted = discovery.dedupe_files(
         db_session,
         source_id=source_id,
         discovered_files=[file_a, file_b],
@@ -463,7 +462,7 @@ def test_dedupe_inserts_new_files(db_session) -> None:
         _discovered(base, "a"),
         _discovered(base + timedelta(seconds=61), "b"),
     ]
-    inserted = dedupe.dedupe_files(
+    inserted = discovery.dedupe_files(
         db_session,
         source_id=source_id,
         discovered_files=files,
@@ -481,7 +480,7 @@ def test_dedupe_marks_existing_hashes_without_query(db_session) -> None:
     base = datetime(2026, 3, 15, 9, 0, 0)
     file_a = _discovered(base, "a")
     file_a_hash = build_file_path_hash(file_a.file_path)
-    inserted = dedupe.dedupe_files(
+    inserted = discovery.dedupe_files(
         db_session,
         source_id=source_id,
         discovered_files=[file_a, _discovered(base + timedelta(seconds=61), "b")],
@@ -520,7 +519,7 @@ def test_dedupe_unique_index_race_silently_skips(db_session) -> None:
     # ``IntegrityError`` and the dedupe returns ``None``.
     # We don't race two threads here, so we
     # assert the call returns no rows for file_a.
-    inserted = dedupe.dedupe_files(
+    inserted = discovery.dedupe_files(
         db_session,
         source_id=source_id,
         discovered_files=[file_a],

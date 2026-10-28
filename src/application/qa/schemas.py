@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -34,7 +34,9 @@ class SessionEvidence:
 class QARequest:
     question: str
     now: datetime
-    timezone: str = "Asia/Shanghai"
+    # IANA zone name sourced from the configured ``home_timezone``. Callers
+    # must pass it explicitly so QA never silently assumes a fixed zone.
+    timezone: str
     write_query_log: bool = True
     request_source: str = "web"
     locale: str = "zh-CN"
@@ -46,4 +48,4 @@ class QAResult:
     answer_text: str
     referenced_events: list[EventEvidence] = field(default_factory=list)
     referenced_sessions: list[SessionEvidence] = field(default_factory=list)
-    provider_id: Optional[int] = None
+    provider_id: int | None = None

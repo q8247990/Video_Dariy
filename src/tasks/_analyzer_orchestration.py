@@ -11,7 +11,7 @@ Every helper this module calls is either:
   :func:`build_home_context`, :func:`ensure_task_not_cancelled`,
   :func:`enforce_token_quota`, :func:`record_token_usage`,
   :func:`parse_video_recognition_output`), or
-* reached through the :class:`~src.services.analysis.ports.AnalysisPorts`
+* reached through the :class:`~src.services.analysis.contracts.AnalysisPorts`
   bundle — the five media-layout / event-replace helpers. Tests inject a
   scripted :class:`AnalysisPorts` via the task-layer holder
   (:func:`src.tasks._container.set_analysis_ports_for_tests`) or via
@@ -32,6 +32,7 @@ from src.application.prompt.contracts import (
     VideoRecognitionPromptInput,
     VideoSourcePromptContext,
 )
+from src.core.pipeline_constants import SourceType
 from src.db.session import task_db_session
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
@@ -55,24 +56,20 @@ from src.services.analysis import (
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
-from src.services.analysis.chunk_plan import SubChunkPlan
-from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
-from src.services.analysis.errors import RawResponseCapture
-from src.services.analysis.failure import handle_deadlock_retry_exhausted
+from src.services.analysis.claim import handle_deadlock_retry_exhausted
+from src.services.analysis.contracts import DEADLOCK_MAX_RETRIES, AnalysisPorts, RawResponseCapture
+from src.services.analysis.execute import build_provider_client, execute_sub_chunk
 from src.services.analysis.finalize import (
     record_failed_transition,
     record_partial_failure_transition,
 )
-from src.services.analysis.ports import AnalysisPorts
-from src.services.analysis.provider import _build_provider_client
-from src.services.analysis.sub_chunk_runner import execute_sub_chunk
+from src.services.analysis.plan import SubChunkPlan
 from src.services.dispatch import ensure_task_not_cancelled
 from src.services.dispatch.cancel import TaskCancellationRequested
 from src.services.dispatch.lease import renew_task_lease
 from src.services.home_profile import build_home_context
 from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
-from src.services.pipeline_constants import SourceType
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
 from src.services.provider_generation_limits import get_generation_limits, resolve_num_frames
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
@@ -153,11 +150,11 @@ def run_session_analysis(
     pipeline against a deterministic media layout without monkey-patching
     any module-level name in this file.
     """
+    from src.application.container_holder import get_container
+    from src.tasks._container import get_analysis_ports
+
     if ports is None:
-        from src.tasks._container import get_analysis_ports
-
         ports = get_analysis_ports()
-
     with task_db_session() as db:
         last_prompt_text: str | None = None
         last_response_text: str | None = None
@@ -191,7 +188,7 @@ def run_session_analysis(
             )
         try:
             home_context = build_home_context(db)
-            client, provider = _build_provider_client(db)
+            client, provider = build_provider_client(db, llm_factory=get_container().llm_factory)
         except Exception as exc:
             # The claim (line above) already flipped the TaskLog to RUNNING;
             # a failure here (e.g. provider API-key decryption) must still
@@ -308,7 +305,7 @@ def _run_sub_chunk_loop(
     last_response_text: str | None = None
     last_raw_response_text: str | None = None
     try:
-        # Mirror the pre-Wave-5 cancel-fence placement: checked once
+        # Mirror the cancel-fence placement: checked once
         # after the claim succeeds (before any chunk work) so a cancel
         # request that arrived during the claim is honoured even when
         # only one sub-chunk would otherwise have been processed.
@@ -384,7 +381,7 @@ def _run_sub_chunk_loop(
             exc,
         )
         return sub_chunk_count, parse_modes, True
-    except Exception as exc:  # noqa: BLE001 — boundary handler for the orchestrator
+    except Exception as exc:
         return _handle_loop_exception(
             db=db,
             self=self,
@@ -417,7 +414,7 @@ def _handle_loop_exception(
 ) -> tuple[int, list[str], bool]:
     """Unwrap + classify an exception escaped from the sub-chunk loop.
 
-    Mirrors the pre-Wave-5 orchestrator's exception handler: a PG
+    Mirrors the previous orchestrator's exception handler: a PG
     deadlock triggers ``self.retry``; a
     :class:`LateWorkerFencingError` becomes a silent no-op; any
     other exception marks the session PARTIAL (if a sub-chunk was
@@ -590,7 +587,7 @@ def _run_one_sub_chunk(
         # If the LLM call or the parser raised, capture the raw
         # gateway response (already captured inside
         # ``execute_sub_chunk`` before parsing) so the failure log
-        # carries the same payload the pre-Wave-5 monolith used to
+        # carries the same payload the monolith used to
         # surface. Re-raise the original exception so the
         # orchestrator's deadlock / permanent-failure branches see
         # the real cause.

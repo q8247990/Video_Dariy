@@ -1,11 +1,11 @@
-"""共享查询层数据结构。
+"""Shared query-layer data structures.
 
-QA Agent 和 MCP 共用的查询参数与返回结果定义。
+Query parameters and result shapes used by both the QA agent and MCP.
 """
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # 查询参数
@@ -29,7 +29,7 @@ class EventFilters:
     subjects: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     event_types: list[str] = field(default_factory=list)
-    attention: Optional[bool] = None
+    attention: bool | None = None
     limit: int = 20
 
 
@@ -40,8 +40,8 @@ class EventFilters:
 
 @dataclass
 class DataAvailability:
-    earliest_event_date: Optional[date] = None
-    latest_event_date: Optional[date] = None
+    earliest_event_date: date | None = None
+    latest_event_date: date | None = None
     total_event_count: int = 0
     video_sources: list[dict[str, Any]] = field(default_factory=list)
 

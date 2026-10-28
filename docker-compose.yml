@@ -37,6 +37,11 @@ services:
   redis:
     image: redis:alpine
     container_name: hm_redis
+    # AOF keeps a published outbox event's broker message across a Redis
+    # crash. Without it the RDB snapshot may lose up to 60 s of writes,
+    # and the outbox state machine has no published -> pending edge, so a
+    # lost message could never be re-sent.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}

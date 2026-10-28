@@ -12,15 +12,14 @@ importing :mod:`src.core.celery_app` directly. Tests substitute a
 recording fake to assert the right Celery ``task_id`` was revoked
 without ever opening a Redis connection.
 
-See ``.omo/plans/architecture-consolidation.md`` Todo 5 — composition
-root — and Todo 7 (which will inject a Celery-backed implementation
-into Celery task modules).
+The composition root injects the Celery-backed implementation into the
+API and task modules.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -39,8 +38,8 @@ class HeartbeatReport:
     """
 
     queue: str
-    worker_count: Optional[int]
-    active_count: Optional[int]
+    worker_count: int | None
+    active_count: int | None
 
 
 @runtime_checkable

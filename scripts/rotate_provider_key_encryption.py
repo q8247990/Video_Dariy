@@ -7,13 +7,13 @@ import os
 
 from sqlalchemy import select
 
-from src.db.session import task_db_session
-from src.models.llm_provider import LLMProvider
-from src.services.provider_key_crypto import (
+from src.core.provider_key_crypto import (
     decrypt_provider_api_key,
     encrypt_provider_api_key,
     is_encrypted_provider_api_key,
 )
+from src.db.session import task_db_session
+from src.models.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 

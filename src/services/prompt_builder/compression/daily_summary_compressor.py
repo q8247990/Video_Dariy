@@ -1,7 +1,7 @@
-"""日报数据压缩逻辑。
+"""Daily-summary input compression.
 
-从 daily_summary builder 中拆出的纯数据处理模块，
-负责事件聚类、去重、截断等操作。
+Pure data processing for the daily-summary builder: event clustering,
+deduplication and truncation.
 """
 
 from typing import Any

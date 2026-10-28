@@ -29,16 +29,16 @@ stale default and a genuine ``open`` row is not recoverable; both mean
 "not yet analysed").
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "20260928_0026"
-down_revision: Union[str, None] = "20260923_0025"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260923_0025"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 SESSION_STATUSES: tuple[str, ...] = (
     "open",

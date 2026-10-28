@@ -1,7 +1,7 @@
-"""共用语言指令片段。
+"""Shared locale directives for LLM prompts.
 
-为 LLM prompt 提供统一的语言控制指令，根据 locale 返回对应的语言要求文本。
-仅影响新生成内容，不回填历史字段。
+Returns the language / tone instruction for a locale. The directives only
+affect newly generated content; stored text is never backfilled.
 """
 
 from src.core.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES

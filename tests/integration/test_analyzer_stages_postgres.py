@@ -5,7 +5,7 @@ entry against a real PostgreSQL instance (``postgres_migrated_engine``)
 and a scripted
 :class:`~src.application.ports.llm_gateway.LLMGatewayFactoryPort`
 injected through the task-layer container holder
-(:func:`src.tasks._container.set_container_for_tests`). The analyzer
+(:func:`src.application.container_holder.set_container_for_tests`). The analyzer
 pipeline's media-layout helpers are wired through
 :class:`~src.application.bootstrap_fakes.FakeAnalysisPorts`.
 
@@ -33,11 +33,17 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import (
     FakeAnalysisPorts,
     ScriptedVisionGateway,
     ScriptedVisionGatewayFactory,
+)
+from src.core.pipeline_constants import (
+    SessionAnalysisStatus,
+    TaskStatus,
+    TaskType,
 )
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
@@ -52,18 +58,14 @@ from src.services.analysis import (
     build_sub_chunk_video_url,
     write_sub_chunk_checkpoint,
 )
-from src.services.analysis.chunk_plan import SubChunkPlan
-from src.services.pipeline_constants import (
-    SessionAnalysisStatus,
-    TaskStatus,
-    TaskType,
-)
+from src.services.analysis.plan import SubChunkPlan
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks import _analyzer_orchestration, _container  # noqa: F401
+from src.tasks import _analyzer_orchestration  # noqa: F401
+from src.tasks import _container as _ports_holder
 from src.tasks.analyzer import analyze_session_task
 
 pytestmark = pytest.mark.postgres
@@ -120,7 +122,7 @@ def _base_action(
 
     Tests customise either the gateway responses (via
     :meth:`ScriptedVisionGateway.queue_responses`) or the ports
-    (via :func:`_container.set_analysis_ports_for_tests`) before
+    (via :func:`_ports_holder.set_analysis_ports_for_tests`) before
     calling :func:`analyze_session_task.run`.
     """
 
@@ -128,7 +130,7 @@ def _base_action(
     factory.install_gateway(ScriptedVisionGateway(responses=[]))
     container = bootstrap_for_tests(llm_factory=factory)
     _container.set_container_for_tests(container)
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts())
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts())
 
     @contextmanager
     def _task_session() -> Iterator[Session]:
@@ -143,7 +145,7 @@ def _base_action(
         yield
     finally:
         _container.reset_container_for_tests()
-        _container.reset_analysis_ports_for_tests()
+        _ports_holder.reset_analysis_ports_for_tests()
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +338,7 @@ def _build_guards(task_log: TaskLog) -> Any:
     :func:`write_sub_chunk_checkpoint` directly because that is the
     single write path the slim task uses to land success rows.
     """
-    from src.services.analysis.checkpoint_writer import ClaimGuards
+    from src.services.analysis.execute import ClaimGuards
 
     detail = task_log.detail_json if isinstance(task_log.detail_json, dict) else {}
     return ClaimGuards(
@@ -518,7 +520,7 @@ def test_deadlock_path_detected_and_converted_to_recovery(
     def _deadlock_replace(db: Any, session_id: int, events: list[Any]) -> int:
         raise OperationalError("INSERT INTO event_record ...", {}, _DeadlockOrig())
 
-    _container.set_analysis_ports_for_tests(
+    _ports_holder.set_analysis_ports_for_tests(
         FakeAnalysisPorts(
             chunks=1,
             sub_chunks_per_chunk=1,
@@ -664,7 +666,7 @@ def test_no_long_checked_out_connection_during_llm_call(
 
     factory = _container.get_container().llm_factory
     assert isinstance(factory, ScriptedVisionGatewayFactory)
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
     factory.install_gateway(ScriptedVisionGateway(responses=[], on_call=_probe))
     _set_responses(_recognition_result_json(0))
 

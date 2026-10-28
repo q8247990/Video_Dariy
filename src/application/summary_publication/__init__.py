@@ -1,7 +1,7 @@
 """Daily-summary publication use case.
 
 Owns the atomic "persist the daily summary + finalise the attempt +
-enroll webhook outbox rows" transaction that the summarizer (Todo 19)
+enroll webhook outbox rows" transaction that the summarizer
 calls once it has produced a successful generation for a date.
 
 See :mod:`src.application.summary_publication.use_case` for the
@@ -14,7 +14,7 @@ Atomicity contract
 All three writes happen in the **caller's** transaction. The caller
 owns the commit; a ``rollback()`` between any two writes leaves zero
 rows behind.
-The publisher (Todo 13) picks the outbox rows up from the durable
+The publisher picks the outbox rows up from the durable
 table and publishes them to the broker — that is a separate
 transaction.
 """

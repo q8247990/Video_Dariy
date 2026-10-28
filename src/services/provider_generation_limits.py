@@ -14,7 +14,7 @@ entity-appearance vision call keeps ``300``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 KEY_MAX_MODEL_LEN = "max_model_len"
 KEY_MAX_OUTPUT_TOKENS = "max_output_tokens"
@@ -28,11 +28,11 @@ NUM_FRAMES_MAX = 600
 class GenerationLimits:
     """Resolved provider generation limits (``None`` = not configured)."""
 
-    max_model_len: Optional[int] = None
-    max_output_tokens: Optional[int] = None
-    num_frames: Optional[int] = None
+    max_model_len: int | None = None
+    max_output_tokens: int | None = None
+    num_frames: int | None = None
 
-    def output_tokens(self, *, scene_default: Optional[int]) -> Optional[int]:
+    def output_tokens(self, *, scene_default: int | None) -> int | None:
         """Configured output cap, clamped to ``max_model_len`` when both set."""
         if self.max_output_tokens is None:
             return scene_default
@@ -40,7 +40,7 @@ class GenerationLimits:
             return min(self.max_output_tokens, self.max_model_len)
         return self.max_output_tokens
 
-    def input_tokens(self, *, scene_default: Optional[int]) -> Optional[int]:
+    def input_tokens(self, *, scene_default: int | None) -> int | None:
         """Remaining input budget (``max_model_len`` minus the output cap).
 
         ``None`` when ``max_model_len`` is unset. Used for pre-call validation
@@ -52,7 +52,7 @@ class GenerationLimits:
         return max(self.max_model_len - output, 0)
 
 
-def _positive_int(value: Any) -> Optional[int]:
+def _positive_int(value: Any) -> int | None:
     """Parse a positive int from JSON; ignore bools / garbage / non-positives."""
     if isinstance(value, bool):
         return None
@@ -66,7 +66,7 @@ def _positive_int(value: Any) -> Optional[int]:
     return None
 
 
-def _bounded_int(value: Any, low: int, high: int) -> Optional[int]:
+def _bounded_int(value: Any, low: int, high: int) -> int | None:
     """Parse a positive int and clamp it into ``[low, high]``."""
     parsed = _positive_int(value)
     if parsed is None:
@@ -86,7 +86,7 @@ def get_generation_limits(provider: Any) -> GenerationLimits:
     )
 
 
-def resolve_max_output_tokens(provider: Any, *, scene_default: Optional[int]) -> Optional[int]:
+def resolve_max_output_tokens(provider: Any, *, scene_default: int | None) -> int | None:
     """The output cap to send for ``provider`` in a scene (``None`` = uncapped)."""
     return get_generation_limits(provider).output_tokens(scene_default=scene_default)
 

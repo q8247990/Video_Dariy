@@ -25,10 +25,10 @@ from contextlib import contextmanager
 import pytest
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.task_log import TaskLog
 from src.models.webhook_config import WebhookConfig
 from src.models.webhook_delivery_log import WebhookDeliveryLog
-from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.webhook_payload import build_webhook_event_payload
 from src.tasks import webhook as webhook_task
 from src.tasks.webhook import send_webhook_task

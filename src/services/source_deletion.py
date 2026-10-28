@@ -3,11 +3,27 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
+
 
 @dataclass(frozen=True)
 class SourceOrphanReport:
     relation: str
     count: int
+
+
+def delete_source_with_sessions(db: Session, source: VideoSource) -> None:
+    """Delete a source and its (event-free) sessions in the caller's transaction.
+
+    The API rejects deletion while retained event history exists, so the
+    sessions removed here cannot own events. Keeping this write in the
+    service layer prevents routes from re-implementing the cascade.
+    """
+    db.query(VideoSession).filter(VideoSession.source_id == source.id).delete(
+        synchronize_session=False
+    )
+    db.delete(source)
 
 
 def collect_source_deletion_orphan_report(db: Session) -> list[SourceOrphanReport]:

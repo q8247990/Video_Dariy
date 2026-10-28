@@ -1,13 +1,12 @@
-"""Observability metrics for the /metrics health surface (Todo 24).
+"""Observability metrics for the /metrics health surface.
 
 Pulls the operational gauges a dashboard / operator wants to watch,
 straight from the live database:
 
-* **outbox lag** — age (seconds) of the oldest pending/publishing
-  ``outbox_event`` row and the current pending / failed counts. The
-  publisher already derives the same ``oldest_pending_seconds`` for its
-  own health check; this module recomputes it at request time so the
-  HTTP surface is independent of any one publisher instance.
+* **delivery lag** — age (seconds) of the oldest ``task_delivery``
+  intent row plus the pending / failed counts. Intents are deleted once
+  the broker accepts them, so a non-zero count means a commit-then-send
+  gap or a broker failure the heartbeat retry sweep has not cleared yet.
 * **task recovery** — the heartbeat persists its per-run counters
   (``timed_out`` = leases recovered, ``pending_recovered`` = unleased
   recovered) into ``AppRuntimeState`` under the
@@ -26,16 +25,16 @@ JSON (no Prometheus dependency) and is unit- and PG-testable.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.app_runtime_state import AppRuntimeState
-from src.models.outbox import OutboxEvent
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import TaskStatus, TaskType
 
 #: AppRuntimeState key under which the heartbeat persists its counters.
 HEARTBEAT_COUNTERS_KEY = "heartbeat_last_counters"
@@ -45,26 +44,24 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
-def outbox_metrics(engine: Engine) -> dict[str, Any]:
-    """Return outbox lag / counts gauges."""
+def delivery_metrics(engine: Engine) -> dict[str, Any]:
+    """Return dispatch-delivery gauges (undelivered intents and failures)."""
     with engine.connect() as conn:
-        status_counts: dict[str, int] = {}
-        for status_, count in conn.execute(
-            select(OutboxEvent.status, func.count(OutboxEvent.id)).group_by(OutboxEvent.status)
-        ):
-            status_counts[str(status_)] = int(count)
-        oldest_stmt = select(func.min(OutboxEvent.next_attempt_at)).where(
-            OutboxEvent.status.in_(("pending", "publishing"))
+        pending_count = int(conn.execute(select(func.count(TaskDelivery.id))).scalar_one() or 0)
+        failed_count = int(
+            conn.execute(
+                select(func.count(TaskDelivery.id)).where(TaskDelivery.last_error.is_not(None))
+            ).scalar_one()
+            or 0
         )
-        oldest = conn.execute(oldest_stmt).scalar_one_or_none()
-    lag_seconds: Optional[int] = None
+        oldest = conn.execute(select(func.min(TaskDelivery.created_at))).scalar_one_or_none()
+    lag_seconds: int | None = None
     if oldest is not None:
         lag_seconds = int(max(0, (datetime.now(timezone.utc) - _as_utc(oldest)).total_seconds()))
     return {
         "oldest_pending_seconds": lag_seconds,
-        "pending_count": int(status_counts.get("pending", 0)),
-        "publishing_count": int(status_counts.get("publishing", 0)),
-        "failed_count": int(status_counts.get("failed", 0)),
+        "pending_count": pending_count,
+        "failed_count": failed_count,
     }
 
 
@@ -143,7 +140,6 @@ def checkpoint_progress(engine: Engine) -> list[dict[str, Any]]:
                 "task_log_id": task_log_id,
                 "completed_sub_chunks": slot["success"],
                 "total_sub_chunks": slot["total"],
-                "running": slot["success"] if slot["total"] else 0,
             }
         )
     return results
@@ -152,7 +148,7 @@ def checkpoint_progress(engine: Engine) -> list[dict[str, Any]]:
 def metrics_snapshot(engine: Engine) -> dict[str, Any]:
     """Compose the full /metrics payload."""
     return {
-        "outbox": outbox_metrics(engine),
+        "delivery": delivery_metrics(engine),
         "task_recovery": task_recovery_metrics(engine),
         "analysis_checkpoint": checkpoint_progress(engine),
     }
@@ -162,6 +158,6 @@ __all__ = [
     "HEARTBEAT_COUNTERS_KEY",
     "checkpoint_progress",
     "metrics_snapshot",
-    "outbox_metrics",
+    "delivery_metrics",
     "task_recovery_metrics",
 ]

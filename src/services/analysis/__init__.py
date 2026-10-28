@@ -1,132 +1,128 @@
-"""Analysis-pipeline stage modules.
+"""Analysis-pipeline stages.
 
-The analyzer Celery task is a thin orchestrator that delegates to
-the modules in this package. Each module owns one execution stage:
+One module per stage keeps the analyzer readable:
 
-* :mod:`.claim` — bind a TaskLog, take the lease, transition the
-  session to ``ANALYZING``.
-* :mod:`.chunk_plan` — build the file-level ``SubChunkPlan`` work
-  units (one per video file) and compute the deterministic
-  ``analysis_run_id``.
-* :mod:`.provider` — resolve the default vision provider and build
-  a fresh :class:`LLMGatewayPort`.
-* :mod:`.sub_chunk_runner` — execute one sub-chunk (no DB).
-* :mod:`.checkpoint_writer` — persist the success row with
-  late-worker fencing guards.
-* :mod:`.aggregator` — fold per-sub-chunk results into session
-  fields and rebuild ``EventRecord`` rows.
-* :mod:`.finalize` — transition ``VideoSession`` + ``TaskLog`` to
-  their terminal state.
-* :mod:`.recovery` — classify PG serialization faults and translate
-  them into Celery ``self.retry`` signals.
-* :mod:`.constants` — tunables shared across the stages.
-* :mod:`.errors` — exception hierarchy.
-
-The stages are intentionally side-effect-free except for the
-persistence layer (``checkpoint_writer`` / ``finalize``), and the
-external-call stage (``sub_chunk_runner``) never touches SQLAlchemy
-— the LLM work happens without a checked-out DB
-connection. Prompt assembly is intentionally owned by the Celery
-orchestrator in :mod:`src.tasks._analyzer_orchestration` because it
-imports the ``src.application.prompt`` contracts / compiler; the
-``src.services.analysis`` layer is forbidden from reaching up into
-``src.application.*``.
+``contracts``
+    Tunables, exception hierarchy and the :class:`AnalysisPorts` bundle.
+``plan``
+    Build the per-file work plan and the deterministic run id.
+``claim``
+    Bind the task log, take the lease, and mark failures.
+``execute``
+    Resolve the provider, run one vision call, persist the checkpoint.
+``finalize``
+    Aggregate results, transition the session, enqueue webhooks.
 """
 
 from __future__ import annotations
 
-from src.services.analysis.checkpoint_failure import (
-    enforce_fencing,
-    mark_checkpoint_error,
-    record_recovery_failure,
-)
-from src.services.analysis.checkpoint_writer import (
-    CHECKPOINT_STATE_ERROR,
-    CHECKPOINT_STATE_PENDING,
-    CHECKPOINT_STATE_PROCESSING,
-    CHECKPOINT_STATE_SUCCESS,
-    CheckpointWriteResult,
-    ClaimGuards,
-    get_or_create_checkpoint,
-    mark_checkpoint_processing,
-    write_sub_chunk_checkpoint,
-    write_token_usage,
-)
-from src.services.analysis.chunk_plan import (
-    AnalysisPlan,
-    SubChunkPlan,
-    build_analysis_plan,
-    sub_chunk_fingerprint,
-)
 from src.services.analysis.claim import (
     ClaimContext,
     SkipOutcome,
     claim_session_for_analysis,
     finalize_skip,
-    finalize_stale_message,  # noqa: F401 — re-exported for the orchestrator
+    finalize_stale_message,
+    handle_deadlock_retry_exhausted,
+    is_deadlock_operational_error,
+    mark_session_sealed_for_retry,
+    purge_stale_checkpoints,
 )
-from src.services.analysis.constants import RAW_MP4_NUM_FRAMES
-from src.services.analysis.errors import (
+from src.services.analysis.contracts import (
+    DEADLOCK_MAX_RETRIES,
+    NOT_FOUND_RETRY_DELAYS_SECONDS,
+    POSTGRES_RETRYABLE_SQLSTATES,
+    RAW_MP4_NUM_FRAMES,
+    WEBHOOK_EVENT_SESSION_ANALYZED,
+    AnalysisPorts,
     AnalysisStageError,
     DeadlockRetrySignal,
     LateWorkerFencingError,
     RawResponseCapture,
     RecoverySignalError,
+    build_analysis_ports,
 )
-from src.services.analysis.failure import (
-    handle_deadlock_retry_exhausted,  # noqa: F401 — re-exported for completeness
+from src.services.analysis.execute import (
+    CheckpointWriteResult,
+    ClaimGuards,
+    SubChunkRunResult,
+    build_provider_client,
+    build_sub_chunk_extra_body,
+    build_sub_chunk_video_url,
+    enforce_fencing,
+    execute_sub_chunk,
+    get_or_create_checkpoint,
+    mark_checkpoint_error,
+    mark_checkpoint_processing,
+    record_recovery_failure,
+    write_sub_chunk_checkpoint,
+    write_token_usage,
 )
 from src.services.analysis.finalize import (
     cancel_session,
+    completed_results_for_run,
+    enroll_session_analyzed_webhooks,
     finalize_session_success,
+    find_session_analyzed_subscribers,
+    merge_session_fields,
     record_failed_transition,
     record_partial_failure_transition,
+    replace_session_events,
 )
-from src.services.analysis.provider import build_provider_client
-from src.services.analysis.recovery import is_deadlock_operational_error
-from src.services.analysis.sub_chunk_runner import (
-    SubChunkRunResult,
-    build_sub_chunk_extra_body,
-    build_sub_chunk_video_url,
-    execute_sub_chunk,
+from src.services.analysis.plan import (
+    AnalysisPlan,
+    SubChunkPlan,
+    analysis_run_id_for_paths,
+    build_analysis_plan,
+    sub_chunk_fingerprint,
 )
 
 __all__ = [
-    "AnalysisStageError",
-    "CHECKPOINT_STATE_ERROR",
-    "CHECKPOINT_STATE_PENDING",
-    "CHECKPOINT_STATE_PROCESSING",
-    "CHECKPOINT_STATE_SUCCESS",
     "AnalysisPlan",
+    "AnalysisPorts",
+    "AnalysisStageError",
     "ClaimContext",
     "ClaimGuards",
     "CheckpointWriteResult",
+    "DEADLOCK_MAX_RETRIES",
     "DeadlockRetrySignal",
     "LateWorkerFencingError",
+    "NOT_FOUND_RETRY_DELAYS_SECONDS",
+    "POSTGRES_RETRYABLE_SQLSTATES",
     "RAW_MP4_NUM_FRAMES",
     "RawResponseCapture",
     "RecoverySignalError",
     "SkipOutcome",
     "SubChunkPlan",
     "SubChunkRunResult",
+    "WEBHOOK_EVENT_SESSION_ANALYZED",
+    "analysis_run_id_for_paths",
     "build_analysis_plan",
+    "build_analysis_ports",
     "build_provider_client",
     "build_sub_chunk_extra_body",
     "build_sub_chunk_video_url",
     "cancel_session",
     "claim_session_for_analysis",
+    "completed_results_for_run",
     "enforce_fencing",
+    "enroll_session_analyzed_webhooks",
     "execute_sub_chunk",
     "finalize_session_success",
     "finalize_skip",
     "finalize_stale_message",
+    "find_session_analyzed_subscribers",
     "get_or_create_checkpoint",
+    "handle_deadlock_retry_exhausted",
     "is_deadlock_operational_error",
     "mark_checkpoint_error",
     "mark_checkpoint_processing",
+    "mark_session_sealed_for_retry",
+    "merge_session_fields",
+    "purge_stale_checkpoints",
     "record_failed_transition",
     "record_partial_failure_transition",
     "record_recovery_failure",
+    "replace_session_events",
     "sub_chunk_fingerprint",
     "write_sub_chunk_checkpoint",
     "write_token_usage",

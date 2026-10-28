@@ -1,11 +1,12 @@
 # 以此项目纪念我亲爱的糖糖，愿你在喵星，也能看到家里，看到你的栗子哥哥，和永远爱你的爸爸妈妈。
+import hmac
 import logging
 import sys
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -86,10 +87,13 @@ app.add_middleware(ResponseStatusMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Explicit allow-list from config. A wildcard cannot be combined with
+    # ``allow_credentials`` (browsers reject it), and same-origin production
+    # deployments need no CORS entry at all.
+    allow_origins=settings.cors_allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
@@ -145,13 +149,24 @@ def readiness_check() -> JSONResponse:
     return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=payload)
 
 
-@app.get("/metrics")
+def _require_metrics_token(x_metrics_token: str | None = Header(default=None)) -> None:
+    """Gate operational endpoints when ``METRICS_TOKEN`` is configured."""
+    expected = settings.METRICS_TOKEN.strip()
+    if not expected:
+        return
+    if not x_metrics_token or not hmac.compare_digest(x_metrics_token, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid metrics token"
+        )
+
+
+@app.get("/metrics", dependencies=[Depends(_require_metrics_token)])
 def metrics_check() -> JSONResponse:
     """Operational metrics: outbox lag, task recovery, checkpoint progress."""
     return JSONResponse(content=metrics_snapshot(engine))
 
 
-@app.get("/health/bootstrap")
+@app.get("/health/bootstrap", dependencies=[Depends(_require_metrics_token)])
 def health_bootstrap() -> dict[str, object]:
     return {
         "status": "ok",

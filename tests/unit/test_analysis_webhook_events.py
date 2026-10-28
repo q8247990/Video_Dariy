@@ -1,14 +1,14 @@
 from sqlalchemy.orm import Session
 
-from src.models.outbox import OutboxEvent
+from src.core.pipeline_constants import TaskType
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.models.webhook_config import WebhookConfig
-from src.services.analysis.constants import WEBHOOK_EVENT_SESSION_ANALYZED
-from src.services.analysis.webhook_events import (
+from src.services.analysis.contracts import WEBHOOK_EVENT_SESSION_ANALYZED
+from src.services.analysis.finalize import (
     enroll_session_analyzed_webhooks,
     find_session_analyzed_subscribers,
 )
-from src.services.pipeline_constants import TaskType
 
 
 def _hook(db: Session, *, enabled: bool, events: list[str]) -> WebhookConfig:
@@ -32,7 +32,7 @@ def test_find_subscribers_filters_by_event_and_enabled(pg_db: Session) -> None:
     assert find_session_analyzed_subscribers(pg_db) == [subscribed.id]
 
 
-def test_enroll_session_analyzed_webhooks_creates_tasklog_and_outbox(pg_db: Session) -> None:
+def test_enroll_session_analyzed_webhooks_creates_tasklog_and_delivery(pg_db: Session) -> None:
     hook = _hook(pg_db, enabled=True, events=[WEBHOOK_EVENT_SESSION_ANALYZED])
     pg_db.commit()
 
@@ -53,7 +53,7 @@ def test_enroll_session_analyzed_webhooks_creates_tasklog_and_outbox(pg_db: Sess
     assert len(task_logs) == 1
     assert task_logs[0].task_target_id == hook.id
 
-    rows = pg_db.query(OutboxEvent).all()
+    rows = pg_db.query(TaskDelivery).all()
     assert len(rows) == 1
     kwargs = rows[0].kwargs_json
     assert kwargs["event_type"] == WEBHOOK_EVENT_SESSION_ANALYZED

@@ -1,5 +1,7 @@
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any
+
+from src.core.contracts import WEBHOOK_SIGNATURE_VERSION
 
 
 def to_json_safe(value: Any) -> Any:
@@ -22,8 +24,8 @@ def build_webhook_event_payload(
     event_type: str,
     data: dict[str, Any],
     *,
-    version: str = "1.0",
-    generated_at: Optional[datetime] = None,
+    version: str = WEBHOOK_SIGNATURE_VERSION,
+    generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     ts = generated_at or datetime.now(timezone.utc)
     return {

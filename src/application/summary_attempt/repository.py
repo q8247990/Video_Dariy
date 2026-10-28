@@ -37,7 +37,7 @@ Transaction contract
 The repository **never commits**. Every method operates on the
 caller-supplied ``Session`` so the attempt row can be written in the
 same transaction as the business write (the ``DailySummary`` upsert and
-the outbox row in Todo 16). ``flush()`` is called where the caller
+the outbox row). ``flush()`` is called where the caller
 needs server-assigned values, never ``commit()``.
 
 Concurrency notes
@@ -56,14 +56,14 @@ Concurrency notes
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
+from src.application.ports.attempt_repository import ClaimedAttempt
 from src.application.summary_attempt.errors import DailySummaryAttemptError
 from src.application.summary_attempt.state_machine import (
     ACTIVE_STATUSES,
@@ -93,22 +93,8 @@ FAILURE_REASON_CANCELLED = "cancelled"
 FAILURE_REASON_TIMEOUT = "timeout"
 
 
-@dataclass(frozen=True)
-class DailySummaryAttemptOutcome:
-    """Result of :meth:`DailySummaryAttemptRepository.claim`.
-
-    Attributes:
-        attempt: The attempt row that now owns the per-date active
-            slot. When ``created`` is ``False`` this is the row a
-            *parallel* caller inserted, not the one we tried to write.
-        created: ``True`` if this call inserted a new row; ``False`` if
-            an active attempt already existed and the caller should
-            treat that row as authoritative (i.e. back off — someone
-            else is already generating this date).
-    """
-
-    attempt: DailySummaryGenerationAttempt
-    created: bool
+#: Backward-compatible name for the shared claim result type.
+DailySummaryAttemptOutcome = ClaimedAttempt
 
 
 class DailySummaryAttemptRepository:
@@ -122,6 +108,11 @@ class DailySummaryAttemptRepository:
     def __init__(self, db_session: Session) -> None:
         self._db = db_session
 
+    @property
+    def session(self) -> Session:
+        """Return the caller-owned session this repository operates on."""
+        return self._db
+
     # ------------------------------------------------------------------
     # Claim (per-date active slot)
     # ------------------------------------------------------------------
@@ -131,8 +122,8 @@ class DailySummaryAttemptRepository:
         *,
         summary_date: date,
         attempt_no: int,
-        triggered_by: Optional[str],
-        task_log_id: Optional[int],
+        triggered_by: str | None,
+        task_log_id: int | None,
     ) -> DailySummaryAttemptOutcome:
         """Attempt to claim a new active attempt for ``summary_date``.
 
@@ -206,7 +197,7 @@ class DailySummaryAttemptRepository:
     # State transitions
     # ------------------------------------------------------------------
 
-    def mark_queued(self, attempt_id: int) -> Optional[DailySummaryGenerationAttempt]:
+    def mark_queued(self, attempt_id: int) -> DailySummaryGenerationAttempt | None:
         """Move ``claimed`` → ``queued`` (the broker accepted the run)."""
         return self._transition(attempt_id, DailySummaryAttemptStatus.QUEUED)
 
@@ -214,9 +205,9 @@ class DailySummaryAttemptRepository:
         self,
         attempt_id: int,
         *,
-        events_count: Optional[int] = None,
-        input_token_estimate: Optional[int] = None,
-    ) -> Optional[DailySummaryGenerationAttempt]:
+        events_count: int | None = None,
+        input_token_estimate: int | None = None,
+    ) -> DailySummaryGenerationAttempt | None:
         """Move ``claimed`` / ``queued`` → ``running``.
 
         ``events_count`` / ``input_token_estimate`` snapshot the LLM
@@ -231,7 +222,7 @@ class DailySummaryAttemptRepository:
             extra["input_token_estimate"] = input_token_estimate
         return self._transition(attempt_id, DailySummaryAttemptStatus.RUNNING, values=extra)
 
-    def mark_succeeded(self, attempt_id: int) -> Optional[DailySummaryGenerationAttempt]:
+    def mark_succeeded(self, attempt_id: int) -> DailySummaryGenerationAttempt | None:
         """Move ``running`` → ``succeeded`` and stamp ``finished_at``."""
         return self._transition(
             attempt_id,
@@ -253,7 +244,7 @@ class DailySummaryAttemptRepository:
         error_type: str,
         last_error: str,
         failure_reason: str,
-    ) -> Optional[DailySummaryGenerationAttempt]:
+    ) -> DailySummaryGenerationAttempt | None:
         """Move ``running`` → ``failed`` with operator-facing diagnostics.
 
         ``failure_reason`` is the caller's coarse classification
@@ -278,7 +269,7 @@ class DailySummaryAttemptRepository:
         attempt_id: int,
         *,
         last_error: str,
-    ) -> Optional[DailySummaryGenerationAttempt]:
+    ) -> DailySummaryGenerationAttempt | None:
         """Move ``claimed`` / ``queued`` / ``running`` → ``cancelled``.
 
         A cancel is an operator action, not a defect: ``error_type``
@@ -301,7 +292,7 @@ class DailySummaryAttemptRepository:
         attempt_id: int,
         *,
         last_error: str,
-    ) -> Optional[DailySummaryGenerationAttempt]:
+    ) -> DailySummaryGenerationAttempt | None:
         """Move ``queued`` / ``running`` → ``timed_out``.
 
         Distinct from ``failed`` on purpose: a timeout means the run
@@ -320,7 +311,7 @@ class DailySummaryAttemptRepository:
             stamp_finished=True,
         )
 
-    def mark_superseded(self, attempt_id: int) -> Optional[DailySummaryGenerationAttempt]:
+    def mark_superseded(self, attempt_id: int) -> DailySummaryGenerationAttempt | None:
         """Move any active state → ``superseded``.
 
         Used when a newer attempt must take over the date (operator
@@ -338,7 +329,7 @@ class DailySummaryAttemptRepository:
     # Reads
     # ------------------------------------------------------------------
 
-    def find_active_for_date(self, summary_date: date) -> Optional[DailySummaryGenerationAttempt]:
+    def find_active_for_date(self, summary_date: date) -> DailySummaryGenerationAttempt | None:
         """Return the active attempt for ``summary_date``, if any.
 
         "Active" is ``claimed`` / ``queued`` / ``running`` — exactly the
@@ -402,7 +393,7 @@ class DailySummaryAttemptRepository:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _insert_claim(self, values: dict[str, Any]) -> Optional[int]:
+    def _insert_claim(self, values: dict[str, Any]) -> int | None:
         """Run the ``ON CONFLICT DO NOTHING`` insert; return the new id.
 
         Returns ``None`` when the insert was skipped because another active
@@ -432,9 +423,9 @@ class DailySummaryAttemptRepository:
         attempt_id: int,
         target: DailySummaryAttemptStatus,
         *,
-        values: Optional[dict[str, Any]] = None,
+        values: dict[str, Any] | None = None,
         stamp_finished: bool = False,
-    ) -> Optional[DailySummaryGenerationAttempt]:
+    ) -> DailySummaryGenerationAttempt | None:
         """Conditionally flip ``attempt_id`` to ``target``.
 
         The ``WHERE status IN (:legal_sources)`` guard is derived from
@@ -520,7 +511,7 @@ def _rowcount(result: Any) -> int:
     Mypy's stubs do not expose ``rowcount`` on :class:`Result`; the
     runtime always populates it for INSERT / UPDATE / DELETE, so it is
     read through ``getattr`` with a default. Same helper shape as
-    :mod:`src.application.outbox.repository`.
+    :mod:`src.services.dispatch.outbox`.
     """
     raw = getattr(result, "rowcount", 0) or 0
     return int(raw)

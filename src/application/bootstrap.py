@@ -20,15 +20,14 @@ Why a dedicated module:
   adapters or Celery objects directly.
 * ``src/api``, ``src/mcp`` and ``src/tasks`` switch from hard-coded
   ``CeleryTaskDispatcher()`` / ``OpenAICompatGatewayFactory()`` to a
-  single ``Container`` injection point — a precondition for Wave 1
-  Todos 6 & 7.
+  single ``Container`` injection point.
 * Tests build ``Container`` instances without monkeypatching
   ``src.infrastructure`` or any global Celery state.
 
 The composition root also binds the
 :class:`~src.application.system_config.LocaleProvider` that
-``src.core.i18n.get_system_default_locale`` delegates to — under Todo 8
-the i18n module no longer touches ``src.db.session`` directly.
+``src.core.i18n.get_system_default_locale`` delegates to, so the i18n
+module never touches ``src.db.session`` directly.
 
 Architectural rules (enforced by ``tests/architecture/test_dependency_boundaries.py``):
 
@@ -45,7 +44,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from src.application.bootstrap_errors import ConfigurationError
@@ -156,8 +155,8 @@ class _CeleryTaskControl(TaskControlPort):
         except Exception:
             active = None
 
-        worker_count: Optional[int] = None
-        active_count: Optional[int] = None
+        worker_count: int | None = None
+        active_count: int | None = None
 
         if ping:
             worker_count = sum(len(v) for v in ping.values() if isinstance(v, list))
@@ -176,14 +175,14 @@ class _CeleryTaskControl(TaskControlPort):
 # ---------------------------------------------------------------------------
 
 
-_production_container: Optional[Container] = None
+_production_container: Container | None = None
 
 
 def get_production_container() -> Container:
     """Return the process-wide production container, built once on first use.
 
     Every entry point (``src.api.deps``, ``src.mcp.tools``,
-    ``src.tasks._container``) resolves through this single instance, so the
+    ``src.application.container_holder``) resolves through this single instance, so the
     process holds exactly one dispatcher / LLM gateway factory / Celery
     control binding rather than one per module.
     """
@@ -224,11 +223,11 @@ def bootstrap_production() -> Container:
 
 def bootstrap_for_tests(
     *,
-    dispatcher: Optional[TaskDispatcherPort] = None,
-    llm_factory: Optional[LLMGatewayFactoryPort] = None,
-    clock: Optional[ClockPort] = None,
-    id_gen: Optional[IdGeneratorPort] = None,
-    task_control: Optional[TaskControlPort] = None,
+    dispatcher: TaskDispatcherPort | None = None,
+    llm_factory: LLMGatewayFactoryPort | None = None,
+    clock: ClockPort | None = None,
+    id_gen: IdGeneratorPort | None = None,
+    task_control: TaskControlPort | None = None,
 ) -> Container:
     """Build a hermetic :class:`Container` for tests.
 

@@ -15,8 +15,6 @@ exception handler, which then calls
 
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy.orm import Session
 
 from src.models.task_log import TaskLog
@@ -31,7 +29,7 @@ class TaskCancellationRequested(Exception):
     """
 
 
-def get_task_log_for_update(db: Session, task_log_id: int) -> Optional[TaskLog]:
+def get_task_log_for_update(db: Session, task_log_id: int) -> TaskLog | None:
     """Re-fetch a TaskLog row inside the cancellation / failure paths.
 
     Returns ``None`` when the row no longer exists (e.g. the

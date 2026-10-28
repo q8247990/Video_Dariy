@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class AnalyzeSessionCommand:
 
 @dataclass(frozen=True)
 class GenerateDailySummaryCommand:
-    target_date_str: Optional[str] = None
+    target_date_str: str | None = None
 
 
 @dataclass(frozen=True)
@@ -34,4 +34,4 @@ class SendWebhookCommand:
 
     event_type: str
     payload: dict[str, Any]
-    webhook_id: Optional[int] = None
+    webhook_id: int | None = None

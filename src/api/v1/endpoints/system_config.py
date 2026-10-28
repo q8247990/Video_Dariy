@@ -18,6 +18,10 @@ from src.services.system_config_registry import (
     validate_updates,
 )
 
+# Never serialise the raw MCP token back to a browser session. The client only
+# needs to know whether one is configured; writes stay one-way.
+_REDACTED_CONFIG_KEYS = frozenset({MCP_TOKEN})
+
 router = APIRouter()
 
 
@@ -30,6 +34,10 @@ def get_system_config(db: DB, current_user: CurrentUser) -> Any:
         result[MCP_TOKEN] = settings.MCP_TOKEN
     if not result[DEFAULT_LOCALE_KEY]:
         result[DEFAULT_LOCALE_KEY] = DEFAULT_LOCALE
+
+    result["mcp_token_set"] = bool(str(result.get(MCP_TOKEN) or "").strip())
+    for key in _REDACTED_CONFIG_KEYS:
+        result.pop(key, None)
     return BaseResponse(data=result)
 
 

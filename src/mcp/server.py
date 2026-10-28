@@ -1,11 +1,12 @@
 import secrets
-from typing import Any, Optional
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
-from src.api.deps import DB
 from src.core.i18n import normalize_locale
+from src.db.session import get_db
 from src.mcp.auth import authorize
 from src.mcp.tools import (
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -15,6 +16,8 @@ from src.mcp.tools import (
 )
 
 router = APIRouter()
+
+DB = Annotated[Session, Depends(get_db)]
 
 JSONRPC_VERSION = "2.0"
 
@@ -31,7 +34,7 @@ def _jsonrpc_error(code: int, message: str, request_id: Any = None) -> dict[str,
     }
 
 
-def _validate_protocol_header(protocol_version: Optional[str]) -> Optional[JSONResponse]:
+def _validate_protocol_header(protocol_version: str | None) -> JSONResponse | None:
     if protocol_version is None:
         return None
     if protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
@@ -49,7 +52,7 @@ def _validate_protocol_header(protocol_version: Optional[str]) -> Optional[JSONR
 
 async def _parse_payload(
     request: Request,
-) -> tuple[Optional[dict[str, Any]], Optional[JSONResponse]]:
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     try:
         payload = await request.json()
     except Exception:
@@ -63,7 +66,7 @@ async def _parse_payload(
 
 def _extract_request_fields(
     payload: dict[str, Any],
-) -> tuple[Any, str, dict[str, Any], Optional[JSONResponse]]:
+) -> tuple[Any, str, dict[str, Any], JSONResponse | None]:
     request_id = payload.get("id")
     method = payload.get("method")
     params = payload.get("params") or {}
@@ -120,8 +123,8 @@ def _handle_tools_call(
     request: Request,
     request_id: Any,
     params: dict[str, Any],
-    source: Optional[str],
-    session_id: Optional[str],
+    source: str | None,
+    session_id: str | None,
     locale: str | None = None,
 ) -> JSONResponse:
     tool_name = params.get("name")
@@ -158,8 +161,8 @@ def _dispatch_method(
     request_id: Any,
     method: str,
     params: dict[str, Any],
-    source: Optional[str],
-    session_id: Optional[str],
+    source: str | None,
+    session_id: str | None,
     locale: str | None = None,
 ) -> Response:
     if method == "initialize":
@@ -180,10 +183,10 @@ def _dispatch_method(
 async def _handle_post(
     request: Request,
     db: DB,
-    token: Optional[str],
-    source: Optional[str],
-    session_id: Optional[str],
-    protocol_version: Optional[str],
+    token: str | None,
+    source: str | None,
+    session_id: str | None,
+    protocol_version: str | None,
     locale: str | None = None,
 ) -> Response:
     protocol_error = _validate_protocol_header(protocol_version)
@@ -210,12 +213,12 @@ async def _handle_post(
 async def mcp_endpoint(
     request: Request,
     db: DB,
-    x_mcp_token: Optional[str] = Header(default=None, alias="X-MCP-Token"),
-    x_mcp_source: Optional[str] = Header(default=None, alias="X-MCP-Source"),
-    mcp_session_id: Optional[str] = Header(default=None, alias="Mcp-Session-Id"),
-    mcp_protocol_version: Optional[str] = Header(default=None, alias="MCP-Protocol-Version"),
-    x_locale: Optional[str] = Header(default=None, alias="X-Locale"),
-    accept_language: Optional[str] = Header(default=None, alias="Accept-Language"),
+    x_mcp_token: str | None = Header(default=None, alias="X-MCP-Token"),
+    x_mcp_source: str | None = Header(default=None, alias="X-MCP-Source"),
+    mcp_session_id: str | None = Header(default=None, alias="Mcp-Session-Id"),
+    mcp_protocol_version: str | None = Header(default=None, alias="MCP-Protocol-Version"),
+    x_locale: str | None = Header(default=None, alias="X-Locale"),
+    accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> Response:
     if request.method == "GET":
         return Response(status_code=200, content="", media_type="text/event-stream")

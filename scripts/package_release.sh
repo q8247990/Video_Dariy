@@ -84,6 +84,8 @@ docker build -t "${BACKEND_IMAGE}" "${ROOT_DIR}"
 echo "[2/7] 构建 frontend 镜像: ${FRONTEND_IMAGE}"
 docker build -t "${FRONTEND_IMAGE}" "${ROOT_DIR}/frontend"
 
+echo "[3/7] 复制部署文件"
+cp "${ROOT_DIR}/docker-compose.yml" "${PACKAGE_DIR}/docker-compose.yml"
 
 echo "[4/7] 导出镜像 tar.gz"
 docker save "${BACKEND_IMAGE}" | gzip > "${IMAGES_DIR}/backend_${RELEASE_TAG}.tar.gz"
@@ -104,7 +106,7 @@ EOF
   sha256sum ./*.tar.gz > sha256sum.txt
 )
 
-echo "[7/7] 生成客户部署 README"
+echo "[6/7] 生成客户部署 README"
 cat > "${PACKAGE_DIR}/README.md" <<EOF
 # 交付部署说明
 
@@ -174,5 +176,16 @@ docker compose logs -f frontend
 docker compose down
 \`\`\`
 EOF
+
+echo "[7/7] 校验交付包"
+(
+  cd "${IMAGES_DIR}"
+  sha256sum -c sha256sum.txt
+)
+
+if [[ ! -f "${PACKAGE_DIR}/docker-compose.yml" ]]; then
+  echo "错误: 交付包缺少 docker-compose.yml" >&2
+  exit 1
+fi
 
 echo "打包完成: ${PACKAGE_DIR}"

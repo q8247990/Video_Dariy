@@ -10,23 +10,25 @@ unit-testable against a minimal TaskLog table.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus
 from src.models.task_log import TaskLog
 from src.services.dispatch.dedupe import ensure_dict_detail
-from src.services.pipeline_constants import TaskStatus
+from src.services.pipeline_state import apply_task_status
 
 
 def apply_running_state(
+    db: Session,
     target: TaskLog,
     *,
     detail_payload: dict[str, Any],
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     dedupe_key: str,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     now: datetime,
     lease_seconds: int,
 ) -> TaskLog:
@@ -43,7 +45,13 @@ def apply_running_state(
     target.task_target_id = task_target_id
     target.dedupe_key = dedupe_key
     target.queue_task_id = queue_task_id or target.queue_task_id
-    target.status = TaskStatus.RUNNING
+    apply_task_status(
+        db,
+        target,
+        TaskStatus.RUNNING,
+        reason="worker_bound",
+        source="apply_running_state",
+    )
     target.started_at = target.started_at or now
     target.lease_owner = queue_task_id or target.lease_owner
     target.last_heartbeat_at = now
@@ -58,7 +66,7 @@ def mark_superseded_pending(
     *,
     bind_id: int,
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     dedupe_key: str,
     now: datetime,
 ) -> None:
@@ -86,7 +94,13 @@ def mark_superseded_pending(
         item_detail = ensure_dict_detail(item.detail_json)
         if str(item_detail.get("dedupe_key") or "") != dedupe_key:
             continue
-        item.status = TaskStatus.CANCELLED
+        apply_task_status(
+            db,
+            item,
+            TaskStatus.CANCELLED,
+            reason="superseded_by_running_binding",
+            source="mark_superseded_pending",
+        )
         item.finished_at = now
         item.message = "Superseded by running task binding"
 

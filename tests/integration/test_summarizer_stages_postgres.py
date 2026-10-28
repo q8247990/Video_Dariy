@@ -42,7 +42,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import src.db.base  # noqa: F401  (registers every model on Base.metadata)
-from src.application.outbox import contracts as outbox_contracts
 from src.application.summary_attempt.repository import DailySummaryAttemptRepository
 from src.application.summary_attempt.state_machine import DailySummaryAttemptStatus
 from src.application.summary_publication import (
@@ -72,14 +71,14 @@ from src.services.summarizer import (
 
 @pytest.fixture(autouse=True)
 def _reset_emitted_event_ids() -> None:
-    outbox_contracts._reset_emitted_event_ids_for_testing()
+    return None
 
 
 @pytest.fixture(autouse=True)
 def _truncate_summarizer_tables(postgres_migrated_engine: Engine) -> None:
     """Wipe the four tables the summarizer stages touch (in FK-safe order)."""
     with postgres_migrated_engine.begin() as conn:
-        conn.execute(sql_text("TRUNCATE TABLE outbox_event RESTART IDENTITY CASCADE"))
+        conn.execute(sql_text("TRUNCATE TABLE task_delivery RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE daily_summary RESTART IDENTITY CASCADE"))
         conn.execute(
             sql_text("TRUNCATE TABLE daily_summary_generation_attempt RESTART IDENTITY CASCADE")

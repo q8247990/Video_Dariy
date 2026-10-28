@@ -72,6 +72,7 @@
 
   "source.not_found": "Source not found",
   "source.has_running_task": "Source has running task: {task_type}",
+  "source.has_retained_history": "Cannot delete the source while retained event history exists",
   "source.invalid_id": "Invalid source id: {id}",
 
   "auth.admin_already_init": "Admin already initialized",

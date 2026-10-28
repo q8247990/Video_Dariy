@@ -34,8 +34,6 @@ that CHECK; callers that skip this helper risk an
 
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy.orm import Session
 
 from src.models.pipeline_transition_log import PipelineTransitionLog
@@ -58,9 +56,9 @@ def record(
     aggregate_id: int,
     from_status: str,
     to_status: str,
-    reason: Optional[str],
+    reason: str | None,
     source: str,
-    task_log_id: Optional[int] = None,
+    task_log_id: int | None = None,
 ) -> None:
     """Append a single audit row to the caller's session.
 

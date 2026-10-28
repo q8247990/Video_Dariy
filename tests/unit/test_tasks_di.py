@@ -3,7 +3,7 @@
 These tests prove the architecture-boundary requirement that
 ``src/tasks/*`` never imports ``src.infrastructure.*`` directly. Instead
 each task module reads the composition-root ``Container`` exposed by
-:mod:`src.tasks._container`, which is replaced with a fake-bound
+:mod:`src.application.container_holder`, which is replaced with a fake-bound
 container for the duration of each test. The fake port records every
 dispatch / build call, so the assertions confirm:
 
@@ -27,6 +27,7 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.orm import Session
 
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeLLMGatewayFactory, FakeTaskDispatcher
 from src.application.pipeline.commands import AnalyzeSessionCommand
@@ -34,7 +35,6 @@ from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.maintenance import dispatch_hot_builds
-from src.tasks import _container
 from src.tasks.session_build import run_hot_build
 
 
@@ -144,7 +144,7 @@ def test_task_maintenance_dispatch_uses_container(monkeypatch: pytest.MonkeyPatc
     db = MagicMock()
     db.query.return_value.filter.return_value.all.return_value = sources
     monkeypatch.setattr("src.services.maintenance.hot_scheduling.get_config", lambda _db, _key: 300)
-    dispatch_hot_builds(db)
+    dispatch_hot_builds(db, dispatcher=dispatcher)
 
     assert [c.source_id for c in dispatcher.dispatched_session_build] == [1, 2]
     assert [c.scan_mode for c in dispatcher.dispatched_session_build] == ["hot", "hot"]

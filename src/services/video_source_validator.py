@@ -2,7 +2,6 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from src.adapters.xiaomi_parser import XiaomiDirectoryParser
 from src.core.config import settings
@@ -13,9 +12,9 @@ class VideoPathValidationResult:
     valid: bool
     message: str
     file_count: int = 0
-    earliest_file_time: Optional[datetime] = None
-    latest_file_time: Optional[datetime] = None
-    resolved_path: Optional[str] = None
+    earliest_file_time: datetime | None = None
+    latest_file_time: datetime | None = None
+    resolved_path: str | None = None
 
 
 def validate_video_source_path(path_text: str) -> VideoPathValidationResult:
@@ -67,7 +66,7 @@ def validate_video_source_path(path_text: str) -> VideoPathValidationResult:
     )
 
 
-def _resolve_allowed_path(path_text: str) -> Optional[Path]:
+def _resolve_allowed_path(path_text: str) -> Path | None:
     if not path_text or not path_text.strip():
         return None
 

@@ -26,12 +26,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import src.db.base  # noqa: F401 — registers every model on Base.metadata
-from src.application.outbox import contracts as outbox_contracts
-from src.models.outbox import OutboxEvent
+from src.core.pipeline_constants import TaskStatus, TaskType
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.session_build.persistence import find_stuck_sealed_sessions
 from src.tasks.session_build import run_hot_build
 
@@ -45,13 +44,13 @@ pytestmark = pytest.mark.postgres
 
 @pytest.fixture(autouse=True)
 def _reset_emitted_event_ids() -> None:
-    outbox_contracts._reset_emitted_event_ids_for_testing()
+    return None
 
 
 @pytest.fixture(autouse=True)
 def _truncate_session_build_tables(postgres_migrated_engine: Engine) -> None:
     with postgres_migrated_engine.begin() as conn:
-        conn.execute(sql_text("TRUNCATE TABLE outbox_event RESTART IDENTITY CASCADE"))
+        conn.execute(sql_text("TRUNCATE TABLE task_delivery RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE task_log RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE pipeline_transition_log RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE video_session_file_rel RESTART IDENTITY CASCADE"))
@@ -126,10 +125,10 @@ def _analysis_task_logs(db: Session, session_id: int) -> list[TaskLog]:
     )
 
 
-def _analysis_outboxes(db: Session, session_id: int) -> list[OutboxEvent]:
+def _analysis_outboxes(db: Session, session_id: int) -> list[TaskDelivery]:
     task_log_ids = [log.id for log in _analysis_task_logs(db, session_id)]
     return (
-        db.query(OutboxEvent).filter(OutboxEvent.task_log_id.in_(task_log_ids)).all()
+        db.query(TaskDelivery).filter(TaskDelivery.task_log_id.in_(task_log_ids)).all()
         if task_log_ids
         else []
     )

@@ -99,16 +99,16 @@ aborts on orphaned references, so it also requires a verified backup
 before running.
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "20260904_0022"
-down_revision: Union[str, None] = "20260902_0021"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260902_0021"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 DROPPED_COLUMN: str = "event_types_json"
 TARGET_TABLE: str = "webhook_config"

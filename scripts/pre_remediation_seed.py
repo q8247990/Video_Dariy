@@ -10,7 +10,7 @@
 - 不接入默认 pytest 运行；由 ``scripts/restore_pre_remediation_seed.py`` 或
   带 ``@pytest.mark.postgres`` 的迁移测试显式调用。
 - 目标库需已执行 ``alembic upgrade head``（可用
-  ``tests.conftest.run_alembic_upgrade_head`` 或脚本 ``--with-alembic``）。
+  ``scripts.restore_pre_remediation_seed`` 的 ``--with-alembic``）。
 """
 
 from __future__ import annotations

@@ -1,83 +1,70 @@
-"""Session-build pipeline stage package (Wave 5, Todo 20).
+"""Session-build stages.
 
-The Celery task in :mod:`src.tasks.session_build` is the thin
-wrapper that opens a ``task_db_session`` and binds the TaskLog;
-this package owns the five execution stages the wrapper
-delegates to:
-
-* :mod:`.discovery` — walk the configured root path, parse
-  the Xiaomi layout, return sorted ``DiscoveredFile`` rows.
-  The parser integration is the only place this stage reaches
-  for :mod:`src.adapters.xiaomi_parser`.
-* :mod:`.dedupe` — the :class:`VideoFile` boundary. Queries
-  existing file-path hashes in a single batch, inserts new
-  rows under a savepoint so the unique-index race is silent,
-  and returns the post-dedupe :class:`InsertedFile` list.
-* :mod:`.reducer` — the **pure** reducer. Operates on in-memory
-  records; tests can call :func:`reducer.reduce_files` against
-  hand-built dataclasses without standing up SQLAlchemy.
-* :mod:`.seal_policy` — half pure, half persistence. The pure
-  half (:func:`select_sessions_to_seal`) decides which
-  ``OPEN`` sessions to seal; the persistence half
-  (:func:`apply_seal_transitions`) issues the
-  ``OPEN → SEALED`` transitions through
-  :func:`src.services.pipeline_state.transition_session`.
-* :mod:`.persistence` — applies the reducer's
-  :class:`ReducerPlan` to the database (new
-  :class:`VideoSession` rows, ``VideoSessionFileRel``
-  relations, session ``session_end_time`` widen).
-* :mod:`.runner` — the **shared** orchestrator the Celery
-  task delegates to. Hot and full share one body
-  (:func:`runner.run`); :func:`runner.run_hot` /
-  :func:`runner.run_full` are thin convenience wrappers that
-  pin the ``scan_mode`` argument.
-
-Stages are intentionally side-effect-free except for the
-persistence module (``persistence``) and the persistence half
-of ``seal_policy``. The reducer is the only module the test
-suite can drive without a SQLAlchemy session.
-
-The package deliberately avoids reaching into
-:mod:`src.application.*` so the architecture-boundary test
-keeps treating :mod:`src.services` as the pure-business-rules
-layer (Todo 5). Analyzer dispatch is the only
-:mod:`src.application.*` consumer and lives in the slim Celery
-task — the runner returns the :class:`SealedSessionInfo`
-envelope and the task iterates it.
+``types``
+    Value objects and tunables shared by the scanner.
+``discovery``
+    Parse the camera layout and insert unseen files.
+``reducer``
+    Pure merge plan: which files join which session.
+``persistence``
+    Apply the reducer plan to the database.
+``runner``
+    Sealing policy plus the shared hot/full entry point.
 """
 
 from __future__ import annotations
 
-from src.services.session_build import dedupe, discovery, persistence, runner, seal_policy
-from src.services.session_build.reducer import (
-    EXTEND,
-    NEW_SESSION,
-    ReducerAppendAction,
-    ReducerPlan,
-    ReducerSessionToCreate,
-    reduce_files,
-)
-from src.services.session_build.types import (
+from src.services.session_build.discovery import (
     DiscoveredFile,
     InsertedFile,
+    build_parser,
+    dedupe_files,
+    discover_files,
+)
+from src.services.session_build.persistence import (
+    apply_file_actions,
+    find_open_sessions_for_source,
+    find_stuck_sealed_sessions,
+)
+from src.services.session_build.reducer import EXTEND, NEW_SESSION, ReducerPlan, reduce_files
+from src.services.session_build.runner import (
+    acquire_source_advisory_lock,
+    apply_seal_transitions,
+    run,
+    run_full,
+    run_hot,
+    select_sessions_to_seal,
+)
+from src.services.session_build.types import (
+    HASH_QUERY_CHUNK_SIZE,
+    MERGE_GAP_SECONDS,
+    SEAL_BUFFER_SECONDS,
     SealedSessionInfo,
     SessionBuildResult,
 )
 
 __all__ = [
-    "DiscoveredFile",
     "EXTEND",
-    "InsertedFile",
+    "HASH_QUERY_CHUNK_SIZE",
+    "MERGE_GAP_SECONDS",
     "NEW_SESSION",
-    "ReducerAppendAction",
+    "SEAL_BUFFER_SECONDS",
+    "DiscoveredFile",
+    "InsertedFile",
     "ReducerPlan",
-    "ReducerSessionToCreate",
     "SealedSessionInfo",
     "SessionBuildResult",
-    "dedupe",
-    "discovery",
-    "persistence",
+    "acquire_source_advisory_lock",
+    "apply_file_actions",
+    "apply_seal_transitions",
+    "build_parser",
+    "dedupe_files",
+    "discover_files",
+    "find_open_sessions_for_source",
+    "find_stuck_sealed_sessions",
     "reduce_files",
-    "runner",
-    "seal_policy",
+    "run",
+    "run_full",
+    "run_hot",
+    "select_sessions_to_seal",
 ]

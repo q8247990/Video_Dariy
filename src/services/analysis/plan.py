@@ -1,16 +1,4 @@
-"""Analysis work planning for the analyzer pipeline.
-
-A session's work plan is its ordered list of video files: one
-:class:`SubChunkPlan` per file, one vision-model call per plan item.
-The plan also carries the deterministic ``analysis_run_id`` fingerprint
-that anchors the checkpoint fencing contract.
-
-The fingerprint hashes each file's identity (path + size + mtime) plus
-a plan-version salt, so changing the planning scheme yields a fresh
-``analysis_run_id`` and old checkpoints no longer match (clean re-run)
-without any schema migration. Re-running on unchanged files is
-bit-identical.
-"""
+"""Analysis work planning: one plan item per video file plus the deterministic run id."""
 
 from __future__ import annotations
 
@@ -24,13 +12,11 @@ from sqlalchemy.orm import Session
 
 from src.services.session_analysis_video import SubChunk, build_file_sub_chunks
 
-#: Bump when the work-planning scheme changes. It participates in the
-#: ``analysis_run_id`` hash so a scheme change invalidates prior
-#: checkpoints (they no longer match the new run id) instead of
-#: mis-matching them positionally.
+# --- chunk_plan.py ---
 PLAN_VERSION: int = 2
 
 
+# --- chunk_plan.py ---
 @dataclass(frozen=True)
 class SubChunkPlan:
     """A single sub-chunk work item — the unit the LLM sees once."""
@@ -42,6 +28,7 @@ class SubChunkPlan:
     file_paths: tuple[str, ...]
 
 
+# --- chunk_plan.py ---
 @dataclass(frozen=True)
 class AnalysisPlan:
     """The plan produced for one session analysis run."""
@@ -54,6 +41,7 @@ class AnalysisPlan:
         return len(self.sub_chunks)
 
 
+# --- chunk_plan.py ---
 def _file_identities(paths: Iterable[str]) -> list[dict[str, Any]]:
     identities: list[dict[str, Any]] = []
     for path in paths:
@@ -65,6 +53,7 @@ def _file_identities(paths: Iterable[str]) -> list[dict[str, Any]]:
     return identities
 
 
+# --- chunk_plan.py ---
 def analysis_run_id_for_paths(paths: Iterable[str]) -> str:
     """Stable per-run fingerprint hashed from file identities + plan version.
 
@@ -80,6 +69,7 @@ def analysis_run_id_for_paths(paths: Iterable[str]) -> str:
     return sha256(encoded).hexdigest()
 
 
+# --- chunk_plan.py ---
 def _plan_item(sub_chunk: SubChunk) -> SubChunkPlan:
     return SubChunkPlan(
         chunk_index=sub_chunk.chunk_index,
@@ -90,6 +80,7 @@ def _plan_item(sub_chunk: SubChunk) -> SubChunkPlan:
     )
 
 
+# --- chunk_plan.py ---
 def build_analysis_plan(db: Session, session_id: int) -> AnalysisPlan:
     """Build the file-level work plan for one session.
 
@@ -105,6 +96,7 @@ def build_analysis_plan(db: Session, session_id: int) -> AnalysisPlan:
     )
 
 
+# --- chunk_plan.py ---
 def sub_chunk_fingerprint(
     *,
     system_prompt: str,
@@ -132,8 +124,8 @@ def sub_chunk_fingerprint(
 
 
 __all__ = [
-    "PLAN_VERSION",
     "AnalysisPlan",
+    "PLAN_VERSION",
     "SubChunkPlan",
     "analysis_run_id_for_paths",
     "build_analysis_plan",

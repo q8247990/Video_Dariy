@@ -1,4 +1,4 @@
-"""v2: 视频识别 prompt 构建器（Jinja2 模板版）。"""
+"""Video-recognition prompt builder (Jinja2 templates)."""
 
 from datetime import datetime
 from typing import Any

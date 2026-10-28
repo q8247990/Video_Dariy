@@ -47,27 +47,30 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
-from src.application.outbox.contracts import OutboxCommand
-from src.application.outbox.enqueue import enqueue_command
 from src.application.pipeline.commands import AnalyzeSessionCommand
+from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.core.config import settings
-from src.models.task_log import TaskLog
-from src.models.video_session import VideoSession
-from src.services.pipeline_constants import (
-    ScanMode,
+from src.core.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
 from src.services.pipeline_state import transition_session, transition_task_log
 
 logger = logging.getLogger(__name__)
 
 
-def resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
+def resume_lost_analysis(
+    db: Session,
+    task_log: TaskLog,
+    now: datetime,
+    *,
+    dispatcher: TaskDispatcherPort,
+) -> bool:
     """Re-queue a lease-expired analysis worker via the outbox dispatcher.
 
     Returns ``True`` when a fresh dispatch was issued; ``False`` when
@@ -75,22 +78,27 @@ def resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
     in that case) or when the CAS UPDATE lost the race against a
     concurrent recovery beat.
 
-    Mirrors the pre-Wave-5 behaviour exactly — the existing
+    Mirrors the previous behaviour exactly — the existing
     ``tests/unit/test_task_maintenance.py::test_worker_loss_after_checkpoint_auto_resumes_exactly_once``
     and ``tests/integration/test_task_maintenance_postgres.py`` PG
     concurrency case are the load-bearing specs.
     """
     if task_log.task_type != TaskType.SESSION_ANALYSIS:
         return False
-    if task_log.task_target_id is None or task_log.cancel_requested:
+    if (
+        task_log.task_target_id is None
+        or task_log.cancel_requested
+        or task_log.status not in ("running", "pending")
+    ):
         return False
+    pre_timeout_status = TaskStatus(str(task_log.status))
     next_attempt = task_log.recovery_attempt + 1
     session = db.query(VideoSession).filter(VideoSession.id == task_log.task_target_id).first()
     if next_attempt > settings.ANALYSIS_RECOVERY_MAX_ATTEMPTS:
         claimed = transition_task_log(
             db,
             task_log.id,
-            TaskStatus.RUNNING,
+            pre_timeout_status,
             TaskStatus.TIMEOUT,
             reason="analysis_recovery_limit_reached",
             source="resume_lost_analysis",
@@ -116,7 +124,7 @@ def resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
     claimed = transition_task_log(
         db,
         task_log.id,
-        TaskStatus.RUNNING,
+        pre_timeout_status,
         TaskStatus.TIMEOUT,
         reason="analysis_lease_expired",
         source="resume_lost_analysis",
@@ -140,33 +148,21 @@ def resume_lost_analysis(db: Session, task_log: TaskLog, now: datetime) -> bool:
     priority = "hot"
     if isinstance(task_log.detail_json, dict):
         priority = str(task_log.detail_json.get("priority") or priority)
-    queue = "analysis_hot" if priority == ScanMode.HOT else "analysis_full"
-    outbox_command = OutboxCommand(
-        task_name="src.tasks.analyzer.analyze_session_task",
-        queue=queue,
-        args=(task_log.task_target_id,),
-        kwargs={"priority": priority},
-    )
-    # The OutboxEvent write targets the recovered ``task_log`` (not a fresh
-    # ``PENDING`` row the dispatcher's ``create_pending_task_log`` would mint
-    # in the same session). The ``inspect(...)`` guard skips the write when
-    # the ``outbox_event`` table is absent, so the recovery still flips the
-    # row to ``TIMEOUT`` and records the dispatch.
-    if db.bind is not None and inspect(db.bind).has_table("outbox_event"):
-        outcome = enqueue_command(db, outbox_command, task_log)
-        event_id_str = str(outcome.event.event_id)
-        task_log.queue_task_id = event_id_str
+    recovered_target_id = task_log.task_target_id
+    # Release the lock the CAS UPDATE took on the TIMEOUT row before the
+    # dispatch opens its own transaction; otherwise a concurrent recovery
+    # beat blocks until this session ends instead of seeing the flip.
     db.commit()
-    from src.tasks._container import get_container
 
-    get_container().dispatcher.dispatch_analyze_session(
+    dispatcher.dispatch_analyze_session(
         db,
         AnalyzeSessionCommand(
-            session_id=task_log.task_target_id,
+            session_id=recovered_target_id,
             priority=priority,
             recovery_attempt=next_attempt,
         ),
     )
+    db.commit()
     return True
 
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -10,34 +10,34 @@ class EventBase(BaseModel):
     source_id: int
     session_id: int
     event_start_time: datetime
-    event_end_time: Optional[datetime] = None
-    object_type: Optional[str] = None
-    action_type: Optional[str] = None
+    event_end_time: datetime | None = None
+    object_type: str | None = None
+    action_type: str | None = None
     description: str
-    confidence_score: Optional[float] = None
-    event_type: Optional[str] = None
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    detail: Optional[str] = None
-    offset_start_sec: Optional[float] = None
-    offset_end_sec: Optional[float] = None
-    related_entities_json: Optional[Any] = None
-    observed_actions_json: Optional[Any] = None
-    interpreted_state_json: Optional[Any] = None
-    focus_matches_json: Optional[Any] = None
-    raw_result: Optional[Any] = None
+    confidence_score: float | None = None
+    event_type: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    detail: str | None = None
+    offset_start_sec: float | None = None
+    offset_end_sec: float | None = None
+    related_entities_json: Any | None = None
+    observed_actions_json: Any | None = None
+    interpreted_state_json: Any | None = None
+    focus_matches_json: Any | None = None
+    raw_result: Any | None = None
 
 
 class EventResponse(EventBase):
     id: int
-    session_start_time: Optional[datetime] = None
-    session_total_duration_seconds: Optional[int] = None
-    session_analysis_status: Optional[str] = None
+    session_start_time: datetime | None = None
+    session_total_duration_seconds: int | None = None
+    session_analysis_status: str | None = None
     created_at: datetime
     updated_at: datetime
 
     # Optional field if we attach tags later
-    tags: Optional[List[TagResponse]] = None
+    tags: list[TagResponse] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

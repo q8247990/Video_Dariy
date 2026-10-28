@@ -1,48 +1,18 @@
-"""LLM generation helpers — single-pass and serial (per-subject + rollup).
-
-Each helper takes the prepared :class:`~src.services.summarizer.evidence.Evidence`
-plus a fresh ``LLMGatewayPort`` and produces the structured summary
-payload (``overall_summary``, ``subject_sections``,
-``attention_items``) and the bookkeeping details the Celery task
-writes back to the ``task_log`` (``prompt_chars``, ``parse_retried``).
-
-The gateway is *not* opened by these helpers — the caller (the
-orchestrator) opens and closes it. This keeps the helpers easy to
-unit-test (a stub gateway suffices) and matches the analyzer's
-"no long-lived DB connection during LLM call" pattern: the caller
-passes in a gateway built from the composition root
-``Container.llm_factory``, the LLM HTTP call happens entirely
-inside the helper, and the orchestrator closes the gateway after
-the helper returns.
-
-The two paths:
-
-* :func:`generate_single_pass_summary_payload` — one
-  ``chat_completion`` call with the full single-pass prompt. Falls
-  back to a parse-retry on the same prompt; falls back to the
-  stable empty-day text on the second parse failure.
-* :func:`generate_serial_summary_payload` — one
-  ``chat_completion`` call per subject + one for the rollup. The
-  same parse-retry policy applies, plus a per-subject fallback text
-  when a single subject fails.
-
-Both helpers call :func:`record_token_usage` after every successful
-``chat_completion`` so the ``LLMUsageLog`` row is fresh at the end.
-The caller's ``db`` transaction is *not* held during the LLM call:
-the token usage row is written in the *next* call-site transaction
-(the orchestrator commits the token writes as part of the
-post-LLM commit boundary).
-"""
+"""LLM generation: parsers, clamp/normalisation and the single/serial payload builders."""
 
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from src.core.i18n.locale_directive import get_retry_json_instruction
 from src.models.event_record import EventRecord
-from src.services.daily_summary.output_parser import DailySummaryOutputError
+from src.services.daily_summary.output_parser import (
+    DailySummaryOutputError,
+    parse_daily_summary_output,
+)
+from src.services.llm_output_utils import extract_json_object, strip_code_block
 from src.services.llm_qos import record_token_usage
 from src.services.prompt_builder.compression.daily_summary_compressor import (
     compress_daily_input,
@@ -51,27 +21,187 @@ from src.services.prompt_builder.v2.daily_summary import (
     build_daily_rollup_prompt,
     build_subject_summary_prompt,
 )
-from src.services.summarizer.helpers import (
+from src.services.summarizer.prepare import (
     build_fallback_overall_summary,
     build_subject_fallback_summary,
     clean_generated_text,
     complete_subject_sections,
-)
-from src.services.summarizer.parsing import (
-    parse_daily_summary_output,
-    parse_rollup_output,
-    parse_subject_summary_output,
+    estimate_detail_length,
+    normalise_attention_items,
+    trim_sentences_to_chars,
+    truncate_for_summary,
 )
 
+
+# --- parsing.py ---
+def extract_json_payload(raw_text: str) -> dict[str, Any]:
+    """Strip code fences, find the JSON object, return it as ``dict``.
+
+    Raises:
+        :class:`DailySummaryOutputError` when no JSON object is found
+        or the body cannot be parsed.
+    """
+    text = strip_code_block(raw_text or "")
+    try:
+        payload = extract_json_object(text)
+    except ValueError as exc:
+        raise DailySummaryOutputError(f"Invalid JSON output: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise DailySummaryOutputError("LLM JSON response must be an object")
+    return payload
+
+
+# --- parsing.py ---
+def parse_subject_summary_output(raw_text: str, *, subject_name: str) -> tuple[str, bool]:
+    """Parse the per-subject serial-path output.
+
+    Returns ``(summary, attention_needed)``. Falls back to the
+    truncated ``overall_summary`` when ``summary`` is empty but the
+    structured ``subject_sections`` list contains a match. The
+    fallback exists because some models emit the same envelope for
+    both subject and rollup calls — when the per-subject call
+    returns a full summary structure we still want a usable answer.
+
+    Raises:
+        :class:`DailySummaryOutputError` when no usable summary can
+        be extracted.
+    """
+    payload = extract_json_payload(raw_text)
+
+    summary = str(payload.get("summary") or "").strip()
+    attention_needed = bool(payload.get("attention_needed"))
+    if summary:
+        return summary, attention_needed
+
+    if isinstance(payload.get("subject_sections"), list):
+        parsed = parse_daily_summary_output(raw_text)
+        matched = None
+        for item in parsed.subject_sections:
+            if item.subject_name == subject_name:
+                matched = item
+                break
+        target = matched or (parsed.subject_sections[0] if parsed.subject_sections else None)
+        if target is not None:
+            return target.summary, bool(target.attention_needed)
+
+    fallback_text = str(payload.get("overall_summary") or "").strip()
+    if fallback_text:
+        return truncate_for_summary(fallback_text, 120), False
+
+    raise DailySummaryOutputError("subject summary output missing summary")
+
+
+# --- parsing.py ---
+def parse_rollup_output(raw_text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Parse the daily-rollup call's output.
+
+    Returns ``(overall_summary, attention_items)``. When the rollup
+    fails validation but emits a structured ``subject_sections``
+    list, we still recover a usable ``overall_summary`` from
+    :func:`parse_daily_summary_output` so the caller can decide
+    between the retry path and the fallback.
+    """
+    payload = extract_json_payload(raw_text)
+
+    overall_summary = str(payload.get("overall_summary") or "").strip()
+    attention_items = payload.get("attention_items")
+
+    if not overall_summary and isinstance(payload.get("subject_sections"), list):
+        parsed = parse_daily_summary_output(raw_text)
+        return parsed.overall_summary, [item.model_dump() for item in parsed.attention_items]
+
+    normalised = normalise_attention_items(
+        attention_items if isinstance(attention_items, list) else []
+    )
+
+    if not overall_summary:
+        raise DailySummaryOutputError("rollup output missing overall_summary")
+
+    return overall_summary, normalised
+
+
+# --- normalization.py ---
+_MAX_TOTAL_CHARS: int = 900
+
+
+# --- normalization.py ---
+_DEFAULT_OVERALL_MIN: int = 120
+
+
+# --- normalization.py ---
+_SUBJECT_BUDGET_CHARS: int = 80
+
+
+# --- normalization.py ---
+_ATTENTION_BUDGET_CHARS: int = 60
+
+
+# --- normalization.py ---
+def clamp_summary_payload(
+    overall_summary: str,
+    subject_sections: list[dict[str, Any]],
+    attention_items: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return ``(overall, sections, attention)`` clamped to the budget."""
+    normalized_sections: list[dict[str, Any]] = []
+    for item in subject_sections:
+        if not isinstance(item, dict):
+            continue
+        current = dict(item)
+        current["summary"] = clean_generated_text(str(current.get("summary") or ""))
+        normalized_sections.append(current)
+
+    normalized_attention: list[dict[str, Any]] = []
+    for item in attention_items[:3]:
+        if not isinstance(item, dict):
+            continue
+        current = dict(item)
+        current["summary"] = clean_generated_text(str(current.get("summary") or ""))
+        normalized_attention.append(current)
+
+    normalized_overall = clean_generated_text(overall_summary)
+
+    detail_len = estimate_detail_length(normalized_sections, normalized_attention)
+    if len(normalized_overall) + detail_len <= _MAX_TOTAL_CHARS:
+        return normalized_overall, normalized_sections, normalized_attention
+
+    # 1) clamp overall first while leaving a full-sentence budget
+    max_overall_len = max(_DEFAULT_OVERALL_MIN, _MAX_TOTAL_CHARS - detail_len)
+    clamped_overall = trim_sentences_to_chars(normalized_overall, max_overall_len)
+
+    if len(clamped_overall) + detail_len <= _MAX_TOTAL_CHARS:
+        return clamped_overall, normalized_sections, normalized_attention
+
+    # 2) clamp each subject summary to 80 chars
+    for item in normalized_sections:
+        item["summary"] = trim_sentences_to_chars(
+            str(item.get("summary") or ""), _SUBJECT_BUDGET_CHARS
+        )
+
+    detail_len = estimate_detail_length(normalized_sections, normalized_attention)
+    if len(clamped_overall) + detail_len <= _MAX_TOTAL_CHARS:
+        return clamped_overall, normalized_sections, normalized_attention
+
+    # 3) finally clamp each attention summary to 60 chars
+    for item in normalized_attention:
+        item["summary"] = trim_sentences_to_chars(
+            str(item.get("summary") or ""), _ATTENTION_BUDGET_CHARS
+        )
+
+    return clamped_overall, normalized_sections, normalized_attention
+
+
+# --- generation.py ---
 logger = logging.getLogger(__name__)
 
 
+# --- generation.py ---
 def _record_token(
     db: Any,
     *,
     client: Any,
     provider_id: int,
-    provider_name_snapshot: Optional[str],
+    provider_name_snapshot: str | None,
 ) -> None:
     """Write the gateway's last-usage row into ``LLMUsageLog``."""
     usage = client.get_last_usage()
@@ -86,12 +216,13 @@ def _record_token(
     )
 
 
+# --- generation.py ---
 def _chat(
     db: Any,
     *,
     client: Any,
     provider_id: int,
-    provider_name_snapshot: Optional[str],
+    provider_name_snapshot: str | None,
     messages: list[dict[str, str]],
     temperature: float = 0,
     max_tokens: int = 8192,
@@ -107,18 +238,19 @@ def _chat(
     return text or ""
 
 
+# --- generation.py ---
 def generate_single_pass_summary_payload(
     *,
     db: Any,
     client: Any,
     provider_id: int,
-    provider_name_snapshot: Optional[str],
+    provider_name_snapshot: str | None,
     events: list[EventRecord],
     prompt: tuple[str, str],
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
     max_tokens: int = 8192,
-    locale: Optional[str] = None,
+    locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the single-pass LLM path; return the final structured payload.
 
@@ -196,12 +328,13 @@ def generate_single_pass_summary_payload(
     )
 
 
+# --- generation.py ---
 def generate_serial_summary_payload(
     *,
     db: Any,
     client: Any,
     provider_id: int,
-    provider_name_snapshot: Optional[str],
+    provider_name_snapshot: str | None,
     target_date: date,
     start_dt: datetime,
     end_dt: datetime,
@@ -212,7 +345,7 @@ def generate_serial_summary_payload(
     missing_subjects: list[str],
     attention_candidates_payload: list[dict[str, Any]],
     max_tokens: int = 8192,
-    locale: Optional[str] = None,
+    locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the per-subject + rollup serial LLM path.
 
@@ -392,6 +525,10 @@ def generate_serial_summary_payload(
 
 
 __all__ = [
+    "clamp_summary_payload",
+    "extract_json_payload",
     "generate_serial_summary_payload",
     "generate_single_pass_summary_payload",
+    "parse_rollup_output",
+    "parse_subject_summary_output",
 ]

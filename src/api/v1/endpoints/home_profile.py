@@ -2,7 +2,7 @@ import io
 import logging
 import os
 import time
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -146,7 +146,7 @@ def get_home_entities(
     db: DB,
     current_user: CurrentUser,
     locale: Locale,
-    entity_type: Optional[str] = None,
+    entity_type: str | None = None,
     include_disabled: bool = False,
 ) -> Any:
     if entity_type is not None and entity_type not in {"member", "pet"}:

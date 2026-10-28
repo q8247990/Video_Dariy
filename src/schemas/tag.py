@@ -1,12 +1,10 @@
-from typing import Optional
-
 from pydantic import BaseModel, ConfigDict
 
 
 class TagBase(BaseModel):
     tag_name: str
     tag_type: str
-    description: Optional[str] = None
+    description: str | None = None
     enabled: bool = True
 
 

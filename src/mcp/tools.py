@@ -1,9 +1,9 @@
 import json
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from src.application.bootstrap import Container, get_production_container
+from src.application.container_holder import get_container
 from src.application.mcp.service import MCPInvalidArgumentError, MCPNotFoundError
 from src.application.mcp.use_case_tools import MCPToolUseCase
 from src.application.qa.errors import QAProviderInvokeError, QAProviderNotConfiguredError
@@ -31,36 +31,6 @@ def _build_stream_url(file_id: int) -> str:
 
 def _build_session_playback_url(session_id: int) -> str:
     return f"{settings.API_V1_STR}/media/sessions/{session_id}/playback"
-
-
-# Module-level composition root singleton. Bound once at import time
-# exactly like ``src.api.deps._container`` so that every MCP request
-# reuses the same LLM gateway factory without going through the
-# composition root on each call. Tests that need hermetic isolation
-# override ``set_container_for_tests`` (see :func:`set_container_for_tests`).
-_container: Container = get_production_container()
-
-
-def get_container() -> Container:
-    """Return the module-level composition-root container.
-
-    Tests that wish to inject fakes call :func:`set_container_for_tests`
-    from a fixture before any MCP request fires.
-    """
-
-    return _container
-
-
-def set_container_for_tests(container: Container) -> None:
-    """Replace the module-level container (test-only escape hatch).
-
-    Production code never calls this — it exists so unit tests can
-    substitute a fake-bound :class:`Container` without monkeypatching
-    :mod:`src.application.bootstrap` or any concrete adapter.
-    """
-
-    global _container
-    _container = container
 
 
 def build_tool_use_case(db: Session) -> MCPToolUseCase:
@@ -215,9 +185,9 @@ def call_tool(
     db: Session,
     tool_name: str,
     arguments: dict[str, Any],
-    source: Optional[str],
-    user_agent: Optional[str],
-    session_id: Optional[str],
+    source: str | None,
+    user_agent: str | None,
+    session_id: str | None,
     locale: str | None = None,
 ) -> dict[str, Any]:
     request_data = {

@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -11,4 +11,4 @@ class SystemConfig(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     config_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    config_value: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    config_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)

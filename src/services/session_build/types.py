@@ -1,16 +1,4 @@
-"""Dataclasses shared across the session-build pipeline stages.
-
-These types cross every stage boundary:
-
-* :class:`DiscoveredFile` — the normalized scan output before
-  hash dedupe (the discovery stage).
-* :class:`InsertedFile` — a persisted :class:`VideoFile` row plus
-  its computed file-path hash (the dedupe stage).
-* :class:`SealedSessionInfo` / :class:`SessionBuildResult` — the
-  hot/full runner return shape; ``SealedSessionInfo`` is what
-  the analyzer dispatcher consumes (the slim Celery task
-  iterates ``SessionBuildResult.sealed_sessions``).
-"""
+"""Session-build value types and tunables."""
 
 from __future__ import annotations
 
@@ -20,11 +8,8 @@ from typing import Any
 
 from src.models.video_file import VideoFile
 
-# ---------------------------------------------------------------------------
-# Discovery / dedupe
-# ---------------------------------------------------------------------------
 
-
+# --- types.py ---
 @dataclass(frozen=True)
 class DiscoveredFile:
     """One row produced by :class:`XiaomiDirectoryParser.scan_directory`.
@@ -64,6 +49,7 @@ class DiscoveredFile:
         )
 
 
+# --- types.py ---
 @dataclass(frozen=True)
 class InsertedFile:
     """A persisted :class:`VideoFile` row paired with its file-path hash.
@@ -78,11 +64,7 @@ class InsertedFile:
     file_path_hash: str
 
 
-# ---------------------------------------------------------------------------
-# Runner return shape
-# ---------------------------------------------------------------------------
-
-
+# --- types.py ---
 @dataclass(frozen=True)
 class SealedSessionInfo:
     """One row of the analyzer-dispatch envelope.
@@ -99,6 +81,7 @@ class SealedSessionInfo:
     priority: str  # :class:`AnalysisPriority` value
 
 
+# --- types.py ---
 @dataclass
 class SessionBuildResult:
     """The whole-pipeline return shape.
@@ -118,9 +101,24 @@ class SessionBuildResult:
     sealed_sessions: list[SealedSessionInfo] = field(default_factory=list)
 
 
+# --- constants.py ---
+MERGE_GAP_SECONDS: int = 1
+
+
+# --- constants.py ---
+SEAL_BUFFER_SECONDS: int = 600
+
+
+# --- constants.py ---
+HASH_QUERY_CHUNK_SIZE: int = 500
+
+
 __all__ = [
     "DiscoveredFile",
+    "HASH_QUERY_CHUNK_SIZE",
     "InsertedFile",
+    "MERGE_GAP_SECONDS",
+    "SEAL_BUFFER_SECONDS",
     "SealedSessionInfo",
     "SessionBuildResult",
 ]

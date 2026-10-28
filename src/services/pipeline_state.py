@@ -44,9 +44,9 @@ from src.application.transition_log import (
 from src.application.transition_log import (
     record as record_transition_audit,
 )
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus
 
 SessionTransition = tuple[SessionAnalysisStatus, SessionAnalysisStatus]
 TaskTransition = tuple[TaskStatus, TaskStatus]
@@ -71,6 +71,7 @@ TASK_LOG_ALLOWED_TRANSITIONS: Final[frozenset[TaskTransition]] = frozenset(
     {
         (TaskStatus.PENDING, TaskStatus.RUNNING),
         (TaskStatus.PENDING, TaskStatus.CANCELLED),
+        (TaskStatus.PENDING, TaskStatus.TIMEOUT),
         (TaskStatus.RUNNING, TaskStatus.SUCCESS),
         (TaskStatus.RUNNING, TaskStatus.SKIPPED),
         (TaskStatus.RUNNING, TaskStatus.FAILED),
@@ -200,6 +201,42 @@ def transition_session(
         task_log_id=task_log.id if task_log is not None else None,
     )
     return TransitionResult(applied=True)
+
+
+def apply_task_status(
+    db: Session,
+    task_log: TaskLog,
+    to_status: TaskStatus,
+    *,
+    reason: str,
+    source: str,
+) -> None:
+    """Write a TaskLog status through the central state machine.
+
+    Use this for rows the caller already owns (worker finalization,
+    supersede / timeout sweeps). It records the same inline and append-only
+    audit rows as :func:`transition_task_log` but does not issue a CAS
+    UPDATE, so it fits code paths holding a locked / freshly-loaded ORM row.
+    An illegal transition raises :class:`PipelineTransitionConflict`; a
+    same-status call is a no-op.
+    """
+    from_status = TaskStatus(task_log.status)
+    if from_status == to_status:
+        return
+    if (from_status, to_status) not in TASK_LOG_ALLOWED_TRANSITIONS:
+        raise PipelineTransitionConflict("TaskLog", from_status.value, to_status.value)
+    task_log.status = to_status
+    _record_transition(task_log, from_status.value, to_status.value, reason, source)
+    record_transition_audit(
+        db,
+        aggregate_type=AGGREGATE_TYPE_TASK_LOG,
+        aggregate_id=task_log.id,
+        from_status=from_status.value,
+        to_status=to_status.value,
+        reason=reason,
+        source=source,
+        task_log_id=task_log.id,
+    )
 
 
 def transition_task_log(

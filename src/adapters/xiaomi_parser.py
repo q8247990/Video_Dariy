@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class XiaomiDirectoryParser:
     So exact time is 2026-02-26 15:31:32.
     """
 
-    def __init__(self, root_path: str, timezone: Optional[ZoneInfo] = None):
+    def __init__(self, root_path: str, timezone: ZoneInfo | None = None):
         self.root_path = root_path
         # Camera-local zone. When set, parsed naive camera times are localized
         # to aware UTC (safe to compare with UTC boundaries); None keeps the
@@ -35,7 +35,7 @@ class XiaomiDirectoryParser:
             return naive_time
         return naive_time.replace(tzinfo=self.timezone).astimezone(timezone.utc)
 
-    def parse_file_name(self, folder_name: str, file_name: str) -> Optional[dict]:
+    def parse_file_name(self, folder_name: str, file_name: str) -> dict | None:
         """
         Parses folder and file name into start_time and estimated duration.
         Folder: YYYYMMDDHH (e.g., 2026022615)
@@ -75,7 +75,7 @@ class XiaomiDirectoryParser:
             )
             return None
 
-    def get_directory_time_bounds(self) -> tuple[Optional[datetime], Optional[datetime]]:
+    def get_directory_time_bounds(self) -> tuple[datetime | None, datetime | None]:
         if not os.path.exists(self.root_path):
             return None, None
 
@@ -98,16 +98,16 @@ class XiaomiDirectoryParser:
 
     def scan_directory(  # noqa: C901
         self,
-        min_time: Optional[datetime] = None,
-        max_time: Optional[datetime] = None,
-        cancel_check: Optional[Callable[[], None]] = None,
-    ) -> List[Dict[str, Any]]:
+        min_time: datetime | None = None,
+        max_time: datetime | None = None,
+        cancel_check: Callable[[], None] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Scan directory and return parsed video files.
         If min_time is provided, only return videos strictly after min_time.
         If max_time is provided, only return videos not later than max_time.
         """
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         if not os.path.exists(self.root_path):
             return results
 

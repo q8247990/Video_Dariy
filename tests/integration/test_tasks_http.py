@@ -9,7 +9,7 @@ approach. The new contract:
   — no monkeypatching endpoint bodies.
 * Mount only the tasks router via :func:`tests.integration.conftest.make_http_client`.
 * Inject a hermetic :class:`~src.application.bootstrap.Container` via
-  :func:`src.api.deps.set_container_for_tests` so the
+  :func:`src.application.container_holder.set_container_for_tests` so the
   :func:`src.api.deps.get_pipeline_orchestrator` dependency picks up the
   :class:`~src.application.bootstrap_fakes.FakeTaskDispatcher` / fake task
   control — orchestrator / use case code paths are exercised end to end.
@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 import src.api.deps as api_deps
 from src.api.error_status import ResponseStatusMiddleware
 from src.api.v1.endpoints import tasks
+from src.application import container_holder
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
 from src.application.pipeline.commands import (
@@ -48,15 +49,15 @@ from src.application.pipeline.commands import (
     SessionBuildCommand,
 )
 from src.application.ports.task_control import TaskControlPort
-from src.models.task_log import TaskLog
-from src.models.video_session import VideoSession
-from src.models.video_source import VideoSource
-from src.services.pipeline_constants import (
+from src.core.pipeline_constants import (
     ScanMode,
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 
 # ---------------------------------------------------------------------------
 # Container teardown helpers
@@ -69,7 +70,7 @@ def fake_dispatcher() -> Iterator[FakeTaskDispatcher]:
 
     The tasks router builds its orchestrator on every request from
     ``api_deps.get_pipeline_orchestrator(container)`` which reads
-    ``api_deps._container.dispatcher`` each call — replacing the module-level
+    ``container_holder._container.dispatcher`` each call — replacing the module-level
     container is enough to route every request through the
     :class:`FakeTaskDispatcher`.
 
@@ -81,12 +82,12 @@ def fake_dispatcher() -> Iterator[FakeTaskDispatcher]:
     """
 
     fake = FakeTaskDispatcher()
-    original = api_deps._container
+    original = container_holder._container
     api_deps.set_container_for_tests(bootstrap_for_tests(dispatcher=fake))
     try:
         yield fake
     finally:
-        api_deps._container = original
+        container_holder._container = original
 
 
 @pytest.fixture
@@ -599,7 +600,7 @@ def test_stop_returns_502_when_revoke_raises(
             raise NotImplementedError
 
     exploding = _ExplodingTaskControl()
-    original = api_deps._container
+    original = container_holder._container
     api_deps.set_container_for_tests(
         bootstrap_for_tests(
             dispatcher=FakeTaskDispatcher(),
@@ -627,7 +628,7 @@ def test_stop_returns_502_when_revoke_raises(
         assert body["code"] == 5001
         assert "broker unreachable" in body["message"]
     finally:
-        api_deps._container = original
+        container_holder._container = original
 
 
 def test_task_logs_rejects_out_of_range_pagination(client: TestClient) -> None:

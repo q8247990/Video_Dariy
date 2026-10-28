@@ -16,7 +16,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from tests.fixtures.pre_remediation_seed import (
+from scripts.pre_remediation_seed import (
     ANCHOR_SESSION_START,
     EXPECTED_ROW_COUNTS,
     SEED_VERSION,

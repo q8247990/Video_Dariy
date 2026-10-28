@@ -52,12 +52,12 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from src.application.outbox import contracts as outbox_contracts
-from src.application.outbox.contracts import OutboxCommand
-from src.application.outbox.repository import OutboxRepository
+from src.core.pipeline_constants import TaskType
+from src.models.task_delivery import TaskDelivery
 from src.services.dispatch.claim import create_pending_task_log
+from src.services.dispatch.outbox import new_task_id, record_delivery
+from src.services.dispatch.task_command import TaskCommand
 from src.services.dispatch.worker_bind import bind_or_create_running_task_log
-from src.services.pipeline_constants import TaskType
 from tests.conftest import run_alembic_upgrade_head
 
 # The pg3_db fixture depends on postgres_database_url, which is not in
@@ -68,7 +68,8 @@ pytestmark = pytest.mark.postgres
 
 @pytest.fixture(autouse=True)
 def _reset_emitted_event_ids() -> None:
-    outbox_contracts._reset_emitted_event_ids_for_testing()
+    """Dispatch ids are per-call uuid4 values; nothing process-local to reset."""
+    return None
 
 
 @pytest.fixture()
@@ -123,8 +124,8 @@ def generic_plan_mode(pg3_db: Session) -> Session:
             pass
 
 
-def _analysis_command() -> OutboxCommand:
-    return OutboxCommand(
+def _analysis_command() -> TaskCommand:
+    return TaskCommand(
         task_name="src.tasks.analyzer.analyze_session_task",
         queue="analysis_hot",
         args=(1,),
@@ -158,10 +159,8 @@ def test_worker_bind_insert_matches_index_under_generic_plan(generic_plan_mode: 
         assert bound.status == "running"
 
 
-def test_outbox_enroll_matches_index_under_generic_plan(generic_plan_mode: Session) -> None:
-    """Outbox enqueue INSERT (second dispatch-loop statement) — forced generic plan + psycopg3."""
-    repository = OutboxRepository(generic_plan_mode)
-    command = _analysis_command()
+def test_delivery_record_matches_index_under_generic_plan(generic_plan_mode: Session) -> None:
+    """TaskDelivery INSERT (dispatch-loop statement) — forced generic plan + psycopg3."""
     for i in range(3):
         task_log, is_new = create_pending_task_log(
             generic_plan_mode,
@@ -170,5 +169,11 @@ def test_outbox_enroll_matches_index_under_generic_plan(generic_plan_mode: Sessi
             detail_json={"scan_mode": "hot"},
         )
         assert is_new is True
-        outcome = repository.enroll_with_task_log(task_log, command)
-        assert outcome.created is True
+        record_delivery(
+            generic_plan_mode,
+            task_log,
+            TaskCommand(task_name="src.tasks.analyzer.analyze_session_task", queue="celery"),
+            task_id=new_task_id(),
+        )
+        generic_plan_mode.flush()
+    assert generic_plan_mode.query(TaskDelivery).count() == 3

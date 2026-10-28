@@ -23,8 +23,8 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import SourceType
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import SourceType
 from src.services.session_video import mark_missing_source_video_files
 
 logger = logging.getLogger(__name__)

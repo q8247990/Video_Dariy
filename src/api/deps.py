@@ -5,7 +5,8 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from src.application.bootstrap import Container, get_production_container
+from src.application.bootstrap import Container
+from src.application.container_holder import get_container, set_container_for_tests
 from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.config import settings
 from src.core.i18n import DEFAULT_LOCALE
@@ -15,14 +16,6 @@ from src.models.admin_user import AdminUser
 from src.schemas.auth import TokenData
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
-
-# Module-level reference to the process-wide production container
-# (``src.application.bootstrap.get_production_container``). The API, MCP,
-# and Celery entry points all share that single instance, so the process
-# holds one dispatcher / LLM gateway factory / Celery control binding.
-# Tests that need hermetic isolation override ``set_container_for_tests``
-# from a fixture before any HTTP request fires.
-_container: Container = get_production_container()
 
 
 def get_locale(request: Request) -> str:
@@ -44,13 +37,11 @@ def get_current_user(
         if user_id_str is None:
             raise credentials_exception
         token_data = TokenData(sub=str(user_id_str))
-    except JWTError as e:
+        user_id = int(str(token_data.sub))
+    except (JWTError, TypeError, ValueError) as e:
         raise credentials_exception from e
 
-    if token_data.sub is None:
-        raise credentials_exception
-
-    user = db.query(AdminUser).filter(AdminUser.id == int(token_data.sub)).first()
+    user = db.query(AdminUser).filter(AdminUser.id == user_id).first()
     if user is None:
         raise credentials_exception
     return user
@@ -62,13 +53,7 @@ Locale = Annotated[str, Depends(get_locale)]
 
 
 def get_container_dep() -> Container:
-    """FastAPI dependency exposing the composition-root ``Container``.
-
-    Endpoints that need direct access to a port (e.g. ``task_control``
-    for revoke) depend on this instead of importing a concrete adapter.
-    """
-
-    return _container
+    return get_container()
 
 
 ContainerDep = Annotated[Container, Depends(get_container_dep)]
@@ -84,14 +69,16 @@ def get_pipeline_orchestrator(
 
 Orchestrator = Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)]
 
-
-def set_container_for_tests(container: Container) -> None:
-    """Replace the module-level container (test-only escape hatch).
-
-    Production code never calls this — it exists so unit tests can
-    substitute a fake-bound :class:`Container` without monkeypatching
-    :mod:`src.application.bootstrap` or any concrete adapter.
-    """
-
-    global _container
-    _container = container
+__all__ = [
+    "ContainerDep",
+    "CurrentUser",
+    "DB",
+    "Locale",
+    "Orchestrator",
+    "get_container_dep",
+    "get_current_user",
+    "get_locale",
+    "get_pipeline_orchestrator",
+    "oauth2_scheme",
+    "set_container_for_tests",
+]

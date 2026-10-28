@@ -136,7 +136,7 @@ def test_t_en_us_fallback_to_zh_cn_for_missing_key() -> None:
     ``src.core.i18n``) when the en-US catalog needs runtime overrides
     in production.
     """
-    from src.core.i18n import _catalogs, _get_catalog  # noqa: PLC0415
+    from src.core.i18n import _catalogs, _get_catalog
 
     reload_catalogs()
     _get_catalog("en-US")

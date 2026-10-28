@@ -21,9 +21,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.task_log import TaskLog
 from src.services.dispatch.dedupe import build_dedupe_key, ensure_dict_detail
-from src.services.pipeline_constants import TaskStatus, TaskType
+from src.services.pipeline_state import apply_task_status
 
 
 def record_deferred_hot_scan(
@@ -74,7 +75,13 @@ def supersede_active_hot_scan(
     the precedence rule is product-level: a HOT-vs-FULL collision
     is its own decision tree, not a generic "cancel a task" path.
     """
-    active_task_log.status = TaskStatus.CANCELLED
+    apply_task_status(
+        db,
+        active_task_log,
+        TaskStatus.CANCELLED,
+        reason="superseded_by_full_scan",
+        source="supersede_active_hot_scan",
+    )
     active_task_log.finished_at = datetime.now(timezone.utc)
     active_task_log.message = f"Superseded by full scan request for source {source_id}"
     active_task_log.detail_json = {

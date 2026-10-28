@@ -10,6 +10,7 @@ select = [
     "I",  # isort
     "C",  # flake8-comprehensions
     "B",  # flake8-bugbear
+    "RUF100",  # unused noqa directives
 ]
 ignore = []
 

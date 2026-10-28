@@ -30,11 +30,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.services.pipeline_state import (
     transition_session,
     transition_task_log,

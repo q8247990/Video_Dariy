@@ -1,6 +1,6 @@
 import hashlib
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -36,17 +36,17 @@ class VideoFile(Base):
         default=_default_file_path_hash,
     )
     storage_type: Mapped[str] = mapped_column(String(32), default="local_file", nullable=False)
-    access_uri: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    file_format: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    file_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    access_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    file_format: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    file_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     parse_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    parse_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parse_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_missing: Mapped[bool] = mapped_column(default=False, nullable=False)
-    missing_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    missing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="video_files")
 

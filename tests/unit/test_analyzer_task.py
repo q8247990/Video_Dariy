@@ -5,7 +5,7 @@ end against real PostgreSQL (the
 ``pg_db_factory`` / ``pg_db`` fixtures) and a scripted
 :class:`~src.application.ports.llm_gateway.LLMGatewayFactoryPort`
 injected through the task-layer container holder
-(:func:`src.tasks._container.set_container_for_tests`). The analyzer
+(:func:`src.application.container_holder.set_container_for_tests`). The analyzer
 pipeline's media-layout helpers are wired through
 :class:`~src.application.bootstrap_fakes.FakeAnalysisPorts` and the
 :class:`~src.application.bootstrap_fakes.ScriptedVisionGateway`
@@ -35,28 +35,30 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import (
     FakeAnalysisPorts,
     ScriptedVisionGateway,
     ScriptedVisionGatewayFactory,
 )
+from src.core.pipeline_constants import TaskStatus
+from src.core.provider_key_crypto import ProviderKeyDecryptionError
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.analysis.checkpoint_writer import _checkpoint_for_work
-from src.services.pipeline_constants import TaskStatus
-from src.services.provider_key_crypto import ProviderKeyDecryptionError
+from src.services.analysis.execute import _checkpoint_for_work
 from src.services.session_analysis_video import SubChunk
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks import _analyzer_orchestration, _container  # noqa: F401
+from src.tasks import _analyzer_orchestration  # noqa: F401
+from src.tasks import _container as _ports_holder
 from src.tasks.analyzer import analyze_session_task
 
 SessionFactory = Callable[[], Session]
@@ -93,7 +95,7 @@ def _base_action(pg_db_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch)
     factory.install_gateway(gateway)
     container = bootstrap_for_tests(llm_factory=factory)
     _container.set_container_for_tests(container)
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts())
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts())
 
     @contextmanager
     def _task_session() -> Iterator[Session]:
@@ -109,7 +111,7 @@ def _base_action(pg_db_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch)
         yield
     finally:
         _container.reset_container_for_tests()
-        _container.reset_analysis_ports_for_tests()
+        _ports_holder.reset_analysis_ports_for_tests()
 
 
 def _seed_provider(db: Session) -> int:
@@ -378,10 +380,10 @@ def test_analyze_session_changed_input_invalidates_stale_checkpoints(
 ) -> None:
     """Whitebox pin for the input-fingerprint-invalidation branch.
 
-    Drives :func:`src.services.analysis.checkpoint_writer._checkpoint_for_work`
+    Drives :func:`src.services.analysis.execute._checkpoint_for_work`
     directly to keep the assertion local to the legacy kwargs-based
     signature. The production pipeline uses
-    :func:`src.services.analysis.checkpoint_writer.get_or_create_checkpoint`
+    :func:`src.services.analysis.execute.get_or_create_checkpoint`
     (the slim Celery task drives it through the public AnalysisPorts
     seam), but the input-fingerprint reset is shared logic and the
     kwargs-based wrapper is the only public access to it; we keep this
@@ -481,7 +483,7 @@ def test_analyze_session_cancelled_mid_run_partial_not_served(
 
 
 def test_analyze_session_replaces_old_events(pg_db_factory: SessionFactory) -> None:
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
     session_factory = pg_db_factory
     db = session_factory()
     try:
@@ -522,7 +524,7 @@ def test_analyze_session_empty_result_clears_old_events(
         analysis_notes=[],
     )
 
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
     session_factory = pg_db_factory
     db = session_factory()
     try:
@@ -657,7 +659,7 @@ def test_analyze_session_deadlock_retries_with_exponential_backoff(
     def _deadlock_replace(db: Any, session_id: int, events: list[Any]) -> int:
         raise OperationalError("INSERT INTO event_record ...", {}, _DeadlockOrig())
 
-    _container.set_analysis_ports_for_tests(
+    _ports_holder.set_analysis_ports_for_tests(
         FakeAnalysisPorts(
             chunks=1,
             sub_chunks_per_chunk=1,

@@ -1,11 +1,11 @@
-"""共享查询层服务。
+"""Shared query-layer service.
 
-提供 get_data_availability / search_events / get_sessions / get_daily_summary
-四个核心查询方法，供 QA Agent 和 MCP 共用。
+Provides ``get_data_availability`` / ``search_events`` / ``get_sessions``
+/ ``get_daily_summary`` for both the QA agent and MCP.
 """
 
 import logging
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from sqlalchemy import ColumnElement, func, or_, text
 from sqlalchemy.orm import Session
@@ -26,6 +26,7 @@ from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.schemas.home_profile import coerce_focus_points
 from src.services.attention import ATTENTION_EVENT_TYPES, attention_focus_keys, is_attention_event
+from src.services.measures.queries import focus_keys_condition
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 class HomeQueryService:
     def __init__(self, db: Session):
         self.db = db
-        self._attention_cache: Optional[frozenset[str]] = None
+        self._attention_cache: frozenset[str] | None = None
 
     def _attention_keys(self) -> frozenset[str]:
         if self._attention_cache is None:
@@ -53,12 +54,9 @@ class HomeQueryService:
                 "WHERE e->>'entity_type' = 'unknown_person')"
             )
         )
-        keys = sorted(self._attention_keys())
+        keys = self._attention_keys()
         if keys:
-            keys_literal = ", ".join(f"'{key}'" for key in keys)
-            conditions.append(
-                text(f"(event_record.focus_matches_json::jsonb ?| array[{keys_literal}])")
-            )
+            conditions.append(focus_keys_condition(keys))
         return or_(*conditions)
 
     # ------------------------------------------------------------------
@@ -94,7 +92,7 @@ class HomeQueryService:
     def search_events(
         self,
         time_range: TimeRange,
-        filters: Optional[EventFilters] = None,
+        filters: EventFilters | None = None,
     ) -> list[EventResult]:
         """按条件查询事件列表。"""
         if filters is None:
@@ -151,7 +149,7 @@ class HomeQueryService:
     def get_sessions(
         self,
         time_range: TimeRange,
-        subjects: Optional[list[str]] = None,
+        subjects: list[str] | None = None,
         limit: int = 20,
     ) -> list[SessionResult]:
         """按时间和主体查询 session 摘要列表。"""

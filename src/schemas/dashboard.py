@@ -1,6 +1,5 @@
 from datetime import date as DateType
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,16 +26,16 @@ class DashboardSystemStatus(BaseModel):
 
 class DashboardAlert(BaseModel):
     show: bool
-    type: Optional[str] = None
-    title: Optional[str] = None
-    description: Optional[str] = None
-    action: Optional[DashboardAction] = None
+    type: str | None = None
+    title: str | None = None
+    description: str | None = None
+    action: DashboardAction | None = None
 
 
 class DashboardTaskSummary(BaseModel):
-    last_scan_at: Optional[datetime] = None
-    last_analysis_status: Optional[str] = None
-    last_daily_summary_status: Optional[str] = None
+    last_scan_at: datetime | None = None
+    last_analysis_status: str | None = None
+    last_daily_summary_status: str | None = None
     failed_task_count_24h: int
 
 
@@ -53,10 +52,10 @@ class DashboardEventSummary(BaseModel):
 
 class DashboardLatestDailySummary(BaseModel):
     exists: bool
-    date: Optional[DateType] = None
+    date: DateType | None = None
     status: str
-    summary_preview: Optional[str] = None
-    empty_reason: Optional[str] = None
+    summary_preview: str | None = None
+    empty_reason: str | None = None
 
 
 class DashboardAttentionEvent(BaseModel):

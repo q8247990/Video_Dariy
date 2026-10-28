@@ -12,24 +12,24 @@ safety net.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus
 from src.models.task_log import ACTIVE_DEDUPE_INDEX_PREDICATE, TaskLog
 from src.services.dispatch.dedupe import (
     _ensure_dedupe_key,
     find_duplicate_active_task,
 )
-from src.services.pipeline_constants import TaskStatus
 
 
 def create_pending_task_log(
     db: Session,
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     detail_json: dict[str, Any],
 ) -> tuple[TaskLog, bool]:
     """Create the PENDING TaskLog row, or return the existing active row.
@@ -42,7 +42,7 @@ def create_pending_task_log(
 
     Args:
         db: Caller-owned SQLAlchemy session.
-        task_type: :class:`src.services.pipeline_constants.TaskType`.
+        task_type: :class:`src.core.pipeline_constants.TaskType`.
         task_target_id: ``VideoSource.id`` / ``VideoSession.id`` /
             ``None`` for webhook / summary rows.
         detail_json: Per-call metadata (scan mode, priority,

@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 
 
 def find_running_source_task_type(db: Session, source_id: int) -> str | None:

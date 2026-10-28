@@ -9,7 +9,7 @@ window has elapsed, then either:
   recovery helper (:mod:`.analysis_recovery`), or
 * marks the row TIMEOUT with an operator-facing message.
 
-Pre-Wave-5 this loop issued a per-row SELECT for the
+This loop issued a per-row SELECT for the
 ``SessionAnalysisCheckpoint`` count and the
 ``SessionAnalysisCheckpoint.attempt_count`` max — the classic N+1.
 This module replaces those with **two batched aggregate queries**
@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.core.celery_app import celery_app
 from src.core.config import settings
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.services.maintenance.analysis_recovery import resume_lost_analysis
@@ -40,7 +41,7 @@ from src.services.maintenance.constants import (
     FULL_BUILD_TIMEOUT_SECONDS,
     HOT_BUILD_TIMEOUT_SECONDS,
 )
-from src.services.pipeline_constants import TaskStatus, TaskType
+from src.services.pipeline_state import apply_task_status
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def _load_analysis_aggregates(db: Session, session_ids: set[int]) -> dict[int, d
     """Return ``{session_id: {checkpoint_count, retry_count}}`` in two batched queries.
 
     Replaces the per-row ``SELECT count(*)`` / ``SELECT max(attempt_count)``
-    pair the pre-Wave-5 monolith issued inside its loop. Each
+    pair the monolith issued inside its loop. Each
     :class:`TaskLog` whose ``task_type == SESSION_ANALYSIS`` now
     does an O(1) dict lookup against this snapshot.
     """
@@ -153,13 +154,14 @@ def _handle_running_item(
     now: datetime,
     analysis_aggregates: dict[int, dict[str, int]],
     last_progress_by_session: dict[int, datetime],
+    dispatcher: TaskDispatcherPort,
 ) -> bool:
     """One iteration of the lease-expiry loop. Returns ``True`` when the row was finalized."""
     if item.cancel_requested:
         return False
     started_at = _as_utc(item.started_at or item.created_at)
     timeout_seconds = _task_timeout_seconds_for(item, analysis_aggregates=analysis_aggregates)
-    last_progress: Optional[datetime] = None
+    last_progress: datetime | None = None
     if item.task_type == TaskType.SESSION_ANALYSIS and item.task_target_id is not None:
         last_progress = last_progress_by_session.get(item.task_target_id)
         if last_progress is not None:
@@ -176,16 +178,27 @@ def _handle_running_item(
             logger.exception("Failed to revoke timed-out task_id=%s", item.queue_task_id)
 
     if item.task_type == TaskType.SESSION_ANALYSIS:
-        resume_lost_analysis(db, item, now)
+        resume_lost_analysis(db, item, now, dispatcher=dispatcher)
     else:
-        item.status = TaskStatus.TIMEOUT
+        apply_task_status(
+            db,
+            item,
+            TaskStatus.TIMEOUT,
+            reason="lease_timeout",
+            source="recover_timed_out_tasks",
+        )
         item.message = f"Task timed out after {timeout_seconds} seconds"
         item.finished_at = now
 
     return True
 
 
-def recover_timed_out_tasks(db: Session, now: datetime) -> int:
+def recover_timed_out_tasks(
+    db: Session,
+    now: datetime,
+    *,
+    dispatcher: TaskDispatcherPort,
+) -> int:
     """Recover RUNNING tasks whose lease expired.
 
     Single batched pass: one SELECT for the RUNNING rows, two
@@ -216,6 +229,7 @@ def recover_timed_out_tasks(db: Session, now: datetime) -> int:
             now=now,
             analysis_aggregates=analysis_aggregates,
             last_progress_by_session=last_progress_by_session,
+            dispatcher=dispatcher,
         ):
             timeout_count += 1
     return timeout_count

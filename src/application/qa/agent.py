@@ -1,9 +1,10 @@
-"""QA Agentic Loop。
+"""QA agentic loop.
 
-基于 tool_calling 的问答流程：
-1. 查 data_availability 注入 system prompt
-2. 最多 2 轮 tool call 循环
-3. LLM 基于 tool results 直接生成最终回答
+The tool-calling question-answering flow:
+
+1. read ``data_availability`` and inject it into the system prompt;
+2. run at most two tool-call rounds;
+3. let the LLM produce the final answer from the tool results.
 """
 
 import json

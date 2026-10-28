@@ -1,5 +1,5 @@
+from src.core.pipeline_constants import SUPPORTED_SCAN_SOURCE_TYPES, ValidationStatus
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import SUPPORTED_SCAN_SOURCE_TYPES, ValidationStatus
 
 
 def is_source_type_supported(source_type: str) -> bool:

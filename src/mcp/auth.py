@@ -1,6 +1,8 @@
+import hmac
 import logging
-from typing import Any, Optional
+from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
@@ -21,13 +23,13 @@ def get_mcp_token(db: Session) -> str:
     return token
 
 
-def is_token_valid(db: Session, token: Optional[str]) -> bool:
+def is_token_valid(db: Session, token: str | None) -> bool:
     if not token:
         return False
-    return token.strip() == get_mcp_token(db)
+    return hmac.compare_digest(token.strip(), get_mcp_token(db))
 
 
-def authorize(db: Session, token: Optional[str]) -> Optional[str]:
+def authorize(db: Session, token: str | None) -> str | None:
     if not is_mcp_enabled(db):
         return "mcp service is disabled"
     if not is_token_valid(db, token):
@@ -42,6 +44,13 @@ def log_mcp_call(
     response_json: dict[str, Any],
     status: str,
 ) -> None:
+    """Persist one MCP call audit row, isolated from the caller's transaction.
+
+    The audit row uses its own short transaction so a failed log write can
+    never roll back the tool's business changes. ``SQLAlchemyError`` is the
+    only expected failure mode (constraint/connectivity); programming errors
+    still propagate.
+    """
     try:
         db.add(
             McpCallLog(
@@ -52,8 +61,11 @@ def log_mcp_call(
             )
         )
         db.commit()
-    except Exception:
+    except SQLAlchemyError:
         db.rollback()
-        logger.debug(
-            "Failed to persist MCP audit log (tool=%s, status=%s)", tool_name, status, exc_info=True
+        logger.warning(
+            "Failed to persist MCP audit log (tool=%s, status=%s)",
+            tool_name,
+            status,
+            exc_info=True,
         )

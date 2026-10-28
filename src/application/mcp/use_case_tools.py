@@ -15,7 +15,7 @@ rows the underlying service persists.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -45,7 +45,7 @@ class MCPToolUseCase:
         container: Container,
         stream_url_builder: Callable[[int], str],
         session_playback_url_builder: Callable[[int], str],
-        qa_service_factory: Optional[Callable[[Session, Any], Any]] = None,
+        qa_service_factory: Callable[[Session, Any], Any] | None = None,
     ) -> None:
         self.db = db
         self._container = container
@@ -58,7 +58,7 @@ class MCPToolUseCase:
         tool_name: str,
         arguments: dict[str, Any],
         *,
-        locale: Optional[str] = None,
+        locale: str | None = None,
     ) -> dict[str, Any]:
         service = MCPToolService(
             db=self.db,
@@ -75,7 +75,7 @@ def _dispatch_tool(
     tool_name: str,
     arguments: dict[str, Any],
     *,
-    locale: Optional[str],
+    locale: str | None,
 ) -> dict[str, Any]:
     """Route ``tool_name`` to the matching ``MCPToolService`` method.
 

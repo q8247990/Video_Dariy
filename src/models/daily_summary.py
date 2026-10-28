@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -12,15 +12,15 @@ class DailySummary(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     summary_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
-    summary_title: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    overall_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    subject_sections_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    attention_items_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    summary_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    overall_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_sections_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    attention_items_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    provider_id: Mapped[Optional[int]] = mapped_column(
+    provider_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
     )
-    provider_name_snapshot: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    provider_name_snapshot: Mapped[str | None] = mapped_column(String(128), nullable=True)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )

@@ -1,6 +1,5 @@
 import re
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -98,9 +97,9 @@ class HomeProfileUpsert(BaseModel):
     family_tags: list[str] = Field(default_factory=list)
     focus_points: list[FocusPointItem] = Field(default_factory=list)
     system_style: str = Field(default="family_companion", min_length=1, max_length=32)
-    style_preference_text: Optional[str] = Field(default=None, max_length=1000)
+    style_preference_text: str | None = Field(default=None, max_length=1000)
     assistant_name: str = Field(default="家庭助手", min_length=1, max_length=128)
-    home_note: Optional[str] = Field(default=None, max_length=1000)
+    home_note: str | None = Field(default=None, max_length=1000)
 
     @field_validator("family_tags")
     @classmethod
@@ -143,17 +142,17 @@ class HomeProfileResponse(HomeProfileUpsert):
 class HomeEntityBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     role_type: str = Field(min_length=1, max_length=64)
-    age_group: Optional[str] = Field(default=None, max_length=32)
-    breed: Optional[str] = Field(default=None, max_length=128)
-    appearance_desc: Optional[str] = Field(default=None, max_length=1000)
-    personality_desc: Optional[str] = Field(default=None, max_length=1000)
-    note: Optional[str] = Field(default=None, max_length=1000)
+    age_group: str | None = Field(default=None, max_length=32)
+    breed: str | None = Field(default=None, max_length=128)
+    appearance_desc: str | None = Field(default=None, max_length=1000)
+    personality_desc: str | None = Field(default=None, max_length=1000)
+    note: str | None = Field(default=None, max_length=1000)
     sort_order: int = Field(default=0, ge=0, le=9999)
     is_enabled: bool = True
 
     @field_validator("age_group")
     @classmethod
-    def validate_age_group(cls, value: Optional[str]) -> Optional[str]:
+    def validate_age_group(cls, value: str | None) -> str | None:
         if value is None:
             return value
         if value not in AGE_GROUP_OPTIONS:
@@ -180,19 +179,19 @@ class PetCreate(HomeEntityBase):
 
 
 class HomeEntityUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
-    role_type: Optional[str] = Field(default=None, min_length=1, max_length=64)
-    age_group: Optional[str] = Field(default=None, max_length=32)
-    breed: Optional[str] = Field(default=None, max_length=128)
-    appearance_desc: Optional[str] = Field(default=None, max_length=1000)
-    personality_desc: Optional[str] = Field(default=None, max_length=1000)
-    note: Optional[str] = Field(default=None, max_length=1000)
-    sort_order: Optional[int] = Field(default=None, ge=0, le=9999)
-    is_enabled: Optional[bool] = None
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    role_type: str | None = Field(default=None, min_length=1, max_length=64)
+    age_group: str | None = Field(default=None, max_length=32)
+    breed: str | None = Field(default=None, max_length=128)
+    appearance_desc: str | None = Field(default=None, max_length=1000)
+    personality_desc: str | None = Field(default=None, max_length=1000)
+    note: str | None = Field(default=None, max_length=1000)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+    is_enabled: bool | None = None
 
     @field_validator("age_group")
     @classmethod
-    def validate_age_group(cls, value: Optional[str]) -> Optional[str]:
+    def validate_age_group(cls, value: str | None) -> str | None:
         if value is None:
             return value
         if value not in AGE_GROUP_OPTIONS:
@@ -205,14 +204,14 @@ class HomeEntityResponse(BaseModel):
     entity_type: str
     name: str
     role_type: str
-    age_group: Optional[str] = None
-    breed: Optional[str] = None
-    appearance_desc: Optional[str] = None
-    personality_desc: Optional[str] = None
-    note: Optional[str] = None
+    age_group: str | None = None
+    breed: str | None = None
+    appearance_desc: str | None = None
+    personality_desc: str | None = None
+    note: str | None = None
     sort_order: int
     is_enabled: bool
-    image_url: Optional[str] = None
+    image_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

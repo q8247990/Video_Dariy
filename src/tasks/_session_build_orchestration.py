@@ -23,7 +23,15 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from src.adapters.xiaomi_parser import XiaomiDirectoryParser
+from src.application.container_holder import get_container
 from src.application.pipeline.commands import AnalyzeSessionCommand
+from src.core.pipeline_constants import (
+    AnalysisPriority,
+    ScanMode,
+    SourceType,
+    TaskStatus,
+    TaskType,
+)
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.dispatch import (
@@ -34,13 +42,6 @@ from src.services.dispatch import (
     finalize_task_log,
     get_task_log_for_update,
 )
-from src.services.pipeline_constants import (
-    AnalysisPriority,
-    ScanMode,
-    SourceType,
-    TaskStatus,
-    TaskType,
-)
 from src.services.session_build.persistence import find_stuck_sealed_sessions
 from src.services.session_build.runner import run_full, run_hot
 from src.services.session_build.types import SealedSessionInfo
@@ -49,7 +50,6 @@ from src.services.system_config_registry import (
     SCAN_HOT_WINDOW_HOURS,
     get_config,
 )
-from src.tasks._container import get_container
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +212,7 @@ def _run_with_task_log_lifecycle(
             if envelope.session_id not in fresh_ids
         ]
         finalize_task_log(
+            db,
             task_log,
             TaskStatus.SUCCESS,
             _success_message(scan_mode_label, build_result),
@@ -250,6 +251,7 @@ def _run_with_task_log_lifecycle(
         if refreshed is None:
             raise
         finalize_cancelled_task_log(
+            db,
             refreshed,
             str(exc),
             {"scan_mode": scan_mode, "source_id": source_id, "cancelled": True},
@@ -260,7 +262,7 @@ def _run_with_task_log_lifecycle(
     except Exception as exc:
         logger.exception("Failed %s build for source %s", scan_mode_label, source_id)
         db.rollback()
-        finalize_task_log(task_log, TaskStatus.FAILED, str(exc))
+        finalize_task_log(db, task_log, TaskStatus.FAILED, str(exc))
         db.commit()
         raise
 

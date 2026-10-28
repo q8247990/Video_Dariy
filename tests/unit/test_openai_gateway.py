@@ -9,7 +9,7 @@ from src.providers.openai_client import OpenAIClient
 
 
 class _RecordingClient(OpenAIClient):
-    def __init__(self) -> None:  # noqa: D401 - simple test fake
+    def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
     def chat_completion(  # type: ignore[override]

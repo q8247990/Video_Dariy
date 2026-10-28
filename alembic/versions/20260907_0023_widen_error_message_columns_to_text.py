@@ -38,16 +38,16 @@ desired guard (roll back only when the values actually fit, otherwise
 restore from the pre-upgrade backup).
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "20260907_0023"
-down_revision: Union[str, None] = "20260904_0022"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260904_0022"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # (table, column) pairs widened to TEXT.
 WIDENED_COLUMNS: tuple[tuple[str, str], ...] = (

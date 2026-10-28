@@ -226,11 +226,12 @@ def test_media_ttl_system_config_controls_signed_url_expiry(
 
     segment_expiry = _token_expiry(playback["files"][0]["stream_url"], "file", file_id, session_id)
     manifest_expiry = _token_expiry(playback["hls_url"], "session_hls", session_id, None)
-    playback_expiry = _token_expiry(playback["playback_url"], "session_hls", session_id, None)
+    assert playback["playback_mode"] == "merged_stream"
+    playback_expiry = _token_expiry(playback["playback_url"], "session_stream", session_id, None)
 
     assert 100 <= segment_expiry - now <= 125
     assert 220 <= manifest_expiry - now <= 245
-    assert playback_expiry == manifest_expiry
+    assert playback_expiry == segment_expiry
 
     manifest = client.get(f"/api/v1{playback['hls_url']}")
     assert manifest.status_code == 200

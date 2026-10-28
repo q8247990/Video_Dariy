@@ -1,8 +1,8 @@
 """Persistence helper for the ``daily_summary`` table.
 
-A thin SQLAlchemy bridge for the publication use case (Todo 16). It
+A thin SQLAlchemy bridge for the publication use case. It
 owns only the *upsert* the publish flow uses; reads, the legacy
-``_upsert_daily_summary`` in :mod:`src.tasks.summarizer` (Todo 19) and
+``_upsert_daily_summary`` in :mod:`src.tasks.summarizer` and
 audit queries remain untouched.
 
 Why a dedicated repository
@@ -10,11 +10,11 @@ Why a dedicated repository
 
 The publish use case needs to write ``daily_summary`` atomically with
 the attempt state transition (``→ succeeded``) and the outbox
-enrollment (Todo 12 / Todo 14). The summarizer's existing
+enrollment. The summarizer's existing
 ``_upsert_daily_summary`` is a free function that takes the model
 fields individually; that shape is fine for the summarizer's own
 caller, but it does not match the ``summary_content_json`` payload the
-publish use case receives from the summarizer (Todo 19).
+publish use case receives from the summarizer.
 
 This repository is intentionally minimal — a single ``upsert_for_date``
 method — so the publish use case has one obvious entry point. It uses
@@ -25,15 +25,14 @@ Conflict target
 
 The unique target is the ``summary_date`` ``UNIQUE`` constraint on
 the model. A new generation for an already-published date is an
-explicit overwrite (Todo 19 will only invoke the use case after a
-successful generation), not a separate row — the audit history lives
+explicit overwrite, not a separate row — the audit history lives
 in ``daily_summary_generation_attempt``, not in ``daily_summary``.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
@@ -62,11 +61,11 @@ class DailySummaryRepository:
         summary_date: date,
         summary_title: str,
         overall_summary: str,
-        subject_sections_json: Optional[list[dict[str, Any]]],
-        attention_items_json: Optional[list[dict[str, Any]]],
+        subject_sections_json: list[dict[str, Any]] | None,
+        attention_items_json: list[dict[str, Any]] | None,
         event_count: int,
-        provider_id: Optional[int],
-        provider_name_snapshot: Optional[str],
+        provider_id: int | None,
+        provider_name_snapshot: str | None,
     ) -> int:
         """Insert or update the ``daily_summary`` row for ``summary_date``.
 

@@ -59,12 +59,11 @@ from src.services.summarizer import (
     parse_rollup_output,
     parse_schedule_time,
     parse_subject_summary_output,
-    parse_summary_with_retry,
     release_dispatch_guard,
     resolve_target_date,
     scheduled_local_datetime,
 )
-from src.services.summarizer.evidence import Evidence
+from src.services.summarizer.prepare import Evidence
 
 # ---------------------------------------------------------------------------
 # Stubs / helpers
@@ -277,50 +276,6 @@ def test_extract_json_payload_strips_code_fences(pg_db: Session) -> None:
 def test_extract_json_payload_rejects_non_object(pg_db: Session) -> None:
     with pytest.raises(ValueError):
         extract_json_payload("[1, 2, 3]")
-
-
-def test_parse_summary_with_retry_succeeds_on_first_try(pg_db: Session) -> None:
-    raw = json.dumps(
-        {
-            "overall_summary": "整体平稳。",
-            "subject_sections": [],
-            "attention_items": [],
-        },
-        ensure_ascii=False,
-    )
-    retry_calls: list[Any] = []
-    overall, sections, attention, retried = parse_summary_with_retry(
-        retry_client=_RecordingClient(retry_calls),
-        initial_response_text=raw,
-        prompt="ignored",
-    )
-    assert overall == "整体平稳。"
-    assert sections == []
-    assert attention == []
-    assert retried is False
-    assert retry_calls == []
-
-
-def test_parse_summary_with_retry_retries_on_parse_failure(pg_db: Session) -> None:
-    retry_client = _RecordingClient(
-        [
-            json.dumps(
-                {
-                    "overall_summary": "重试后成功。",
-                    "subject_sections": [],
-                    "attention_items": [],
-                },
-                ensure_ascii=False,
-            )
-        ]
-    )
-    overall, _sections, _attention, retried = parse_summary_with_retry(
-        retry_client=retry_client,
-        initial_response_text="not-json",
-        prompt="ignored",
-    )
-    assert overall == "重试后成功。"
-    assert retried is True
 
 
 def test_parse_subject_summary_output_extracts_summary(pg_db: Session) -> None:
@@ -828,19 +783,3 @@ def test_complete_subject_sections_fills_missing(pg_db: Session) -> None:
     # 布丁 with 0 events should have the "no activity" stub.
     buding = next(s for s in sections if s["subject_name"] == "布丁")
     assert "布丁" in buding["summary"]
-
-
-class _RecordingClient:
-    """Records retry calls; the constructor takes the list of return strings."""
-
-    def __init__(self, replies: list[str]):
-        self.replies = list(replies)
-        self.calls: list[dict[str, Any]] = []
-
-    def chat_completion(self, messages, temperature=0, max_tokens=None):
-        self.calls.append(
-            {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-        )
-        if not self.replies:
-            return ""
-        return self.replies.pop(0)

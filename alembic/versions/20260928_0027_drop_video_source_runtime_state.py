@@ -21,16 +21,16 @@ updated_at) and its unique index. No row data is preserved because the
 table was never populated.
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "20260928_0027"
-down_revision: Union[str, None] = "20260928_0026"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260928_0026"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 TABLE = "video_source_runtime_state"
 UNIQUE_INDEX = "idx_video_source_runtime_state_source"

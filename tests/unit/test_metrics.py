@@ -10,7 +10,6 @@ so each test starts from an empty database.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -18,12 +17,12 @@ from sqlalchemy.orm import Session
 
 from src.db.metrics import (
     checkpoint_progress,
-    outbox_metrics,
+    delivery_metrics,
     task_recovery_metrics,
 )
 from src.models.app_runtime_state import AppRuntimeState
-from src.models.outbox import OutboxEvent
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -51,44 +50,42 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _insert_outbox(engine, status: str, next_attempt_at: datetime) -> None:
+def _insert_delivery(engine, *, failed: bool, created_at: datetime) -> None:
     with Session(bind=engine) as session:
         task_log = TaskLog(task_type="src.tasks.x", status="success")
         session.add(task_log)
         session.flush()
         session.add(
-            OutboxEvent(
-                event_id=str(uuid.uuid4()),
+            TaskDelivery(
                 task_log_id=task_log.id,
                 task_name="src.tasks.x",
                 queue="celery",
                 args_json=[],
                 kwargs_json={},
-                status=status,
-                next_attempt_at=next_attempt_at,
+                last_error="ConnectionError: broker down" if failed else None,
+                created_at=created_at,
             )
         )
         session.commit()
 
 
-def test_outbox_metrics_reports_lag_and_counts(engine) -> None:
+def test_delivery_metrics_reports_lag_and_counts(engine) -> None:
     old_next = _now() - timedelta(seconds=600)
     recent_next = _now() - timedelta(seconds=10)
-    _insert_outbox(engine, "pending", old_next)
-    _insert_outbox(engine, "pending", recent_next)
-    _insert_outbox(engine, "failed", old_next)
+    _insert_delivery(engine, failed=False, created_at=old_next)
+    _insert_delivery(engine, failed=False, created_at=recent_next)
+    _insert_delivery(engine, failed=True, created_at=old_next)
 
-    metrics = outbox_metrics(engine)
-    assert metrics["pending_count"] == 2
+    metrics = delivery_metrics(engine)
+    assert metrics["pending_count"] == 3
     assert metrics["failed_count"] == 1
-    assert metrics["publishing_count"] == 0
     assert metrics["oldest_pending_seconds"] is not None
     assert metrics["oldest_pending_seconds"] >= 599
     assert metrics["oldest_pending_seconds"] <= 600
 
 
-def test_outbox_metrics_empty_pool_has_null_lag(engine) -> None:
-    metrics = outbox_metrics(engine)
+def test_delivery_metrics_empty_pool_has_null_lag(engine) -> None:
+    metrics = delivery_metrics(engine)
     assert metrics["pending_count"] == 0
     assert metrics["failed_count"] == 0
     assert metrics["oldest_pending_seconds"] is None

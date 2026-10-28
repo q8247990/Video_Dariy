@@ -9,12 +9,13 @@ The orchestrator dispatches between them based on the
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus
 from src.models.task_log import ACTIVE_DEDUPE_INDEX_PREDICATE, TaskLog
 from src.services.dispatch.constants import TERMINAL_TASK_STATUSES
 from src.services.dispatch.dedupe import ensure_dict_detail
@@ -22,7 +23,6 @@ from src.services.dispatch.worker_bind._state import (
     apply_running_state,
     mark_superseded_pending,
 )
-from src.services.pipeline_constants import TaskStatus
 
 
 def bind_existing_queue_row(
@@ -31,12 +31,12 @@ def bind_existing_queue_row(
     existing: TaskLog,
     detail_payload: dict[str, Any],
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     dedupe_key: str,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     now: datetime,
     lease_seconds: int,
-) -> Optional[TaskLog]:
+) -> TaskLog | None:
     """Rebind a row whose ``queue_task_id`` matches the current broker message.
 
     Returns ``None`` when the row is already terminal (the "stale
@@ -51,6 +51,7 @@ def bind_existing_queue_row(
         # already hold this dedupe key.
         return None
     bound = apply_running_state(
+        db,
         existing,
         detail_payload=detail_payload,
         task_type=task_type,
@@ -76,12 +77,12 @@ def bind_pending_candidate(
     *,
     detail_payload: dict[str, Any],
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     dedupe_key: str,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     now: datetime,
     lease_seconds: int,
-) -> Optional[TaskLog]:
+) -> TaskLog | None:
     """Bind the latest PENDING TaskLog candidate that matches the dedupe-key.
 
     Returns ``None`` when no PENDING candidate matches; the caller
@@ -102,6 +103,7 @@ def bind_pending_candidate(
         if str(item_detail.get("dedupe_key") or "") != dedupe_key:
             continue
         bound = apply_running_state(
+            db,
             item,
             detail_payload=detail_payload,
             task_type=task_type,
@@ -128,12 +130,12 @@ def insert_fresh_running_row(
     *,
     detail_payload: dict[str, Any],
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     dedupe_key: str,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     now: datetime,
     lease_seconds: int,
-) -> Optional[TaskLog]:
+) -> TaskLog | None:
     """INSERT a brand-new RUNNING TaskLog and return it (or ``None`` on race).
 
     The partial unique index is the silent race net

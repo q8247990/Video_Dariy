@@ -1,7 +1,7 @@
 """Structured JSON logging, correlation-id threading and sensitive-field redaction.
 
-Todo 24 (Wave 6) adds operations-grade logging to the service. This
-module is the single, stdlib-only home for three concerns:
+This module is the single, stdlib-only home for three operations
+concerns:
 
 1. **JSON-structured records** — a :class:`RedactingJsonFormatter`
    emits every log record as a single-line JSON object (timestamp,
@@ -49,7 +49,6 @@ import contextvars
 import json
 import logging
 import re
-from typing import Optional
 
 from src.core.config import settings
 
@@ -61,17 +60,17 @@ from src.core.config import settings
 #: the FastAPI middleware and the Celery ``task_prerun`` signal; read by
 #: :class:`CorrelationFilter`. Uses ``contextvars`` so concurrent async
 #: requests and concurrent Celery workers each see their own value.
-CORRELATION_CONTEXT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+CORRELATION_CONTEXT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "correlation_id", default=None
 )
 
 
-def set_correlation_id(value: Optional[str]) -> None:
+def set_correlation_id(value: str | None) -> None:
     """Set the current correlation id for the calling context."""
     CORRELATION_CONTEXT.set(value)
 
 
-def get_correlation_id() -> Optional[str]:
+def get_correlation_id() -> str | None:
     """Return the current correlation id (or ``None``)."""
     return CORRELATION_CONTEXT.get()
 

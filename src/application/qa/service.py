@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -8,9 +7,8 @@ from src.application.qa.agent_strategy import AgentQAStrategy
 from src.application.qa.errors import QAProviderNotConfiguredError
 from src.application.qa.schemas import QARequest, QAResult
 from src.core.exceptions import DomainError
-from src.infrastructure.llm.openai_gateway import OpenAICompatGatewayFactory
+from src.core.provider_key_crypto import decrypt_provider_api_key
 from src.services.llm_qos import enforce_token_quota
-from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import PROVIDER_TYPE_QA, find_enabled_provider
 
 logger = logging.getLogger(__name__)
@@ -22,11 +20,10 @@ class QAService:
     def __init__(
         self,
         db: Session,
-        llm_factory: Optional[LLMGatewayFactoryPort] = None,
+        *,
+        llm_factory: LLMGatewayFactoryPort,
     ):
         self.db = db
-        if llm_factory is None:
-            llm_factory = OpenAICompatGatewayFactory()
         self._gateway_factory = llm_factory
 
     def answer(self, request: QARequest) -> QAResult:

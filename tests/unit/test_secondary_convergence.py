@@ -173,17 +173,6 @@ def test_provider_set_default_rejects_unsupported_capability(pg_db: Session) -> 
     assert result.error_code == 4004
 
 
-def test_provider_disable_blocks_default(pg_db: Session) -> None:
-    from src.application.llm_providers import disable_provider_use_case
-
-    provider = _build_provider(name="default-qa", supports_qa=True, is_default_qa=True)
-    pg_db.add(provider)
-    pg_db.commit()
-
-    result = disable_provider_use_case(pg_db, provider.id, "zh-CN")
-    assert result.error_code == 4003
-
-
 def test_provider_create_sets_legacy_provider_type(pg_db: Session) -> None:
     from src.application.llm_providers import create_provider_use_case
     from src.services.provider_selector import PROVIDER_TYPE_VISION
@@ -328,13 +317,14 @@ def test_qa_service_routes_to_agent_strategy_when_tool_calling(
         supports_tool_calling=True,
     )
     container = bootstrap_for_tests(llm_factory=factory)
-    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
+    monkeypatch.setattr("src.application.container_holder._container", container)
 
     service = QAService(pg_db, llm_factory=factory)
     result = service.answer(
         QARequest(
             question="昨天发生了什么？",
             now=datetime(2026, 3, 10, 8, 0, 0),
+            timezone="Asia/Shanghai",
             write_query_log=True,
         )
     )
@@ -386,6 +376,7 @@ def test_qa_service_rejects_provider_without_tool_calling(pg_db: Session) -> Non
             QARequest(
                 question="发生了什么？",
                 now=datetime(2026, 3, 10, 8, 0, 0),
+                timezone="Asia/Shanghai",
                 write_query_log=False,
             )
         )

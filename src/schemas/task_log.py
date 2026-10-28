@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -7,15 +7,15 @@ from pydantic import BaseModel, ConfigDict
 class TaskLogResponse(BaseModel):
     id: int
     task_type: str
-    task_target_id: Optional[int] = None
+    task_target_id: int | None = None
     status: str
-    queue_task_id: Optional[str] = None
+    queue_task_id: str | None = None
     cancel_requested: bool = False
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     retry_count: int
-    message: Optional[str] = None
-    detail_json: Optional[Any] = None
+    message: str | None = None
+    detail_json: Any | None = None
     created_at: datetime
     updated_at: datetime
 

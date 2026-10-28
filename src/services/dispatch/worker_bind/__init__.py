@@ -23,7 +23,7 @@ The function has three behavioural branches:
 
 Each branch has its own helper in this module so the top-level
 function stays at the C901 budget (≤ 10 branches). The behavioural
-contract is preserved verbatim from the pre-Wave-5 monolith — the
+contract is preserved verbatim from the monolith — the
 existing ``tests/unit/test_task_dispatch_binding.py`` is the spec.
 
 Sub-modules:
@@ -39,7 +39,7 @@ Sub-modules:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -55,11 +55,11 @@ from src.services.dispatch.worker_bind._branches import (
 
 def bind_or_create_running_task_log(
     db: Session,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     task_type: str,
-    task_target_id: Optional[int],
-    detail_json: Optional[dict[str, Any]] = None,
-) -> Optional[TaskLog]:
+    task_target_id: int | None,
+    detail_json: dict[str, Any] | None = None,
+) -> TaskLog | None:
     """Bind ``queue_task_id`` to an active TaskLog, creating one if needed.
 
     The consumer-side idempotency seam: every Celery task calls this
@@ -77,7 +77,7 @@ def bind_or_create_running_task_log(
       newer active row that claims the same dedupe-key (partial
       unique index ``on_conflict_do_nothing``).
 
-    Behaviour is preserved verbatim from the pre-Wave-5 monolith;
+    Behaviour is preserved verbatim from the monolith;
     every existing unit / integration test in
     ``tests/unit/test_task_dispatch_binding.py`` continues to pin
     the same outcomes.
@@ -110,7 +110,7 @@ def bind_or_create_running_task_log(
                 return bound
             # Stale message path: the matched row is terminal, so
             # there is no active TaskLog to claim. Returning ``None``
-            # here matches the pre-Wave-5 behaviour pin in
+            # here matches the behaviour pin in
             # ``test_bind_running_log_skips_stale_message_for_timed_out_row``.
             return None
 

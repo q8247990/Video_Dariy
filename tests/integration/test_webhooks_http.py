@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 from src.api import deps as api_deps
 from src.api.error_status import ResponseStatusMiddleware
 from src.api.v1.endpoints import webhooks as webhooks_module
+from src.application import container_holder
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
 from src.application.pipeline.commands import SendWebhookCommand
@@ -101,7 +102,7 @@ def fake_dispatcher() -> Iterator[FakeTaskDispatcher]:
     not contaminated.
     """
 
-    original = api_deps._container
+    original = container_holder._container
     fake = FakeTaskDispatcher()
     api_deps.set_container_for_tests(bootstrap_for_tests(dispatcher=fake))
     try:

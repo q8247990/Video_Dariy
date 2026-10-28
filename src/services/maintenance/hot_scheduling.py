@@ -13,7 +13,7 @@ calls it once per tick and reads the returned count off the
 dict. All per-source error handling is logged at the helper level so
 a single failed source cannot poison the rest of the heartbeat.
 
-The split from the pre-Wave-5 ``_dispatch_hot_builds`` keeps the
+The split from ``_dispatch_hot_builds`` keeps the
 private prefix off the public surface (``heartbeat`` is in
 ``src.tasks.task_maintenance``; the policy module is the
 implementation detail).
@@ -27,8 +27,9 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from src.application.pipeline.commands import SessionBuildCommand
+from src.application.ports.task_dispatcher import TaskDispatcherPort
+from src.core.pipeline_constants import ScanMode
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import ScanMode
 from src.services.system_config_registry import SCAN_INTERVAL_SECONDS, get_config
 from src.services.video_source_policy import is_source_schedulable
 
@@ -45,16 +46,16 @@ def _within_scan_interval(source: VideoSource, *, now: datetime, interval_second
     return (now - last_scan_at).total_seconds() < interval_seconds
 
 
-def dispatch_hot_builds(db: Session) -> list[dict]:
+def dispatch_hot_builds(db: Session, *, dispatcher: TaskDispatcherPort) -> list[dict]:
     """Enqueue one HOT-mode session build per schedulable source.
 
     A source is skipped when it is not schedulable
     (:func:`src.services.video_source_policy.is_source_schedulable`:
     disabled / paused / not validated / unsupported type) or when it was
-    scanned more recently than ``scan_interval_seconds``. Reads the
-    composition-root :class:`TaskDispatcherPort` so unit tests can swap in
-    :class:`FakeTaskDispatcher`. Per-source exceptions are logged and
-    skipped so one bad source does not break the heartbeat.
+    scanned more recently than ``scan_interval_seconds``. The caller passes
+    the composition-root :class:`TaskDispatcherPort`; this module never
+    reaches into the task layer for it. Per-source exceptions are logged
+    and skipped so one bad source does not break the heartbeat.
 
     Returns the per-source dispatch envelope (``source_id`` +
     ``task_id``) so the heartbeat aggregator can report the exact
@@ -67,9 +68,6 @@ def dispatch_hot_builds(db: Session) -> list[dict]:
     )
     interval_seconds = int(get_config(db, SCAN_INTERVAL_SECONDS))
     now = datetime.now(timezone.utc)
-    from src.tasks._container import get_container
-
-    dispatcher = get_container().dispatcher
     dispatched: list[dict] = []
     for source in sources:
         schedulable, reason = is_source_schedulable(source)

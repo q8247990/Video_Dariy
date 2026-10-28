@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import (
     FakeAnalysisPorts,
@@ -38,13 +39,14 @@ from src.application.bootstrap_fakes import (
 from src.models.llm_provider import LLMProvider
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.analysis.constants import RAW_MP4_NUM_FRAMES
+from src.services.analysis.contracts import RAW_MP4_NUM_FRAMES
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks import _analyzer_orchestration, _container  # noqa: F401
+from src.tasks import _analyzer_orchestration  # noqa: F401
+from src.tasks import _container as _ports_holder
 from src.tasks.analyzer import analyze_session_task
 
 SessionFactory = Callable[[], Session]
@@ -214,7 +216,7 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
     factory.install_gateway(ScriptedVisionGateway(responses=[_recognition_result_json()]))
     container = bootstrap_for_tests(llm_factory=factory)
     _container.set_container_for_tests(container)
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts(chunks=1, sub_chunks_per_chunk=1))
 
     @contextmanager
     def _task_session() -> Any:
@@ -229,7 +231,7 @@ def test_analyzer_emits_video_mp4_payload_with_num_frames(
         analyze_session_task.run(session_id=session_id)
     finally:
         _container.reset_container_for_tests()
-        _container.reset_analysis_ports_for_tests()
+        _ports_holder.reset_analysis_ports_for_tests()
 
     gateway = factory.gateways[-1]
     assert len(gateway.calls) == 1

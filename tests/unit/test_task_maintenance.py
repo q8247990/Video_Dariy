@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
@@ -23,7 +24,6 @@ from src.services.maintenance import (
     recover_orphan_pending_tasks,
     recover_timed_out_tasks,
 )
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 
 SessionFactory = Callable[[], Session]
 
@@ -31,7 +31,7 @@ SessionFactory = Callable[[], Session]
 def _bind_fake_dispatcher(monkeypatch: pytest.MonkeyPatch) -> FakeTaskDispatcher:
     dispatcher = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=dispatcher)
-    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
+    monkeypatch.setattr("src.application.container_holder._container", container)
     return dispatcher
 
 
@@ -88,7 +88,7 @@ def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
         monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
 
         now = datetime.now(timezone.utc)
-        count = recover_timed_out_tasks(db, now)
+        count = recover_timed_out_tasks(db, now, dispatcher=dispatcher)
         db.commit()
 
         assert count == 1
@@ -98,7 +98,7 @@ def test_worker_loss_after_checkpoint_auto_resumes_exactly_once(
         assert session.analysis_status == SessionAnalysisStatus.SEALED
         assert len(dispatcher.dispatched_analyze_session) == 1
 
-        assert recover_timed_out_tasks(db, now) == 0
+        assert recover_timed_out_tasks(db, now, dispatcher=dispatcher) == 0
         assert len(dispatcher.dispatched_analyze_session) == 1
     finally:
         db.close()
@@ -121,7 +121,7 @@ def test_healthy_queued_pending_task_is_not_falsely_timed_out(
         db.commit()
 
         now = datetime.now(timezone.utc)
-        count = recover_orphan_pending_tasks(db, now)
+        count = recover_orphan_pending_tasks(db, now, dispatcher=FakeTaskDispatcher())
         db.commit()
 
         assert count == 0
@@ -153,7 +153,8 @@ def test_unleased_stale_build_task_times_out_and_revokes(
         monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", revoke_mock)
 
         now = datetime.now(timezone.utc)
-        count = recover_orphan_pending_tasks(db, now)
+        dispatcher = FakeTaskDispatcher()
+        count = recover_orphan_pending_tasks(db, now, dispatcher=dispatcher)
         db.commit()
 
         assert count == 1
@@ -162,12 +163,12 @@ def test_unleased_stale_build_task_times_out_and_revokes(
         assert pending.message == "Pending task was never picked up by a worker; timed out"
         revoke_mock.assert_called_once_with("lost-celery-task-id", terminate=True)
 
-        assert recover_orphan_pending_tasks(db, now) == 0
+        assert recover_orphan_pending_tasks(db, now, dispatcher=dispatcher) == 0
     finally:
         db.close()
 
 
-def test_unleased_stale_analysis_task_is_not_touched(
+def test_unleased_analysis_within_vision_grace_is_not_touched(
     pg_db_factory: SessionFactory,
 ) -> None:
     session_factory = pg_db_factory
@@ -185,12 +186,62 @@ def test_unleased_stale_analysis_task_is_not_touched(
         db.commit()
 
         now = datetime.now(timezone.utc)
-        count = recover_orphan_pending_tasks(db, now)
+        count = recover_orphan_pending_tasks(db, now, dispatcher=FakeTaskDispatcher())
         db.commit()
 
         assert count == 0
         db.refresh(pending)
         assert pending.status == TaskStatus.PENDING
+    finally:
+        db.close()
+
+
+def test_unleased_analysis_past_grace_is_requeued(
+    pg_db_factory: SessionFactory,
+) -> None:
+    session_factory = pg_db_factory
+    db: Session = session_factory()
+    try:
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            last_validate_status="success",
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
+        session = VideoSession(
+            source_id=source.id,
+            session_start_time=datetime.now(timezone.utc) - timedelta(hours=2),
+            session_end_time=datetime.now(timezone.utc) - timedelta(hours=2),
+            analysis_status=SessionAnalysisStatus.ANALYZING,
+        )
+        db.add(session)
+        db.flush()
+        pending = TaskLog(
+            task_type=TaskType.SESSION_ANALYSIS,
+            task_target_id=session.id,
+            status=TaskStatus.PENDING,
+            detail_json={"priority": "hot"},
+            queue_task_id="lost-analysis-task-id",
+        )
+        pending.created_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        db.add(pending)
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+        dispatcher = FakeTaskDispatcher()
+        count = recover_orphan_pending_tasks(db, now, dispatcher=dispatcher)
+        db.commit()
+
+        assert count == 1
+        assert [item.session_id for item in dispatcher.dispatched_analyze_session] == [session.id]
+        db.refresh(pending)
+        assert pending.status == TaskStatus.TIMEOUT
+        assert pending.recovery_attempt == 1
+        assert recover_orphan_pending_tasks(db, now, dispatcher=dispatcher) == 0
     finally:
         db.close()
 
@@ -233,7 +284,7 @@ def test_cancelled_analysis_is_not_auto_resumed(
         db.commit()
         dispatcher = _bind_fake_dispatcher(monkeypatch)
 
-        assert recover_timed_out_tasks(db, datetime.now(timezone.utc)) == 0
+        assert recover_timed_out_tasks(db, datetime.now(timezone.utc), dispatcher=dispatcher) == 0
         assert len(dispatcher.dispatched_analyze_session) == 0
     finally:
         db.close()
@@ -276,7 +327,7 @@ def test_exhausted_recovery_budget_records_terminal_reason(
         db.commit()
         dispatcher = _bind_fake_dispatcher(monkeypatch)
 
-        assert recover_timed_out_tasks(db, datetime.now(timezone.utc)) == 1
+        assert recover_timed_out_tasks(db, datetime.now(timezone.utc), dispatcher=dispatcher) == 1
         db.commit()
 
         db.refresh(task_log)

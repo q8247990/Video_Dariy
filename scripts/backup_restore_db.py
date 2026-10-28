@@ -37,7 +37,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy.engine.url import make_url
 
@@ -85,7 +84,7 @@ def compute_sha256(path: Path) -> str:
 def run_backup(
     database_url: str,
     output: Path,
-    schema: Optional[str] = None,
+    schema: str | None = None,
 ) -> Path:
     """Dump ``database_url`` (optionally a single ``schema``) to ``output``.
 
@@ -123,7 +122,7 @@ def verify_checksum(output: Path) -> bool:
 def run_restore(
     database_url: str,
     dump: Path,
-    schema: Optional[str] = None,
+    schema: str | None = None,
 ) -> None:
     """Restore ``dump`` into ``database_url`` (optionally filtered by schema)."""
     if not dump.exists():
@@ -163,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "backup":
         output = run_backup(args.database_url, Path(args.output), schema=args.schema)

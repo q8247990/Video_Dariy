@@ -5,7 +5,7 @@ verify that an :class:`LLMProvider` row actually responds. It is a thin
 domain helper — the real network round-trip lives behind the gateway
 port owned by the composition root (``src.application.bootstrap``).
 
-Architectural rule (Todo 5/8): **this module must not import
+Architectural rule: **this module must not import
 ``src.infrastructure.*``** — concrete adapter binding is the composition
 root's job. The :class:`LLMGatewayFactoryPort` is therefore an injected
 dependency that callers (FastAPI endpoint, Celery task, integration
@@ -24,12 +24,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from src.application.ports.llm_gateway import LLMGatewayFactoryPort
 from src.core.i18n import DEFAULT_LOCALE, t
+from src.core.provider_key_crypto import decrypt_provider_api_key
 from src.models.llm_provider import LLMProvider
-from src.services.provider_key_crypto import decrypt_provider_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +44,8 @@ class ProviderTestResult:
 def check_provider_connectivity(
     provider: LLMProvider,
     *,
-    locale: Optional[str] = None,
-    llm_factory: Optional[LLMGatewayFactoryPort] = None,
+    locale: str | None = None,
+    llm_factory: LLMGatewayFactoryPort | None = None,
 ) -> ProviderTestResult:
     """Probe ``provider`` and report connectivity / capability flags.
 

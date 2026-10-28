@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from typing import Optional
 
 from src.core.i18n import t
 from src.models.event_record import EventRecord
@@ -103,9 +102,9 @@ class DashboardPresenter:
     @staticmethod
     def latest_daily_summary(
         latest_summary_exist: bool,
-        latest_summary_date: Optional[date],
-        latest_summary_overall: Optional[str],
-        latest_task_status: Optional[str],
+        latest_summary_date: date | None,
+        latest_summary_overall: str | None,
+        latest_task_status: str | None,
     ) -> DashboardLatestDailySummary:
         if latest_summary_exist:
             return DashboardLatestDailySummary(
@@ -128,9 +127,9 @@ class DashboardPresenter:
 
     @staticmethod
     def task_summary(
-        last_scan_at: Optional[datetime],
-        last_analysis_status: Optional[str],
-        last_daily_summary_status: Optional[str],
+        last_scan_at: datetime | None,
+        last_analysis_status: str | None,
+        last_daily_summary_status: str | None,
         failed_task_count_24h: int,
     ) -> DashboardTaskSummary:
         return DashboardTaskSummary(

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -8,9 +7,9 @@ from sqlalchemy.orm import Session
 from src.application.bootstrap import Container
 from src.core.exceptions import DomainError
 from src.core.i18n import t
+from src.core.provider_key_crypto import encrypt_provider_api_key
 from src.models.llm_provider import LLMProvider
 from src.services.llm_provider_tester import check_provider_connectivity
-from src.services.provider_key_crypto import encrypt_provider_api_key
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
     PROVIDER_TYPE_VISION,
@@ -32,17 +31,15 @@ _DEFAULT_MSG_KEY_BY_TYPE = {
 class ProviderMutationResult:
     error_code: int = 0
     error_message: str = ""
-    provider: Optional[LLMProvider] = None
-    payload: Optional[dict] = None
+    provider: LLMProvider | None = None
+    payload: dict | None = None
 
 
 def _err(code: int, message: str) -> ProviderMutationResult:
     return ProviderMutationResult(error_code=code, error_message=message)
 
 
-def _ok(
-    provider: Optional[LLMProvider] = None, payload: Optional[dict] = None
-) -> ProviderMutationResult:
+def _ok(provider: LLMProvider | None = None, payload: dict | None = None) -> ProviderMutationResult:
     return ProviderMutationResult(provider=provider, payload=payload)
 
 
@@ -55,7 +52,7 @@ def _validate_update_constraints(
     next_supports_qa: bool,
     next_is_default_vision: bool,
     next_is_default_qa: bool,
-) -> Optional[ProviderMutationResult]:
+) -> ProviderMutationResult | None:
     error = _check_any_capability(
         supports_vision=next_supports_vision, supports_qa=next_supports_qa, locale=locale
     )
@@ -84,7 +81,7 @@ def _ensure_provider_capabilities(dump: dict, locale: str) -> None:
 
 def _check_any_capability(
     *, supports_vision: bool, supports_qa: bool, locale: str
-) -> Optional[ProviderMutationResult]:
+) -> ProviderMutationResult | None:
     if supports_vision or supports_qa:
         return None
     return _err(4001, t("provider.capability_required", locale))
@@ -98,7 +95,7 @@ def _check_cannot_disable_default(
     supports_qa: bool,
     enabled: object,
     locale: str,
-) -> Optional[ProviderMutationResult]:
+) -> ProviderMutationResult | None:
     would_be_default = (is_default_vision and supports_vision) or (is_default_qa and supports_qa)
     if would_be_default and enabled is False:
         return _err(4003, t("provider.cannot_disable_default", locale))
@@ -107,7 +104,7 @@ def _check_cannot_disable_default(
 
 def _check_qa_tool_calling(
     dump: dict, provider: LLMProvider, locale: str, *, supports_qa: bool
-) -> Optional[ProviderMutationResult]:
+) -> ProviderMutationResult | None:
     if not supports_qa:
         return None
     if bool(dump.get("supports_tool_calling", provider.supports_tool_calling)):
@@ -263,22 +260,6 @@ def set_default_provider_use_case(
     setattr(provider, default_field, True)
     provider.enabled = True
     provider.provider_type = PROVIDER_TYPE_VISION if not provider.supports_qa else PROVIDER_TYPE_QA
-    return _ok(provider=provider)
-
-
-def enable_provider_use_case(db: Session, id: int) -> ProviderMutationResult:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if provider:
-        provider.enabled = True
-    return _ok(provider=provider)
-
-
-def disable_provider_use_case(db: Session, id: int, locale: str) -> ProviderMutationResult:
-    provider = db.query(LLMProvider).filter(LLMProvider.id == id).first()
-    if provider:
-        if provider.is_default_vision or provider.is_default_qa:
-            return _err(4003, t("provider.cannot_disable_default", locale))
-        provider.enabled = False
     return _ok(provider=provider)
 
 

@@ -100,7 +100,6 @@ would lose the very transitions the audit exists to capture.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -160,7 +159,7 @@ class PipelineTransitionLog(Base):
     to_status: Mapped[str] = mapped_column(String(32), nullable=False)
 
     # -- operator / system context ------------------------------------
-    reason: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # -- correlation ---------------------------------------------------
@@ -168,7 +167,7 @@ class PipelineTransitionLog(Base):
     # outlive the 7-day ``task_log`` cleanup, so deleting the
     # correlation id is a no-op on the history itself (the audit row
     # keeps ``from_status`` / ``to_status`` / ``reason`` / ``source``).
-    task_log_id: Mapped[Optional[int]] = mapped_column(
+    task_log_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("task_log.id", ondelete="SET NULL"),
         nullable=True,

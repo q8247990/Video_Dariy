@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, func, or_, text
+from sqlalchemy import ARRAY, ColumnElement, String, TextClause, bindparam, func, or_, text
 from sqlalchemy.orm import Session
 
 from src.models.event_record import EventRecord
@@ -29,6 +30,20 @@ def declared_focus_items(db: Session) -> list[FocusPointItem]:
     return coerce_focus_points(profile.focus_points_json)
 
 
+def focus_keys_condition(keys: Iterable[str]) -> TextClause:
+    """Build a parameterized ``jsonb ?| text[]`` focus-key predicate.
+
+    The keys originate from user-editable home-profile focus points, so they
+    must never be interpolated into the SQL string. They are bound as a single
+    ``text[]`` parameter instead.
+    """
+    return text(
+        "(event_record.focus_matches_json::jsonb ?| CAST(:focus_keys AS text[]))"
+    ).bindparams(
+        bindparam("focus_keys", value=sorted(set(keys)), type_=ARRAY(String)),
+    )
+
+
 def attention_condition(db: Session) -> ColumnElement[bool]:
     conditions: list[Any] = [EventRecord.event_type.in_(sorted(ATTENTION_EVENT_TYPES))]
     conditions.append(
@@ -37,12 +52,9 @@ def attention_condition(db: Session) -> ColumnElement[bool]:
             "WHERE e->>'entity_type' = 'unknown_person')"
         )
     )
-    keys = sorted(attention_focus_keys(declared_focus_items(db)))
+    keys = attention_focus_keys(declared_focus_items(db))
     if keys:
-        keys_literal = ", ".join(f"'{key}'" for key in keys)
-        conditions.append(
-            text(f"(event_record.focus_matches_json::jsonb ?| array[{keys_literal}])")
-        )
+        conditions.append(focus_keys_condition(keys))
     return or_(*conditions)
 
 
@@ -92,5 +104,6 @@ __all__ = [
     "attention_event_rows",
     "declared_focus_items",
     "focus_event_counts",
+    "focus_keys_condition",
     "home_local_day_window",
 ]

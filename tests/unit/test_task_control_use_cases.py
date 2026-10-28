@@ -31,14 +31,14 @@ from sqlalchemy.orm import Session
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskControl, FakeTaskDispatcher
 from src.application.tasks import retry_task_log_use_case, stop_task_log_use_case
-from src.models.task_log import TaskLog
-from src.models.video_session import VideoSession
-from src.models.video_source import VideoSource
-from src.services.pipeline_constants import (
+from src.core.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 
 # ---------------------------------------------------------------------------
 # stop_task_log_use_case

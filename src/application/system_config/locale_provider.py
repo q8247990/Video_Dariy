@@ -1,11 +1,10 @@
 """Locale provider for ``src.core.i18n``.
 
 This module is the **application-layer** adapter that resolves the
-system-wide default locale. ``src.core.i18n.get_system_default_locale``
-delegates to a :class:`LocaleProvider` Protocol instance; production code
-binds :class:`SystemConfigLocaleProvider` (a thin wrapper around the
-existing ``system_config.default_locale`` row), while tests can supply
-in-memory fakes.
+system-wide default locale. The :class:`LocaleProvider` contract itself
+now lives in :mod:`src.core.i18n.provider` so the core layer never imports
+application code; application implementations (the DB-backed and callable
+adapters) implement that contract here.
 
 The module deliberately lives under ``src.application`` rather than
 ``src.services`` so that ``src.core.i18n`` can resolve a locale without
@@ -15,40 +14,15 @@ importing ``src.db.session`` (which would violate the
 code is allowed to bind ORM-backed adapters; ``src.core`` is not.
 
 Imports from ``src.core.i18n`` happen **lazily inside the methods** to
-avoid a load-time cycle (the i18n module imports the ``LocaleProvider``
-Protocol back from this module at top level).
+avoid a load-time cycle.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable
 
-# ---------------------------------------------------------------------------
-# Protocol
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class LocaleProvider(Protocol):
-    """Returns the system-wide default locale (e.g. ``"zh-CN"``).
-
-    The locale string MUST be one of the values accepted by
-    :func:`src.core.i18n.normalize_locale`. Implementations are expected
-    to normalise user-supplied / DB-supplied values before returning.
-    """
-
-    def get_default_locale(self) -> str: ...
-
-    def invalidate(self) -> None:
-        """Optional: drop any cached value so the next call re-reads.
-
-        Defined on the Protocol but ``Protocol`` doesn't enforce it at
-        runtime; callers should fall back to a no-op when the bound
-        provider doesn't expose ``invalidate``.
-        """
-        ...
-
+from src.core.i18n.provider import LocaleProvider, StaticLocaleProvider
 
 # ---------------------------------------------------------------------------
 # Production adapter (DB-backed)
@@ -98,10 +72,10 @@ class SystemConfigLocaleProvider(LocaleProvider):
         self,
         *,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
-        session_factory: Optional[Callable[[], Any]] = None,
+        session_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._ttl_seconds = ttl_seconds
-        self._cache: Optional[str] = None
+        self._cache: str | None = None
         self._cache_ts: float = 0.0
         self._session_factory = session_factory
 
@@ -178,39 +152,8 @@ class SystemConfigLocaleProvider(LocaleProvider):
 
 
 # ---------------------------------------------------------------------------
-# Static / in-memory adapters
+# In-memory adapters
 # ---------------------------------------------------------------------------
-
-
-class StaticLocaleProvider(LocaleProvider):
-    """Deterministic provider used by tests and tool-only contexts.
-
-    Returns the value supplied at construction time and never touches the
-    database. The constructor accepts any of the supported spellings
-    (``zh``, ``zh_CN``, ``zh-CN``) — normalisation happens lazily inside
-    :meth:`get_default_locale` so that constructing a provider at module
-    import time (before ``src.core.i18n`` has finished loading) is safe.
-    """
-
-    def __init__(self, locale: str = "zh-CN") -> None:
-        # Store the raw value; defer normalisation until first use so the
-        # constructor does not depend on ``src.core.i18n`` having fully
-        # loaded yet (see the module docstring re: load order).
-        self._raw: str = locale
-
-    def get_default_locale(self) -> str:
-        # Lazy import: only paid for once the provider is queried, never
-        # at construction time.
-        from src.core.i18n import SUPPORTED_LOCALES, normalize_locale
-
-        if self._raw in SUPPORTED_LOCALES:
-            return self._raw
-        return normalize_locale(self._raw)
-
-    def invalidate(self) -> None:
-        # No cached state — explicit no-op so callers can invoke it
-        # unconditionally without an ``isinstance`` check.
-        return None
 
 
 class CallableLocaleProvider(LocaleProvider):

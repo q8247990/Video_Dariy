@@ -1,11 +1,9 @@
 """Session analysis Celery task: thin wrapper over the orchestration module.
 
-Wave 5 split the previous monolith (~780 LOC, mixed lease / LLM /
-checkpoint / finalize responsibilities) into a Celery task plus stage
-modules under :mod:`src.services.analysis`. Wave 5b then moved the
+The pipeline stages live in :mod:`src.services.analysis`, and the
 pipeline body (claim + plan + sub-chunk loop + finalize + failure
-handling) out of this task entry into
-:mod:`src.tasks._analyzer_orchestration`. This task entry now only:
+handling) lives in :mod:`src.tasks._analyzer_orchestration`. This task
+entry only:
 
 * builds the ``queue_task_id`` from the Celery request;
 * delegates to :func:`run_session_analysis` in the orchestration
@@ -16,7 +14,7 @@ the Celery registry name (``src.tasks.analyzer.analyze_session_task``)
 is the stable dispatch contract referenced by the outbox registry and
 the celery dispatcher. Pipeline helpers live in
 :mod:`src.tasks._analyzer_orchestration` and are called directly from
-there — tests inject an :class:`~src.services.analysis.ports.AnalysisPorts`
+there — tests inject an :class:`~src.services.analysis.contracts.AnalysisPorts`
 bundle via the task-layer holder
 (:func:`src.tasks._container.set_analysis_ports_for_tests`) instead of
 monkey-patching internal helper symbols.
@@ -27,7 +25,9 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.celery_app import celery_app
-from src.services.analysis.constants import DEADLOCK_MAX_RETRIES
+from src.db.session import task_db_session
+from src.services.analysis.contracts import DEADLOCK_MAX_RETRIES
+from src.services.dispatch.outbox import flush_task_deliveries, pending_deliveries
 from src.tasks._analyzer_orchestration import run_session_analysis
 from src.tasks._container import get_analysis_ports
 
@@ -45,13 +45,17 @@ def analyze_session_task(self: Any, session_id: int, priority: str = "hot") -> d
     overlapping on the same ``(session, queue_task_id)``.
     """
     queue_task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
-    return run_session_analysis(
-        self=self,
-        session_id=session_id,
-        priority=priority,
-        queue_task_id=queue_task_id,
-        ports=get_analysis_ports(),
-    )
+    with pending_deliveries() as deliveries:
+        result = run_session_analysis(
+            self=self,
+            session_id=session_id,
+            priority=priority,
+            queue_task_id=queue_task_id,
+            ports=get_analysis_ports(),
+        )
+        with task_db_session() as db:
+            flush_task_deliveries(db, deliveries)
+    return result
 
 
 __all__ = ["analyze_session_task"]

@@ -18,17 +18,18 @@ This data migration normalizes any lingering ``keyframe`` rows to
    ``raw_mp4`` and only logs a warning) starts from a clean state.
 
 The columns themselves are kept on purpose — only the data is
-normalized.
+normalized. ``downgrade()`` refuses to run: restoring the old values
+would re-enable exactly the mode this revision removes.
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 from alembic import op
 
 revision: str = "20260825_0011"
-down_revision: Union[str, None] = "20260824_0010"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260824_0010"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -39,6 +40,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Data normalization is intentionally not reversed: re-enabling the
-    # keyframe mode is exactly what this revision is designed to prevent.
-    pass
+    raise RuntimeError(
+        "video_preprocess_mode normalization is irreversible; restore the "
+        "pre-upgrade backup instead of downgrading"
+    )

@@ -1,6 +1,6 @@
 """Shared constants for the maintenance policy modules.
 
-The maintenance package splits the pre-Wave-5 monolithic
+The maintenance package splits the monolithic
 ``src/tasks/task_maintenance.py`` heartbeat body (~373 LOC) into
 discrete policy modules + a thin aggregator. The constants here are
 the per-policy tunables (timeout windows, retention thresholds,

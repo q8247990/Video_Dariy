@@ -1,4 +1,4 @@
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
 
@@ -15,29 +15,25 @@ class TaskDispatcherPort(Protocol):
     """Async task dispatcher port.
 
     Every dispatch method **MUST** be called with a caller-owned
-    SQLAlchemy ``Session``. The dispatcher writes the ``TaskLog`` and the
-    ``OutboxEvent`` in that session in a **single transaction**; the
-    caller commits. The dispatcher never opens its own ``SessionLocal``
-    and never calls ``celery_app.send_task`` directly — the standalone
-    outbox publisher (Todo 13) is the only broker round-trip in the
-    codebase.
+    SQLAlchemy ``Session``. The dispatcher writes the ``TaskLog`` row (with
+    the broker ``task_id`` pre-assigned to ``queue_task_id``) and a
+    :class:`~src.models.task_delivery.TaskDelivery` intent row in that
+    session; the caller commits. The caller then flushes that intent to the
+    broker through :func:`~src.services.dispatch.outbox.flush_task_deliveries`.
 
-    The returned ``Optional[str]`` is the ``OutboxEvent.event_id`` (UUID
-    stringified); the dispatcher sets ``TaskLog.queue_task_id`` to the
-    same value so the consumer-side ``bind_or_create_running_task_log``
-    idempotency seam (ADR §7) can bind by ``event_id``.
+    The returned ``str | None`` is the broker ``task_id`` (UUID
+    stringified) so the consumer-side ``bind_or_create_running_task_log``
+    idempotency seam can bind by it.
     """
 
-    def dispatch_session_build(
-        self, db: Session, command: SessionBuildCommand
-    ) -> Optional[str]: ...
+    def dispatch_session_build(self, db: Session, command: SessionBuildCommand) -> str | None: ...
 
     def dispatch_analyze_session(
         self, db: Session, command: AnalyzeSessionCommand
-    ) -> Optional[str]: ...
+    ) -> str | None: ...
 
     def dispatch_generate_daily_summary(
         self, db: Session, command: GenerateDailySummaryCommand
-    ) -> Optional[str]: ...
+    ) -> str | None: ...
 
-    def dispatch_webhook(self, db: Session, command: SendWebhookCommand) -> Optional[str]: ...
+    def dispatch_webhook(self, db: Session, command: SendWebhookCommand) -> str | None: ...

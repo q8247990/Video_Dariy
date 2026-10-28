@@ -24,6 +24,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import (
     FakeAnalysisPorts,
@@ -41,7 +42,8 @@ from src.services.video_analysis.schemas import (
     RecognizedEventDTO,
     SessionSummaryDTO,
 )
-from src.tasks import _analyzer_orchestration, _container  # noqa: F401
+from src.tasks import _analyzer_orchestration  # noqa: F401
+from src.tasks import _container as _ports_holder
 from src.tasks.analyzer import analyze_session_task
 
 
@@ -58,7 +60,7 @@ def _base_action(postgres_migrated_engine, monkeypatch: pytest.MonkeyPatch) -> I
     factory.install_gateway(ScriptedVisionGateway(responses=[]))
     container = bootstrap_for_tests(llm_factory=factory)
     _container.set_container_for_tests(container)
-    _container.set_analysis_ports_for_tests(FakeAnalysisPorts())
+    _ports_holder.set_analysis_ports_for_tests(FakeAnalysisPorts())
 
     @contextmanager
     def _task_session() -> Iterator[Session]:
@@ -73,7 +75,7 @@ def _base_action(postgres_migrated_engine, monkeypatch: pytest.MonkeyPatch) -> I
         yield
     finally:
         _container.reset_container_for_tests()
-        _container.reset_analysis_ports_for_tests()
+        _ports_holder.reset_analysis_ports_for_tests()
 
 
 def _seed_provider(db: Session) -> LLMProvider:

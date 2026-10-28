@@ -29,8 +29,8 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
 from src.db.init_db import (
-    EXPECTED_ALEMBIC_REVISION,
     MIGRATION_ADVISORY_LOCK_KEY,
+    get_expected_alembic_revision,
     run_migration_locked,
 )
 from tests.conftest import run_alembic_upgrade_head
@@ -89,7 +89,7 @@ def _bootstrap_attempt(
     barrier: threading.Barrier,
 ) -> None:
     def migrate() -> None:
-        if _current_revision(engine) != EXPECTED_ALEMBIC_REVISION:
+        if _current_revision(engine) != get_expected_alembic_revision():
             migrator_tags.append(True)
             run_alembic_upgrade_head(postgres_database_url, schema)
 
@@ -120,7 +120,7 @@ def test_concurrent_bootstrap_serializes_and_migrates_once(
             assert not t.is_alive(), "bootstrap thread did not finish"
 
         assert len(migrator_tags) == 1, "exactly one attempt should own the migration"
-        assert _current_revision(engine) == EXPECTED_ALEMBIC_REVISION
+        assert _current_revision(engine) == get_expected_alembic_revision()
         table_names = set(inspect(engine).get_table_names())
         for expected in ("video_source", "video_session", "event_record", "task_log"):
             assert expected in table_names

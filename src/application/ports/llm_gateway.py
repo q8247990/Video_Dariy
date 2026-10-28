@@ -1,4 +1,4 @@
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -9,22 +9,22 @@ class LLMGatewayPort(Protocol):
         self,
         messages: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict[str, Any]] = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> Optional[str]: ...
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str | None: ...
 
     def chat_completion_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]: ...
+        max_tokens: int | None = None,
+    ) -> tuple[str | None, list[dict[str, Any]] | None]: ...
 
-    def get_last_usage(self) -> Optional[dict[str, int]]: ...
+    def get_last_usage(self) -> dict[str, int] | None: ...
 
-    def get_last_raw_response_text(self) -> Optional[str]: ...
+    def get_last_raw_response_text(self) -> str | None: ...
 
     def close(self) -> None: ...
 

@@ -1,15 +1,14 @@
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import Case, and_, case, func
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 
 
 def build_video_source_status(db: Session, source_id: int) -> dict:
@@ -113,7 +112,7 @@ def _file_seconds_expr() -> Case:
 def _query_video_file_metrics_map(
     db: Session,
     source_ids: list[int],
-) -> dict[int, tuple[Optional[datetime], Optional[datetime], float]]:
+) -> dict[int, tuple[datetime | None, datetime | None, float]]:
     """一次查询 video_file：时间范围 + 总时长（秒数求和由 SQL 完成）。"""
     rows = (
         db.query(
@@ -126,7 +125,7 @@ def _query_video_file_metrics_map(
         .group_by(VideoFile.source_id)
         .all()
     )
-    result: dict[int, tuple[Optional[datetime], Optional[datetime], float]] = {}
+    result: dict[int, tuple[datetime | None, datetime | None, float]] = {}
     for row in rows:
         result[int(row.source_id)] = (
             row.video_earliest_time,
@@ -139,7 +138,7 @@ def _query_video_file_metrics_map(
 def _query_analyzed_time_range_map(
     db: Session,
     source_ids: list[int],
-) -> dict[int, tuple[Optional[datetime], Optional[datetime]]]:
+) -> dict[int, tuple[datetime | None, datetime | None]]:
     rows = (
         db.query(
             VideoSession.source_id,
@@ -153,7 +152,7 @@ def _query_analyzed_time_range_map(
         .group_by(VideoSession.source_id)
         .all()
     )
-    result: dict[int, tuple[Optional[datetime], Optional[datetime]]] = {}
+    result: dict[int, tuple[datetime | None, datetime | None]] = {}
     for row in rows:
         result[int(row.source_id)] = (row.analyzed_earliest_time, row.analyzed_latest_time)
     return result
@@ -192,7 +191,7 @@ def _query_analyzed_file_seconds_map(db: Session, source_ids: list[int]) -> dict
 def _calculate_analyzed_coverage_percent(
     analyzed_file_seconds: float,
     total_file_seconds: float,
-) -> Optional[float]:
+) -> float | None:
     if total_file_seconds <= 0:
         return None
     percent = (analyzed_file_seconds / total_file_seconds) * 100
@@ -200,9 +199,9 @@ def _calculate_analyzed_coverage_percent(
 
 
 def _minutes_since_last_new_video(
-    video_latest_time: Optional[datetime],
+    video_latest_time: datetime | None,
     now: datetime,
-) -> Optional[int]:
+) -> int | None:
     if video_latest_time is None:
         return None
     if video_latest_time.tzinfo is None:

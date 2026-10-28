@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,8 @@ from src.application.summary_publication import (
 )
 from src.core.i18n import get_system_default_locale
 from src.core.i18n.locale_directive import get_summary_title
+from src.core.pipeline_constants import TaskStatus
+from src.core.provider_key_crypto import decrypt_provider_api_key
 from src.models.task_log import TaskLog
 from src.services.dispatch import (
     TaskCancellationRequested,
@@ -42,9 +44,7 @@ from src.services.dispatch import (
     finalize_task_log,
 )
 from src.services.llm_qos import enforce_token_quota, record_token_usage
-from src.services.pipeline_constants import TaskStatus
 from src.services.provider_generation_limits import resolve_max_output_tokens
-from src.services.provider_key_crypto import decrypt_provider_api_key
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
     find_required_enabled_provider,
@@ -85,10 +85,10 @@ class GenerationOutcome:
     event_count: int
     attempt_no: int = 0
     attempt_status: str = "unknown"
-    summary_id: Optional[int] = None
+    summary_id: int | None = None
     cancelled: bool = False
     skipped: bool = False
-    skip_reason: Optional[str] = None
+    skip_reason: str | None = None
     webhook_event_ids: list[Any] = field(default_factory=list)
 
 
@@ -107,7 +107,7 @@ def _close_gateway_safely(client: Any) -> None:
 
 def _get_pipeline_orchestrator() -> PipelineOrchestrator:
     """Build a fresh :class:`PipelineOrchestrator` from the composition root."""
-    from src.tasks._container import get_container
+    from src.application.container_holder import get_container
 
     return PipelineOrchestrator(dispatcher=get_container().dispatcher)
 
@@ -125,7 +125,7 @@ def _dispatch_scheduled(
     db: Any,
     *,
     container: Any,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Resolve the dispatch eligibility; enqueue when due."""
     zone = get_home_timezone(db)
@@ -210,6 +210,7 @@ def _claim_and_evidence(
                 existing.id,
             )
             finalize_task_log(
+                db,
                 task_log,
                 TaskStatus.SUCCESS,
                 f"Skipped duplicate summary generation for {target_date}.",
@@ -352,6 +353,7 @@ def _handle_llm_failure(
         failure_reason="llm_error",
     )
     finalize_task_log(
+        db,
         task_log,
         TaskStatus.FAILED,
         f"Failed to generate summary for {target_date}: {exc}",
@@ -362,10 +364,10 @@ def run_daily_summary_generation(
     db: Session,
     *,
     target_date: date,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     container: Any,
     task_log: TaskLog,
-    serial_split_prompt_threshold: Optional[int] = None,
+    serial_split_prompt_threshold: int | None = None,
 ) -> dict[str, Any]:
     """Drive the full single-day generation flow and serialise the outcome.
 
@@ -376,7 +378,7 @@ def run_daily_summary_generation(
     the legacy response payload via :func:`_outcome_to_response`.
 
     ``serial_split_prompt_threshold`` is an optional test seam that
-    overrides :data:`~src.services.summarizer.constants.SERIAL_SPLIT_PROMPT_THRESHOLD`
+    overrides :data:`~src.services.summarizer.contracts.SERIAL_SPLIT_PROMPT_THRESHOLD`
     for the single-vs-serial decision in :func:`_run_llm_phase`. It
     defaults to ``None`` and falls through to the production constant,
     preserving existing behaviour for the Celery wrapper. Tests
@@ -400,12 +402,12 @@ def _run_generation_pipeline(
     *,
     db: Any,
     target_date: date,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     container: Any,
     task_log: TaskLog,
-    locale: Optional[str] = None,
+    locale: str | None = None,
     forced: bool = False,
-    serial_split_prompt_threshold: Optional[int] = None,
+    serial_split_prompt_threshold: int | None = None,
 ) -> GenerationOutcome:
     """Drive the full single-day generation flow.
 
@@ -425,7 +427,7 @@ def _run_generation_pipeline(
         get_home_timezone(db)
     except Exception as exc:
         logger.exception("Failed to resolve home timezone for %s", target_date)
-        finalize_task_log(task_log, TaskStatus.FAILED, str(exc))
+        finalize_task_log(db, task_log, TaskStatus.FAILED, str(exc))
         return outcome
 
     repo = DailySummaryAttemptRepository(db)
@@ -525,6 +527,7 @@ def _run_generation_pipeline(
     except AttemptNotInValidStateError as exc:
         db.rollback()
         finalize_task_log(
+            db,
             task_log,
             TaskStatus.FAILED,
             f"Daily summary publish rejected: {exc}",
@@ -541,6 +544,7 @@ def _run_generation_pipeline(
             failure_reason="publish_error",
         )
         finalize_task_log(
+            db,
             task_log,
             TaskStatus.FAILED,
             f"Failed to publish summary for {target_date}: {exc}",
@@ -559,6 +563,7 @@ def _run_generation_pipeline(
         parse_retried=parse_retried,
     )
     finalize_task_log(
+        db,
         task_log,
         TaskStatus.SUCCESS,
         f"Generated summary for {target_date} with {outcome.event_count} events.",

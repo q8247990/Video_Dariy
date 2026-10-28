@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
+from src.application.container_holder import get_container
 from src.core.celery_app import celery_app
+from src.core.pipeline_constants import TaskType
 from src.db.session import task_db_session
-from src.models.daily_summary import DailySummary
 from src.services.dispatch import (
     TaskCancellationRequested,
     bind_or_create_running_task_log,
@@ -31,9 +32,7 @@ from src.services.dispatch import (
     get_task_log_for_update,
 )
 from src.services.home_timezone import home_now
-from src.services.pipeline_constants import TaskType
 from src.services.summarizer import get_home_timezone
-from src.tasks._container import get_container
 from src.tasks._summarizer_orchestration import run_daily_summary_generation, run_dispatch_scheduled
 
 logger = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ def dispatch_scheduled_daily_summary_task(self: Any) -> dict[str, Any]:
 
 
 @celery_app.task(bind=True)  # type: ignore[untyped-decorator]
-def generate_daily_summary_task(self: Any, target_date_str: Optional[str] = None) -> dict[str, Any]:
+def generate_daily_summary_task(self: Any, target_date_str: str | None = None) -> dict[str, Any]:
     """Celery-worker entry point: generate one day's daily summary.
 
     Args:
@@ -97,10 +96,13 @@ def generate_daily_summary_task(self: Any, target_date_str: Optional[str] = None
         except TaskCancellationRequested as exc:
             logger.info("Daily summary task cancelled for %s", target_date)
             db.rollback()
-            db.query(DailySummary).filter(DailySummary.summary_date == target_date).delete()
+            # Cancellation only terminates this attempt. A previously published
+            # summary for the same date must survive so a user can cancel a
+            # retry without losing already-visible content.
             refreshed = get_task_log_for_update(db, task_log.id)
             if refreshed is not None:
                 finalize_cancelled_task_log(
+                    db,
                     refreshed,
                     str(exc),
                     {"target_date": str(target_date), "cancelled": True},

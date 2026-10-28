@@ -33,11 +33,11 @@ from sqlalchemy.orm import Session
 
 from src.api.error_status import ResponseStatusMiddleware
 from src.api.v1.endpoints import video_sources
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.event_record import EventRecord
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import TaskStatus, TaskType
 
 
 @pytest.fixture

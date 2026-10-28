@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -77,12 +77,12 @@ class OpenAIClient:
 
     def chat_completion(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         temperature: float = 0.2,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         extra_body: dict[str, Any] | None = None,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Chat completion. ``extra_body`` is shallow-merged into the request payload
         AFTER ``_build_default_request_extras()`` so provider-specific defaults
         (e.g. ``chat_template_kwargs`` for qwen) are preserved unless explicitly
@@ -125,11 +125,11 @@ class OpenAIClient:
 
     def chat_completion_with_tools(
         self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         temperature: float = 0.2,
         max_tokens: int | None = None,
-    ) -> tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+    ) -> tuple[str | None, list[dict[str, Any]] | None]:
         """带 tool_calling 的 chat completion，返回 (content, tool_calls)。"""
         url = f"{self.api_base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}

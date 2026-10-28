@@ -18,7 +18,7 @@ The fakes must remain dependency-free — they do not import
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from uuid import uuid4
 
 from src.application.ports.clock import ClockPort, IdGeneratorPort
@@ -60,7 +60,7 @@ class FakeTaskDispatcher(TaskDispatcherPort):
         self._counter += 1
         return f"{self._prefix}-{self._counter}"
 
-    def set_next_return(self, value: Optional[str]) -> None:
+    def set_next_return(self, value: str | None) -> None:
         """Force the next dispatch call to return ``value`` (consumed once).
 
         ``None`` here means "dispatcher declined to enqueue" — exactly
@@ -74,29 +74,29 @@ class FakeTaskDispatcher(TaskDispatcherPort):
     # TaskDispatcherPort protocol
     # ------------------------------------------------------------------
 
-    def dispatch_session_build(self, db: Any, command: Any) -> Optional[str]:
+    def dispatch_session_build(self, db: Any, command: Any) -> str | None:
         self.dispatched_sessions.append(db)
         self.dispatched_session_build.append(command)
         return self._dispatch_or_scripted()
 
-    def dispatch_analyze_session(self, db: Any, command: Any) -> Optional[str]:
+    def dispatch_analyze_session(self, db: Any, command: Any) -> str | None:
         self.dispatched_sessions.append(db)
         self.dispatched_analyze_session.append(command)
         return self._dispatch_or_scripted()
 
-    def dispatch_generate_daily_summary(self, db: Any, command: Any) -> Optional[str]:
+    def dispatch_generate_daily_summary(self, db: Any, command: Any) -> str | None:
         self.dispatched_sessions.append(db)
         self.dispatched_daily_summary.append(command)
         return self._dispatch_or_scripted()
 
-    def dispatch_webhook(self, db: Any, command: Any) -> Optional[str]:
+    def dispatch_webhook(self, db: Any, command: Any) -> str | None:
         self.dispatched_sessions.append(db)
         self.dispatched_webhook.append(command)
         return self._dispatch_or_scripted()
 
-    def _dispatch_or_scripted(self) -> Optional[str]:
+    def _dispatch_or_scripted(self) -> str | None:
         if self._next_return is not _UNSET:
-            value: Optional[str] = self._next_return
+            value: str | None = self._next_return
             self._next_return = _UNSET
             return value
         return self._next_id()
@@ -134,7 +134,7 @@ class FakeClock(ClockPort):
 
     epoch_utc: datetime = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
-    def __init__(self, *, initial: Optional[datetime] = None) -> None:
+    def __init__(self, *, initial: datetime | None = None) -> None:
         if initial is None:
             initial = self.epoch_utc
         elif initial.tzinfo is None:
@@ -175,7 +175,7 @@ class FakeIdGenerator(IdGeneratorPort):
         *,
         prefix: str = "fake-id",
         use_uuid: bool = False,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> None:
         self._prefix = prefix
         self._counter = 0
@@ -258,18 +258,18 @@ class FakeLLMGateway(LLMGatewayPort):
         self.replies: list[str] = []
         self.completion_calls: list[dict[str, Any]] = []
         self.tool_calls: list[dict[str, Any]] = []
-        self.last_usage: Optional[dict[str, int]] = None
-        self.last_raw_response_text: Optional[str] = None
+        self.last_usage: dict[str, int] | None = None
+        self.last_raw_response_text: str | None = None
         self._closed = False
 
     def chat_completion(
         self,
         messages: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict[str, Any]] = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> Optional[str]:
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str | None:
         self.completion_calls.append(
             {
                 "messages": messages,
@@ -288,15 +288,15 @@ class FakeLLMGateway(LLMGatewayPort):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]:
+        max_tokens: int | None = None,
+    ) -> tuple[str | None, list[dict[str, Any]] | None]:
         self.tool_calls.append({"messages": messages, "tools": tools})
         return (None, None)
 
-    def get_last_usage(self) -> Optional[dict[str, int]]:
+    def get_last_usage(self) -> dict[str, int] | None:
         return self.last_usage
 
-    def get_last_raw_response_text(self) -> Optional[str]:
+    def get_last_raw_response_text(self) -> str | None:
         return self.last_raw_response_text
 
     def close(self) -> None:
@@ -381,11 +381,11 @@ class ScriptedVisionGateway(LLMGatewayPort):
     def __init__(
         self,
         *,
-        responses: Optional[list[str]] = None,
+        responses: list[str] | None = None,
         raise_message: str = "provider failed",
-        usage: Optional[dict[str, int]] = None,
-        raw_response_text: Optional[str] = None,
-        on_call: Optional[Callable[[int, dict[str, Any]], None]] = None,
+        usage: dict[str, int] | None = None,
+        raw_response_text: str | None = None,
+        on_call: Callable[[int, dict[str, Any]], None] | None = None,
     ) -> None:
         self._responses: list[str] = list(responses or [])
         self._raise_message = raise_message
@@ -394,7 +394,7 @@ class ScriptedVisionGateway(LLMGatewayPort):
             if usage is not None
             else {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         )
-        self._raw_response_text: Optional[str] = (
+        self._raw_response_text: str | None = (
             raw_response_text
             if raw_response_text is not None
             else '{"choices":[{"message":{"content":null,"reasoning":"debug"}}]}'
@@ -412,10 +412,10 @@ class ScriptedVisionGateway(LLMGatewayPort):
         self,
         messages: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict[str, Any]] = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> Optional[str]:
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str | None:
         call_index = len(self.calls)
         snapshot = {
             "messages": messages,
@@ -441,14 +441,14 @@ class ScriptedVisionGateway(LLMGatewayPort):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]:
+        max_tokens: int | None = None,
+    ) -> tuple[str | None, list[dict[str, Any]] | None]:
         return (None, None)
 
-    def get_last_usage(self) -> Optional[dict[str, int]]:
+    def get_last_usage(self) -> dict[str, int] | None:
         return dict(self._usage)
 
-    def get_last_raw_response_text(self) -> Optional[str]:
+    def get_last_raw_response_text(self) -> str | None:
         return self._raw_response_text
 
     def close(self) -> None:
@@ -473,8 +473,8 @@ class ScriptedVisionGatewayFactory(LLMGatewayFactoryPort):
     survive a multi-run scenario.
     """
 
-    def __init__(self, *, gateway: Optional[ScriptedVisionGateway] = None) -> None:
-        self._gateway: Optional[ScriptedVisionGateway] = gateway
+    def __init__(self, *, gateway: ScriptedVisionGateway | None = None) -> None:
+        self._gateway: ScriptedVisionGateway | None = gateway
         self.gateways: list[ScriptedVisionGateway] = []
         self.build_calls: list[dict[str, Any]] = []
 
@@ -506,7 +506,7 @@ class ScriptedVisionGatewayFactory(LLMGatewayFactoryPort):
 
 
 class FakeAnalysisPorts:
-    """In-memory :class:`~src.services.analysis.ports.AnalysisPorts` bundle.
+    """In-memory :class:`~src.services.analysis.contracts.AnalysisPorts` bundle.
 
     The bundle owns:
 
@@ -531,7 +531,7 @@ class FakeAnalysisPorts:
         sub_chunks_per_chunk: int = 3,
         file_path: str = "/tmp/mock.mp4",
         data_url: str = "data:video/mp4;base64,AAAA",
-        replace_events: Optional[Callable[[Any, int, list[Any]], int]] = None,
+        replace_events: Callable[[Any, int, list[Any]], int] | None = None,
     ) -> None:
         self._chunks = chunks
         self._sub_chunks_per_chunk = sub_chunks_per_chunk
@@ -539,7 +539,7 @@ class FakeAnalysisPorts:
         self._data_url = data_url
         self._replace_events: Callable[[Any, int, list[Any]], int]
         if replace_events is None:
-            from src.services.analysis.aggregator import replace_session_events
+            from src.services.analysis.finalize import replace_session_events
 
             self._replace_events = replace_session_events
         else:
@@ -547,7 +547,7 @@ class FakeAnalysisPorts:
 
     def plan_analysis(self, db: Any, session_id: int) -> Any:
         del db
-        from src.services.analysis.chunk_plan import (
+        from src.services.analysis.plan import (
             AnalysisPlan,
             SubChunkPlan,
             analysis_run_id_for_paths,

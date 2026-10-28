@@ -26,8 +26,14 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.orm import Session
 
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
+from src.core.pipeline_constants import (
+    ScanMode,
+    TaskStatus,
+    TaskType,
+)
 from src.models.task_log import TaskLog
 from src.models.video_source import VideoSource
 from src.services.dispatch.cancel import (
@@ -53,12 +59,6 @@ from src.services.dispatch.worker_bind import bind_or_create_running_task_log
 from src.services.maintenance.hot_scheduling import dispatch_hot_builds
 from src.services.maintenance.running_lease_recovery import recover_timed_out_tasks
 from src.services.maintenance.unleased_recovery import recover_orphan_pending_tasks
-from src.services.pipeline_constants import (
-    ScanMode,
-    TaskStatus,
-    TaskType,
-)
-from src.tasks import _container
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -83,7 +83,7 @@ def _restore_container() -> None:
 def _bind_fake_dispatcher(monkeypatch: pytest.MonkeyPatch) -> FakeTaskDispatcher:
     dispatcher = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=dispatcher)
-    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
+    monkeypatch.setattr("src.application.container_holder._container", container)
     monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
     return dispatcher
 
@@ -318,6 +318,7 @@ def test_finalize_terminal_stamp(db_session: Session) -> None:
     db.commit()
 
     finalize_task_log(
+        db,
         task_log,
         TaskStatus.SUCCESS,
         message="done",
@@ -328,7 +329,9 @@ def test_finalize_terminal_stamp(db_session: Session) -> None:
     assert task_log.status == TaskStatus.SUCCESS
     assert task_log.message == "done"
     assert task_log.finished_at is not None
-    assert task_log.detail_json == {"scan_mode": "hot", "extra": "info"}
+    assert task_log.detail_json["scan_mode"] == "hot"
+    assert task_log.detail_json["extra"] == "info"
+    assert task_log.detail_json["transition"]["to"] == "success"
 
 
 def test_cancel_sets_cancel_requested(db_session: Session) -> None:
@@ -341,7 +344,7 @@ def test_cancel_sets_cancel_requested(db_session: Session) -> None:
     )
     db.add(task_log)
     db.commit()
-    finalize_cancelled_task_log(task_log, message="cancelled by user")
+    finalize_cancelled_task_log(db, task_log, message="cancelled by user")
     db.commit()
     db.refresh(task_log)
     assert task_log.status == TaskStatus.CANCELLED
@@ -440,7 +443,7 @@ def test_hot_scheduling_picks_enabled_sources(
     db.commit()
 
     dispatcher = _bind_fake_dispatcher(monkeypatch)
-    dispatched = dispatch_hot_builds(db)
+    dispatched = dispatch_hot_builds(db, dispatcher=dispatcher)
 
     assert len(dispatched) == 2
     assert all(c.scan_mode == ScanMode.HOT for c in dispatcher.dispatched_session_build)
@@ -476,7 +479,7 @@ def test_hot_scheduling_skips_source_scanned_within_interval(
     db.commit()
 
     dispatcher = _bind_fake_dispatcher(monkeypatch)
-    dispatched = dispatch_hot_builds(db)
+    dispatched = dispatch_hot_builds(db, dispatcher=dispatcher)
 
     assert len(dispatched) == 1
     assert [c.scan_mode for c in dispatcher.dispatched_session_build] == [ScanMode.HOT]
@@ -506,13 +509,14 @@ def test_recovery_policy_claims_expired_lease_run(
     db.commit()
 
     monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
-    assert recover_timed_out_tasks(db, now) == 1
+    dispatcher = FakeTaskDispatcher()
+    assert recover_timed_out_tasks(db, now, dispatcher=dispatcher) == 1
     db.commit()
     db.refresh(task_log)
     assert task_log.status == TaskStatus.TIMEOUT
 
     # Idempotent: a second pass on the same now must do nothing.
-    assert recover_timed_out_tasks(db, now) == 0
+    assert recover_timed_out_tasks(db, now, dispatcher=dispatcher) == 0
 
 
 def test_recovery_is_noop_when_lease_still_fresh(db_session: Session) -> None:
@@ -529,7 +533,7 @@ def test_recovery_is_noop_when_lease_still_fresh(db_session: Session) -> None:
     )
     db.add(task_log)
     db.commit()
-    assert recover_timed_out_tasks(db, now) == 0
+    assert recover_timed_out_tasks(db, now, dispatcher=FakeTaskDispatcher()) == 0
     db.commit()
     db.refresh(task_log)
     assert task_log.status == TaskStatus.RUNNING
@@ -572,7 +576,7 @@ def test_orphan_pending_recovery_returns_deterministic_count(
         )
     )
     db.commit()
-    assert recover_orphan_pending_tasks(db, now) == 2
+    assert recover_orphan_pending_tasks(db, now, dispatcher=FakeTaskDispatcher()) == 2
 
 
 # ===========================================================================
@@ -715,6 +719,7 @@ def test_heartbeat_aggregates_results_no_branching(
         "pending_recovered": 1,
         "logs_deleted": 1,
         "missing_marked": 1,
+        "redelivered": 0,
     }
     actual = {k: result[k] for k in expected}
     assert actual == expected
@@ -846,6 +851,7 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
         "pending_recovered": 1,
         "logs_deleted": 0,
         "missing_marked": 0,
+        "redelivered": 0,
     }
     actual = {k: result[k] for k in expected}
     assert actual == expected

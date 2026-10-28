@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -30,18 +30,18 @@ class VideoSession(Base):
     )
     session_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     session_end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    total_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    merge_rule: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    total_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    merge_rule: Mapped[str | None] = mapped_column(String(128), nullable=True)
     analysis_status: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
-    summary_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    activity_level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    main_subjects_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    has_attention_event: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    analysis_notes_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    last_analyzed_at: Mapped[Optional[datetime]] = mapped_column(
+    summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activity_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    main_subjects_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    has_attention_event: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    analysis_notes_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    last_analyzed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    analysis_priority: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    analysis_priority: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     source: Mapped["VideoSource"] = relationship("VideoSource", back_populates="sessions")
     events: Mapped[list["EventRecord"]] = relationship(

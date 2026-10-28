@@ -6,15 +6,15 @@ This module is the seam that turns a *successful*
 1. ``daily_summary`` is upserted with the LLM-produced content for the
    date.
 2. The attempt is flipped ``→ succeeded`` via
-   :class:`DailySummaryAttemptRepository` (Todo 15). The state-machine
+   :class:`DailySummaryAttemptRepository`. The state-machine
    guard is enforced — a final attempt that has already reached a
    terminal state is rejected with
    :class:`AttemptNotInValidStateError` and the business write is
    rolled back.
 3. For every webhook subscriber the use case creates its own
    ``TaskLog`` row and enrolls an :class:`OutboxCommand` pointing at
-   ``src.tasks.webhook.send_webhook_task`` via :func:`enqueue_command`
-   (Todo 12). The outbox publisher (Todo 13) picks the rows up from
+   ``src.tasks.webhook.send_webhook_task`` via :func:`enqueue_command`.
+   The outbox publisher picks the rows up from
    the durable table and publishes to the broker.
 
 All three writes happen in the **caller's** transaction. The caller
@@ -25,12 +25,13 @@ Failure / cancellation paths
 ============================
 
 The publish use case handles the **success** path. When the summarizer
-(Todo 19) decides the attempt has failed or has been cancelled, it
+decides the attempt has failed or has been cancelled, it
 calls :meth:`DailySummaryAttemptRepository.mark_failed` /
 ``mark_cancelled`` / ``mark_timed_out`` directly. Those terminal
 helpers **do not** touch ``daily_summary``; a previous successful
 summary for the same date is therefore preserved verbatim — exactly
-what the product brief asks for ("失败/取消仅终结 attempt,不物理删除已有成功日报").
+what the product brief asks for: a failure or cancellation only
+terminates the attempt and never deletes an already-published summary.
 
 Why one OutboxCommand per subscriber (not one fan-out command)
 ===============================================================
@@ -48,54 +49,52 @@ each delivery's idempotency story self-contained (the publisher's
 Why the payload embeds ``webhook_id``
 =====================================
 
-``src.tasks.webhook.send_webhook_task`` (Todo 19 will own its
-behaviour change) currently iterates every enabled
-``WebhookConfig`` row and applies the subscription filter, so today a
-single command fan-outs. The publish use case already knows which
-subscribers match the ``daily_summary_generated`` event, so the
-payload embeds ``webhook_id``. Todo 19 will teach the consumer to
-honour that field and only deliver to the targeted subscriber;
-meanwhile, the redundant fan-out is harmless because each subscriber
-only matches once per event anyway. The PG tests assert the
-``webhook_id`` is round-tripped in ``kwargs_json``.
+``src.tasks.webhook.send_webhook_task`` honours ``webhook_id`` when it
+is present, so each outbox row delivers to exactly one subscriber. The
+publish use case already knows which subscribers match the
+``daily_summary_generated`` event, so the payload embeds ``webhook_id``.
+The PG tests assert the field is round-tripped in ``kwargs_json``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from src.application.outbox.contracts import OutboxCommand
-from src.application.outbox.enqueue import enqueue_command
 from src.application.summary_attempt.repository import DailySummaryAttemptRepository
 from src.application.summary_attempt.state_machine import (
     ACTIVE_STATUSES,
     DailySummaryAttemptStatus,
 )
 from src.application.summary_publication.repository import DailySummaryRepository
+from src.core.contracts import (
+    WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED,
+    WEBHOOK_SIGNATURE_VERSION,
+)
+from src.core.pipeline_constants import TaskType
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
 from src.services.dispatch import create_pending_task_log
-from src.services.pipeline_constants import TaskType
+from src.services.dispatch.outbox import new_task_id, record_delivery
+from src.services.dispatch.task_command import TaskCommand
 
-#: Event type string emitted by the daily-summary webhook payload.
-#: Mirrors ``src.services.summarizer.constants.WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED``
-#: so the consumer-side subscription filter recognises it; the string
-#: is part of the public product contract and must not drift.
-DAILY_SUMMARY_WEBHOOK_EVENT_TYPE: str = "daily_summary_generated"
+#: Event type string emitted by the daily-summary webhook payload. Sourced
+#: from the cross-layer contract module so the consumer-side subscription
+#: filter cannot drift from the producer.
+DAILY_SUMMARY_WEBHOOK_EVENT_TYPE: str = WEBHOOK_EVENT_DAILY_SUMMARY_GENERATED
 
 #: Celery task the outbox publishes for each subscriber. Listed in
-#: :class:`src.application.outbox.registry.OutboxCommandRegistry`.
+#: :attr:`src.services.dispatch.outbox.RETIRED_OUTBOX_TASK_NAMES`.
 _WEBHOOK_TASK_NAME: str = "src.tasks.webhook.send_webhook_task"
 
 #: Default queue for the webhook task. Matches the registry's default.
 _DEFAULT_QUEUE: str = "celery"
 
 #: Stable fallback ``overall_summary`` for the empty-event day. The
-#: summarizer (Todo 19) is free to override by supplying a non-empty
+#: summarizer is free to override by supplying a non-empty
 #: ``overall_summary`` in the command; this constant is what we use
 #: when the caller passes ``""``.
 EMPTY_DAY_FALLBACK_TEXT: str = "今日无事件,无需特别关注。"
@@ -107,12 +106,12 @@ class AttemptNotInValidStateError(Exception):
     Raised by :func:`publish_daily_summary` when the supplied attempt
     row is already in a terminal state (``succeeded`` /
     ``failed`` / ``cancelled`` / ``timed_out`` / ``superseded``). The
-    summarizer (Todo 19) treats this as a fatal failure and rolls
+    summarizer treats this as a fatal failure and rolls
     back the surrounding transaction; ``daily_summary`` is **not**
     touched.
     """
 
-    def __init__(self, message: str, *, payload: Optional[dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, *, payload: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.payload: dict[str, Any] = dict(payload or {})
 
@@ -206,7 +205,7 @@ def publish_daily_summary(
     ---------
 
     1. Load the attempt row via the attempt repository. Verify its
-       status is one of :data:`ACTIVE_STATUSES` (Todo 15). When it is
+       status is one of :data:`ACTIVE_STATUSES`. When it is
        not, raise :class:`AttemptNotInValidStateError` so the caller
        rolls back; ``daily_summary`` is **not** touched.
     2. Upsert ``daily_summary`` for ``cmd.summary_date`` via
@@ -317,7 +316,7 @@ def _load_attempt_for_publish(
 
     from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
 
-    db = attempt_repo._db  # noqa: SLF001  — session owned by the repo
+    db = attempt_repo.session
     stmt = (
         select(DailySummaryGenerationAttempt)
         .where(DailySummaryGenerationAttempt.id == attempt_id)
@@ -399,18 +398,18 @@ def _enroll_webhook_outbox(
             webhook_id=int(webhook_id),
             timestamp=timestamp,
         )
-        command = OutboxCommand(
+        command = TaskCommand(
             task_name=_WEBHOOK_TASK_NAME,
             queue=_DEFAULT_QUEUE,
-            args=(),
             kwargs={
                 "event_type": DAILY_SUMMARY_WEBHOOK_EVENT_TYPE,
                 "webhook_id": int(webhook_id),
                 "payload": payload,
             },
         )
-        outcome = enqueue_command(db, command, task_log)
-        enrolled.append(outcome.event.event_id)
+        task_id = new_task_id()
+        record_delivery(db, task_log, command, task_id=task_id)
+        enrolled.append(UUID(task_id))
     return enrolled
 
 
@@ -448,7 +447,7 @@ def _build_webhook_payload(
         data["attention_items"] = attention_items
     return {
         "event": DAILY_SUMMARY_WEBHOOK_EVENT_TYPE,
-        "version": "1.0",
+        "version": WEBHOOK_SIGNATURE_VERSION,
         "generated_at": timestamp,
         "data": data,
     }

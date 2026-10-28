@@ -1,25 +1,24 @@
-"""轻量 i18n 基座: t(key, locale, **params) + locale 资源文件加载。
+"""Lightweight i18n base: ``t(key, locale, **params)`` plus catalog loading.
 
-The system-default locale is resolved through an application-layer
-:class:`~src.application.system_config.LocaleProvider` (production:
-:class:`~src.application.system_config.SystemConfigLocaleProvider`,
-which reads ``system_config.default_locale``). ``src.core`` never opens
-a SQLAlchemy ``Session`` itself — that responsibility moved out under
-Todo 8 of ``architecture-consolidation``.
+The system-default locale is resolved through a
+:class:`~src.core.i18n.provider.LocaleProvider` (production binds the
+application-layer ``SystemConfigLocaleProvider``, which reads
+``system_config.default_locale``). The contract lives in core so this
+module never imports application code; ``src.core`` also never opens a
+SQLAlchemy ``Session`` itself.
 
 Composition-root wiring lives in :mod:`src.application.bootstrap`. Tests
 that need a deterministic default locale should call
 :func:`set_locale_provider` (or rely on the
-:class:`~src.application.system_config.StaticLocaleProvider` default
-when no provider has been bound yet).
+:class:`~src.core.i18n.provider.StaticLocaleProvider` default when no
+provider has been bound yet).
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
-from src.application.system_config import LocaleProvider, StaticLocaleProvider
+from src.core.i18n.provider import LocaleProvider, StaticLocaleProvider
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +114,7 @@ def _get_catalog(locale: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def t(key: str, locale: Optional[str] = None, **params: object) -> str:
+def t(key: str, locale: str | None = None, **params: object) -> str:
     """t(key, locale, **params) -> 翻译字符串。找不到 key 时回退默认语言，仍无则返回 key。"""
     resolved_locale = locale if locale in SUPPORTED_LOCALES else DEFAULT_LOCALE
 
@@ -138,7 +137,7 @@ def t(key: str, locale: Optional[str] = None, **params: object) -> str:
     return template
 
 
-def normalize_locale(raw: Optional[str]) -> str:
+def normalize_locale(raw: str | None) -> str:
     """标准化 locale 输入 (zh/zh_CN/zh-CN -> zh-CN, en/en_US/en-US -> en-US)。"""
     if not raw or not raw.strip():
         return DEFAULT_LOCALE
@@ -158,7 +157,7 @@ def get_system_default_locale() -> str:
     """Resolve the system-wide default locale via the active provider.
 
     The actual database lookup is performed inside the bound
-    :class:`~src.application.system_config.LocaleProvider`
+    :class:`~src.core.i18n.provider.LocaleProvider`
     implementation. ``src.core.i18n`` only caches for the lifetime of
     one call (the provider itself owns any TTL cache), which keeps the
     contract simple and lets the composition root control invalidation.

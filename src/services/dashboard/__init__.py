@@ -1,8 +1,7 @@
-from typing import Optional
-
 from sqlalchemy.orm import Session
 
 from src.core.i18n import DEFAULT_LOCALE, t
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.schemas.dashboard import (
     DashboardAction,
     DashboardAlert,
@@ -15,7 +14,6 @@ from src.schemas.dashboard import (
 )
 from src.services.measures import declared_focus_items, home_local_day_window
 from src.services.onboarding import DEFAULT_ASSISTANT_NAME, get_onboarding_status
-from src.services.pipeline_constants import TaskStatus, TaskType
 
 from . import queries
 from .presenter import DashboardPresenter
@@ -23,7 +21,7 @@ from .presenter import DashboardPresenter
 
 def get_dashboard_overview(
     db: Session,
-    locale: Optional[str] = None,
+    locale: str | None = None,
 ) -> DashboardOverviewResponse:
     loc = locale or DEFAULT_LOCALE
     onboarding_status = get_onboarding_status(db)

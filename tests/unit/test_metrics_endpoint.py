@@ -18,7 +18,7 @@ client = TestClient(app)
 
 def test_metrics_returns_observability_gauges(monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = {
-        "outbox": {
+        "delivery": {
             "oldest_pending_seconds": 42,
             "pending_count": 3,
             "publishing_count": 0,
@@ -44,16 +44,16 @@ def test_metrics_returns_observability_gauges(monkeypatch: pytest.MonkeyPatch) -
     assert response.json() == snapshot
 
 
-def test_metrics_reflects_outbox_lag_and_failed_count(
+def test_metrics_reflects_delivery_lag_and_failed_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         "src.main.metrics_snapshot",
-        lambda engine: {"outbox": {"failed_count": 4, "oldest_pending_seconds": 300}},
+        lambda engine: {"delivery": {"failed_count": 4, "oldest_pending_seconds": 300}},
     )
     body = client.get("/metrics").json()
-    assert body["outbox"]["failed_count"] == 4
-    assert body["outbox"]["oldest_pending_seconds"] == 300
+    assert body["delivery"]["failed_count"] == 4
+    assert body["delivery"]["oldest_pending_seconds"] == 300
 
 
 def test_correlation_middleware_echoes_supplied_request_id() -> None:

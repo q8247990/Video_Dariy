@@ -1,11 +1,6 @@
-"""Task retry orchestration (moved out of ``src/services`` under Todo 7).
+"""Task retry orchestration.
 
-``src/services/task_retry.py`` used to own this logic, which forced the
-service layer to import ``src.application.pipeline.commands`` and
-``src.application.pipeline.orchestrator`` — a services→application
-dependency the architecture boundary tests flagged as a violation.
-
-The logic itself is orchestration, not a pure business rule: it reads a
+Retry is orchestration, not a pure business rule: it reads a
 ``TaskLog`` row, re-validates the target aggregate, performs a state
 transition when needed, and then hands a command to the async dispatcher.
 That is precisely the application layer's job, so the function now lives
@@ -29,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -39,6 +34,12 @@ from src.application.pipeline.commands import (
     SessionBuildCommand,
 )
 from src.application.ports.task_dispatcher import TaskDispatcherPort
+from src.core.pipeline_constants import (
+    ScanMode,
+    SessionAnalysisStatus,
+    TaskStatus,
+    TaskType,
+)
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
@@ -46,12 +47,6 @@ from src.services.dispatch import (
     build_dedupe_key,
     ensure_dict_detail,
     find_duplicate_active_task,
-)
-from src.services.pipeline_constants import (
-    ScanMode,
-    SessionAnalysisStatus,
-    TaskStatus,
-    TaskType,
 )
 from src.services.pipeline_state import transition_session
 
@@ -61,7 +56,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RetryResult:
     success: bool
-    task_id: Optional[str] = None
+    task_id: str | None = None
     error_code: int = 0
     error_message: str = ""
 

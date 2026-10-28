@@ -5,7 +5,7 @@ distinguish a live worker from a crashed one:
 
 * Each :func:`src.services.dispatch.worker_bind.bind_or_create_running_task_log`
   call stamps ``lease_expires_at = now + ANALYSIS_LEASE_SECONDS``.
-* Every successful sub-chunk checkpoint (:mod:`src.services.analysis.checkpoint_writer`)
+* Every successful sub-chunk checkpoint (:mod:`src.services.analysis.execute`)
   calls :func:`renew_task_lease` to push ``lease_expires_at`` forward.
 * The maintenance heartbeat (``recover_timed_out_tasks``) treats a
   TaskLog whose ``lease_expires_at`` has passed as crashed and
@@ -20,16 +20,15 @@ heartbeat that may already have flipped the row to TIMEOUT.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
+from src.core.pipeline_constants import TaskStatus
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import TaskStatus
 
 
-def renew_task_lease(db: Session, task_log_id: int, lease_owner: Optional[str] = None) -> None:
+def renew_task_lease(db: Session, task_log_id: int, lease_owner: str | None = None) -> None:
     """Push ``lease_expires_at`` forward by ``ANALYSIS_LEASE_SECONDS``.
 
     Called from the analyzer stage after every successful sub-chunk

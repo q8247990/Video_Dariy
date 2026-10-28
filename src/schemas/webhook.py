@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict
 class WebhookBase(BaseModel):
     name: str
     url: str
-    headers_json: Optional[Any] = None
-    event_subscriptions_json: Optional[list[dict[str, str]]] = None
+    headers_json: Any | None = None
+    event_subscriptions_json: list[dict[str, str]] | None = None
     enabled: bool = True
 
 
@@ -17,11 +17,11 @@ class WebhookCreate(WebhookBase):
 
 
 class WebhookUpdate(BaseModel):
-    name: Optional[str] = None
-    url: Optional[str] = None
-    headers_json: Optional[Any] = None
-    event_subscriptions_json: Optional[list[dict[str, str]]] = None
-    enabled: Optional[bool] = None
+    name: str | None = None
+    url: str | None = None
+    headers_json: Any | None = None
+    event_subscriptions_json: list[dict[str, str]] | None = None
+    enabled: bool | None = None
 
 
 class WebhookResponse(WebhookBase):

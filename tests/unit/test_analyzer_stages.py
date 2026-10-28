@@ -44,6 +44,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus
 from src.models.event_record import EventRecord
 from src.models.pipeline_transition_log import PipelineTransitionLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
@@ -66,9 +67,8 @@ from src.services.analysis import (
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
-from src.services.analysis.chunk_plan import SubChunkPlan
+from src.services.analysis.plan import SubChunkPlan
 from src.services.dispatch import finalize_task_log
-from src.services.pipeline_constants import TaskStatus
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
@@ -580,7 +580,9 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
         priority="hot",
         session_id=session_id,
     )
-    finalize_task_log(task_log, TaskStatus.FAILED, "provider failed", {"session_id": session_id})
+    finalize_task_log(
+        pg_db, task_log, TaskStatus.FAILED, "provider failed", {"session_id": session_id}
+    )
     pg_db.commit()
 
     refreshed = (

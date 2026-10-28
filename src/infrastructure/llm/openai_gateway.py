@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from src.application.ports.llm_gateway import LLMGatewayFactoryPort, LLMGatewayPort
 from src.providers.openai_client import OpenAIClient
@@ -13,10 +13,10 @@ class OpenAICompatGateway(LLMGatewayPort):
         self,
         messages: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict[str, Any]] = None,
-        extra_body: Optional[dict[str, Any]] = None,
-    ) -> Optional[str]:
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str | None:
         return self.client.chat_completion(
             messages=messages,
             temperature=temperature,
@@ -30,8 +30,8 @@ class OpenAICompatGateway(LLMGatewayPort):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float = 0.2,
-        max_tokens: Optional[int] = None,
-    ) -> tuple[Optional[str], Optional[list[dict[str, Any]]]]:
+        max_tokens: int | None = None,
+    ) -> tuple[str | None, list[dict[str, Any]] | None]:
         return self.client.chat_completion_with_tools(
             messages=messages,
             tools=tools,
@@ -39,10 +39,10 @@ class OpenAICompatGateway(LLMGatewayPort):
             max_tokens=max_tokens,
         )
 
-    def get_last_usage(self) -> Optional[dict[str, int]]:
+    def get_last_usage(self) -> dict[str, int] | None:
         return self.client.last_usage
 
-    def get_last_raw_response_text(self) -> Optional[str]:
+    def get_last_raw_response_text(self) -> str | None:
         return self.client.last_raw_response_text
 
     def close(self) -> None:

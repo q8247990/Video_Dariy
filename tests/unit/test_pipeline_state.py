@@ -3,11 +3,11 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.analysis.claim import claim_session_for_analysis
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.services.pipeline_state import (
     SESSION_ALLOWED_TRANSITIONS,
     TASK_LOG_ALLOWED_TRANSITIONS,

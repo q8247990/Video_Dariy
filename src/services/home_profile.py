@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -57,7 +57,7 @@ def save_home_profile(db: Session, payload: HomeProfileUpsert) -> HomeProfile:
 
 def list_entities(
     db: Session,
-    entity_type: Optional[str] = None,
+    entity_type: str | None = None,
     include_disabled: bool = False,
 ) -> list[HomeEntityProfile]:
     query = db.query(HomeEntityProfile)
@@ -68,7 +68,7 @@ def list_entities(
     return query.order_by(HomeEntityProfile.sort_order.asc(), HomeEntityProfile.id.asc()).all()
 
 
-def get_entity_by_id(db: Session, entity_id: int) -> Optional[HomeEntityProfile]:
+def get_entity_by_id(db: Session, entity_id: int) -> HomeEntityProfile | None:
     return db.query(HomeEntityProfile).filter(HomeEntityProfile.id == entity_id).first()
 
 
@@ -94,7 +94,7 @@ def create_pet(db: Session, payload: dict[str, Any]) -> HomeEntityProfile:
 
 def update_entity(
     db: Session, entity_id: int, payload: HomeEntityUpdate
-) -> Optional[HomeEntityProfile]:
+) -> HomeEntityProfile | None:
     entity = get_entity_by_id(db, entity_id)
     if entity is None:
         return None
@@ -168,7 +168,7 @@ def get_options() -> dict[str, Any]:
     }
 
 
-def _validate_role_type(entity_type: str, role_type: Optional[str]) -> None:
+def _validate_role_type(entity_type: str, role_type: str | None) -> None:
     if not role_type:
         raise DomainError("role_type is required")
     if entity_type == "member" and role_type not in MEMBER_ROLE_OPTIONS:
@@ -177,7 +177,7 @@ def _validate_role_type(entity_type: str, role_type: Optional[str]) -> None:
         raise DomainError("invalid pet role_type")
 
 
-def _validate_age_group(age_group: Optional[str]) -> None:
+def _validate_age_group(age_group: str | None) -> None:
     if age_group is None:
         return
     if age_group not in AGE_GROUP_OPTIONS:

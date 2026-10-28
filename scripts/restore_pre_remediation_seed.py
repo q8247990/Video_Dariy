@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -38,14 +40,42 @@ if str(PROJECT_ROOT) not in sys.path:
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-from tests.conftest import run_alembic_upgrade_head  # noqa: E402
-from tests.fixtures.pre_remediation_seed import (  # noqa: E402
+from scripts.pre_remediation_seed import (  # noqa: E402
     EXPECTED_ROW_COUNTS,
     SEED_HOME_TIMEZONE,
     SEED_VERSION,
     seed_pre_remediation,
     verify_pre_remediation,
 )
+
+_SCHEMA_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def _validate_schema_name(schema: str) -> str:
+    """Reject identifiers that could escape the quoted ``schema`` slot."""
+    if not _SCHEMA_NAME_RE.fullmatch(schema):
+        raise SystemExit(f"--schema must match ^[A-Za-z_][A-Za-z0-9_]{{0,62}}$ (got {schema!r})")
+    return schema
+
+
+def _run_alembic_upgrade_head(database_url: str, schema: str) -> None:
+    """Run ``alembic upgrade head`` against one throwaway schema."""
+    migration_env = dict(os.environ)
+    migration_env["DATABASE_URL"] = database_url
+    migration_env["PGOPTIONS"] = f"-csearch_path={schema}"
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=PROJECT_ROOT,
+        env=migration_env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "alembic upgrade head failed:\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
 
 
 def main() -> int:
@@ -64,7 +94,7 @@ def main() -> int:
         print("ERROR: 必须显式设置 DATABASE_URL 环境变量", file=sys.stderr)
         return 2
 
-    schema = args.schema or f"vd_seed_{uuid.uuid4().hex[:12]}"
+    schema = _validate_schema_name(args.schema or f"vd_seed_{uuid.uuid4().hex[:12]}")
     print(f"[seed] version={SEED_VERSION} home_timezone={SEED_HOME_TIMEZONE} schema={schema}")
 
     admin_engine = create_engine(database_url)
@@ -75,11 +105,9 @@ def main() -> int:
 
     if args.with_alembic:
         print("[seed] running alembic upgrade head ...")
-        run_alembic_upgrade_head(database_url, schema)
+        _run_alembic_upgrade_head(database_url, schema)
 
-    engine = create_engine(
-        database_url, connect_args={"options": f"-csearch_path={schema}"}
-    )
+    engine = create_engine(database_url, connect_args={"options": f"-csearch_path={schema}"})
     try:
         with engine.connect() as conn:
             with Session(bind=conn) as session:

@@ -7,7 +7,7 @@ on a clean baseline without per-test ``create_all`` cost.
 
 They exercise :func:`publish_daily_summary` against the full model
 surface (``daily_summary``, ``daily_summary_generation_attempt``,
-``task_log``, ``outbox_event``) and verify the atomicity contract —
+``task_log``, ``task_delivery``) and verify the atomicity contract —
 the three writes (upsert summary + finalise attempt + enroll outbox)
 share one transaction, so a ``rollback()`` leaves zero rows behind.
 
@@ -23,8 +23,6 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session
 
-from src.application.outbox import contracts as outbox_contracts
-from src.application.outbox.contracts import OutboxStatus
 from src.application.summary_attempt.repository import DailySummaryAttemptRepository
 from src.application.summary_attempt.state_machine import DailySummaryAttemptStatus
 from src.application.summary_publication import (
@@ -35,7 +33,7 @@ from src.application.summary_publication import (
 )
 from src.models.daily_summary import DailySummary
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
-from src.models.outbox import OutboxEvent as OutboxEventRow
+from src.models.task_delivery import TaskDelivery as DeliveryRow
 from src.models.task_log import TaskLog
 
 # ---------------------------------------------------------------------------
@@ -45,8 +43,8 @@ from src.models.task_log import TaskLog
 
 @pytest.fixture(autouse=True)
 def _reset_emitted_event_ids() -> None:
-    """Clear the in-memory emitted-event-id cache between tests."""
-    outbox_contracts._reset_emitted_event_ids_for_testing()
+    """Delivery ids come from uuid4 per dispatch; nothing to reset."""
+    return None
 
 
 def _new_task_log(db: Session, *, task_type: str = "daily_summary_generation") -> TaskLog:
@@ -178,7 +176,7 @@ def test_publish_succeeds_atomically_with_no_subscribers(pg_db: Session) -> None
     assert finalised_attempt.finished_at is not None
     assert finalised_attempt.failure_reason is None
 
-    assert pg_db.query(OutboxEventRow).count() == 0
+    assert pg_db.query(DeliveryRow).count() == 0
     assert pg_db.query(TaskLog).count() == 1  # the attempt's bound log only
 
 
@@ -230,7 +228,7 @@ def test_publish_upserts_existing_summary_for_same_date(pg_db: Session) -> None:
 
 
 def test_publish_enrolls_webhook_outbox_for_each_subscriber(pg_db: Session) -> None:
-    """Three subscribers produce three ``OutboxEvent`` + three ``TaskLog`` rows."""
+    """Three subscribers produce three ``TaskDelivery`` + three ``TaskLog`` rows."""
     task_log = _new_task_log(pg_db)
     attempt = _new_running_attempt(pg_db, task_log_id=task_log.id, target=date(2026, 9, 2))
 
@@ -246,10 +244,9 @@ def test_publish_enrolls_webhook_outbox_for_each_subscriber(pg_db: Session) -> N
     task_logs = pg_db.query(TaskLog).order_by(TaskLog.id).all()
     assert len(task_logs) == 4
 
-    outbox_rows = pg_db.query(OutboxEventRow).all()
+    outbox_rows = pg_db.query(DeliveryRow).all()
     assert len(outbox_rows) == 3
     for row in outbox_rows:
-        assert row.status == OutboxStatus.PENDING.value
         assert row.task_name == "src.tasks.webhook.send_webhook_task"
         assert row.queue == "celery"
         # The webhook task payload is JSON-safe.
@@ -278,7 +275,7 @@ def test_publish_does_not_emit_webhook_when_no_subscribers(pg_db: Session) -> No
     pg_db.commit()
 
     assert outcome.webhook_event_ids == []
-    assert pg_db.query(OutboxEventRow).count() == 0
+    assert pg_db.query(DeliveryRow).count() == 0
     # The attempt's bound log is still present.
     assert pg_db.query(TaskLog).count() == 1
 
@@ -309,7 +306,7 @@ def test_publish_with_empty_events_count_still_succeeds(pg_db: Session) -> None:
 
     # Webhooks still fire so subscribers know "no events today".
     assert len(outcome.webhook_event_ids) == 2
-    assert pg_db.query(OutboxEventRow).count() == 2
+    assert pg_db.query(DeliveryRow).count() == 2
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +330,7 @@ def test_publish_rejects_attempt_in_terminal_failure_state(pg_db: Session) -> No
     # No summary was written and the attempt is still cancelled (we did
     # not commit the failed publish transaction).
     assert pg_db.query(DailySummary).count() == 0
-    assert pg_db.query(OutboxEventRow).count() == 0
+    assert pg_db.query(DeliveryRow).count() == 0
 
 
 def test_publish_rejects_attempt_in_superseded_state(pg_db: Session) -> None:
@@ -415,13 +412,13 @@ def test_publish_rollback_leaves_no_summary_no_attempt_no_outbox(
         _cmd(pg_db, attempt, task_log.id, subscribers=[301, 302]),
     )
     assert pg_db.query(DailySummary).count() == 1
-    assert pg_db.query(OutboxEventRow).count() == 2
+    assert pg_db.query(DeliveryRow).count() == 2
 
     pg_db.rollback()
     pg_db.expire_all()
 
     assert pg_db.query(DailySummary).count() == 0
-    assert pg_db.query(OutboxEventRow).count() == 0
+    assert pg_db.query(DeliveryRow).count() == 0
     assert pg_db.query(DailySummaryGenerationAttempt).count() == 0
     assert pg_db.query(TaskLog).count() == 0
 
@@ -457,7 +454,7 @@ def test_publish_dry_run_enrolls_no_webhooks_but_returns_payload(
         .one()
     )
     assert finalised.status == DailySummaryAttemptStatus.SUCCEEDED.value
-    assert pg_db.query(OutboxEventRow).count() == 0
+    assert pg_db.query(DeliveryRow).count() == 0
     # No per-subscriber webhook TaskLog rows either.
     assert pg_db.query(TaskLog).count() == 1
 
@@ -478,4 +475,4 @@ def test_publish_value_error_when_task_log_id_mismatches_attempt(
     pg_db.rollback()
 
     assert pg_db.query(DailySummary).count() == 0
-    assert pg_db.query(OutboxEventRow).count() == 0
+    assert pg_db.query(DeliveryRow).count() == 0

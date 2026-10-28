@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DECIMAL, JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,24 +22,22 @@ class EventRecord(Base):
         Integer, ForeignKey("video_session.id", ondelete="CASCADE"), nullable=False
     )
     event_start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    event_end_time: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    object_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    action_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    event_end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    object_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    action_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    confidence_score: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 4), nullable=True)
-    event_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    offset_start_sec: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 3), nullable=True)
-    offset_end_sec: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 3), nullable=True)
-    related_entities_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    observed_actions_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    interpreted_state_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    focus_matches_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    raw_result: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    confidence_score: Mapped[float | None] = mapped_column(DECIMAL(5, 4), nullable=True)
+    event_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    offset_start_sec: Mapped[float | None] = mapped_column(DECIMAL(10, 3), nullable=True)
+    offset_end_sec: Mapped[float | None] = mapped_column(DECIMAL(10, 3), nullable=True)
+    related_entities_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    observed_actions_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    interpreted_state_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    focus_matches_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    raw_result: Mapped[Any | None] = mapped_column(JSON, nullable=True)
 
     source: Mapped["VideoSource"] = relationship("VideoSource")
     session: Mapped["VideoSession"] = relationship("VideoSession", back_populates="events")

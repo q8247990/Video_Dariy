@@ -25,8 +25,8 @@ fail, or did nobody schedule it?" without digging through
 
 ``daily_summary_generation_attempt`` splits (2) and (3) out into their
 own append-only history: **one row per attempt** to generate the
-summary for one date. ``DailySummary`` then goes back to being only
-(1) — the final visible result — in Todo 19.
+summary for one date. ``DailySummary`` then holds only (1) — the
+final visible result.
 
 Lifecycle
 =========
@@ -117,7 +117,6 @@ declared with ``postgresql_where``; the migration emits the same DDL.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -182,17 +181,17 @@ class DailySummaryGenerationAttempt(Base):
     # -- correlation / provenance -------------------------------------
     # Nullable + ``ON DELETE SET NULL``: attempts outlive the 7-day
     # ``task_log`` cleanup (see module docstring, index plan item 6).
-    task_log_id: Mapped[Optional[int]] = mapped_column(
+    task_log_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("task_log.id", ondelete="SET NULL"),
         nullable=True,
     )
-    triggered_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    triggered_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # -- operator-facing diagnostics ----------------------------------
-    error_type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    failure_reason: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # -- bookkeeping ---------------------------------------------------
     started_at: Mapped[datetime] = mapped_column(
@@ -200,12 +199,12 @@ class DailySummaryGenerationAttempt(Base):
         nullable=False,
         server_default=func.now(),
     )
-    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # -- LLM-input snapshot (post-mortem) ------------------------------
-    events_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    input_token_estimate: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    events_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_token_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # -- ``created_at`` / ``updated_at`` are inherited from Base -------
 

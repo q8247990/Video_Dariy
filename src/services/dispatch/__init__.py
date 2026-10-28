@@ -1,11 +1,10 @@
 """Dispatch-control policy package.
 
-The pre-Wave-5 ``src/services/task_dispatch_control.py`` (415 LOC)
-owned every dispatch-control concern: dedupe key construction,
-active-row lookup, pending claim, worker-bind idempotency, lease
-renewal, terminal finalization, user-cancellation observation, and
-the HOT↔FULL precedence rule. Wave 5 splits that monolith into the
-discrete policy modules in this package:
+This package owns every dispatch-control concern: dedupe key
+construction, active-row lookup, pending claim, worker-bind
+idempotency, lease renewal, terminal finalization, user-cancellation
+observation, and the HOT↔FULL precedence rule. Each concern lives in
+its own policy module:
 
 * :mod:`.constants` — the shared ``TERMINAL_TASK_STATUSES`` tuple.
 * :mod:`.dedupe` — :func:`build_dedupe_key`,

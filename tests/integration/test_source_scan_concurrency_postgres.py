@@ -7,6 +7,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.application.pipeline.commands import SessionBuildCommand
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.infrastructure.tasks.celery_dispatcher import CeleryTaskDispatcher
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
@@ -18,7 +19,6 @@ from src.services.dispatch import (
     create_pending_task_log,
     record_deferred_hot_scan,
 )
-from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.session_build.runner import run as run_session_build
 
 pytestmark = pytest.mark.postgres

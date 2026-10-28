@@ -42,16 +42,16 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskType
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskType
 from src.services.session_build.reducer import (
     EXTEND,
     NEW_SESSION,
@@ -221,7 +221,7 @@ def _materialize_new_sessions(
     return new_session_by_index
 
 
-def _load_extend_session(db: Session, plan: ReducerPlan) -> tuple[Optional[VideoSession], int]:
+def _load_extend_session(db: Session, plan: ReducerPlan) -> tuple[VideoSession | None, int]:
     """Return the pre-existing ``OPEN`` session and its next sort index.
 
     Returns ``(None, 0)`` when the plan has no ``extend_session_id``
@@ -251,7 +251,7 @@ class _PersistContext:
     db: Session
     by_hash: dict[str, VideoFile]
     new_session_by_index: dict[int, VideoSession]
-    extend_session: Optional[VideoSession]
+    extend_session: VideoSession | None
     extend_next_sort: int
     next_in_batch_sort: dict[int, int] = field(default_factory=dict)
 

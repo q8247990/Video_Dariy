@@ -5,6 +5,15 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.orm import Session
+
+from src.services.system_config_registry import HOME_TIMEZONE, get_config
+
+
+def get_home_timezone(db: Session) -> ZoneInfo:
+    """Return the configured home timezone (the single runtime source)."""
+    return ZoneInfo(str(get_config(db, HOME_TIMEZONE)))
+
 
 def home_now(zone: ZoneInfo) -> datetime:
     """Return the current instant expressed in the configured home timezone."""

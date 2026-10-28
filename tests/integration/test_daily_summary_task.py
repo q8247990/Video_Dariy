@@ -2,7 +2,7 @@
 
 Wave 1 rewrote the analyzer-cluster tests to drive the public Celery
 task entry :func:`src.tasks.analyzer.analyze_session_task.run` through
-the :class:`src.tasks._container.Container` holder, with the LLM
+the :class:`src.application.bootstrap.Container` holder, with the LLM
 gateway replaced by an in-memory
 :class:`~src.application.bootstrap_fakes.ScriptedVisionGateway` and
 the analyzer helpers by an
@@ -32,7 +32,7 @@ pattern to the summarizer cluster:
 * single-pass vs serial is proven by counting
   :meth:`~src.application.bootstrap_fakes.ScriptedVisionGateway.chat_completion`
   calls and asserting the final ``DailySummary`` row — neither the
-  private :data:`~src.services.summarizer.constants.SERIAL_SPLIT_PROMPT_THRESHOLD`
+  private :data:`~src.services.summarizer.contracts.SERIAL_SPLIT_PROMPT_THRESHOLD`
   constant nor the internal ``detail_json["summary_mode"]`` tag
   (which is written but never read by any production caller) are
   reached for.
@@ -58,25 +58,25 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import src.db.session as db_session_module
+from src.application import container_holder as _container
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import (
     FakeTaskDispatcher,
     ScriptedVisionGateway,
     ScriptedVisionGatewayFactory,
 )
-from src.application.outbox.contracts import OutboxStatus, _reset_emitted_event_ids_for_testing
 from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.llm_provider import LLMProvider
-from src.models.outbox import OutboxEvent
 from src.models.system_config import SystemConfig
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.models.webhook_config import WebhookConfig
 from src.services.home_timezone import local_day_bounds
-from src.tasks import _container, summarizer
+from src.tasks import summarizer
 from src.tasks._summarizer_orchestration import (
     run_daily_summary_generation,
     run_dispatch_scheduled,
@@ -126,11 +126,8 @@ def _base_action(
 
     local_session = sessionmaker(bind=postgres_real_engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(db_session_module, "SessionLocal", local_session)
-    _reset_emitted_event_ids_for_testing()
-
     yield
 
-    _reset_emitted_event_ids_for_testing()
     _container.reset_container_for_tests()
 
 
@@ -340,7 +337,7 @@ def test_generate_daily_summary_empty_events_fallback_and_no_webhook(
         assert summary.overall_summary == "昨天家中整体较为平稳，未观测到明确的关键活动。"
         assert summary.subject_sections_json == []
         assert summary.attention_items_json == []
-        assert verify_db.query(OutboxEvent).count() == 0
+        assert verify_db.query(TaskDelivery).count() == 0
         dispatcher = _container.get_container().dispatcher
         assert isinstance(dispatcher, FakeTaskDispatcher)
         assert dispatcher.dispatched_webhook == []
@@ -800,7 +797,7 @@ def test_generate_daily_summary_enrolls_one_outbox_per_subscriber(
 ) -> None:
     """Two enabled webhooks subscribed to ``daily_summary_generated`` → two outbox rows.
 
-    The publish use case enrols one ``OutboxEvent`` per subscriber
+    The publish use case enrols one ``TaskDelivery`` per subscriber
     directly via :func:`src.application.outbox.enqueue.enqueue_command`
     — the container's :class:`FakeTaskDispatcher` never receives a
     ``dispatch_webhook`` call because the outbox publisher (a separate
@@ -870,14 +867,13 @@ def test_generate_daily_summary_enrolls_one_outbox_per_subscriber(
 
     verify_db = pg_db_factory()
     try:
-        outbox_rows = verify_db.query(OutboxEvent).all()
+        outbox_rows = verify_db.query(TaskDelivery).all()
         assert len(outbox_rows) == 2
         targeted_webhook_ids = sorted(int(row.kwargs_json["webhook_id"]) for row in outbox_rows)
         assert targeted_webhook_ids == [1, 2]
         for row in outbox_rows:
             assert row.task_name == "src.tasks.webhook.send_webhook_task"
             assert row.kwargs_json["event_type"] == "daily_summary_generated"
-            assert row.status == OutboxStatus.PENDING.value
 
         dispatcher = _container.get_container().dispatcher
         assert isinstance(dispatcher, FakeTaskDispatcher)

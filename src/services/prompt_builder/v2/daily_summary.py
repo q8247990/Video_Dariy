@@ -1,4 +1,4 @@
-"""v2: 日报 prompt 构建器（Jinja2 模板版）。"""
+"""Daily-summary prompt builder (Jinja2 templates)."""
 
 from datetime import date
 from typing import Any

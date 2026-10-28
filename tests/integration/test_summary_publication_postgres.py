@@ -12,8 +12,8 @@ dialect owns:
   lets legitimate concurrent webhooks share an attempt;
 - the ``DailySummary`` ``UNIQUE (summary_date)`` constraint is the
   conflict target of the upsert;
-- the ``OutboxEvent`` payload round-trips through ``JSONB`` losslessly;
-- the publisher (Todo 13) can claim a webhook outbox row enrolled by
+- the ``TaskDelivery`` payload round-trips through ``JSONB`` losslessly;
+- the delivery flush can send a webhook intent enrolled by
   this use case and mark it ``published`` via the same hot path the
   analyzer / dispatcher rely on.
 
@@ -23,30 +23,22 @@ PG test isolation note
 The ``postgres_migrated_engine`` fixture is session-scoped, so all PG
 tests in this file share one schema. An autouse fixture
 (``_truncate_publication_tables``) wipes ``daily_summary``,
-``daily_summary_generation_attempt``, ``outbox_event`` and
+``daily_summary_generation_attempt``, ``task_delivery`` and
 ``task_log`` between tests so the assertions are deterministic.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text as sql_text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.application.outbox import contracts as outbox_contracts
-from src.application.outbox.contracts import OutboxStatus
-from src.application.outbox.publisher import (
-    PUBLISHER_LEASE_SECONDS,
-    BrokerPort,
-    OutboxPublisher,
-    PublisherConfig,
-)
 from src.application.summary_attempt.repository import DailySummaryAttemptRepository
 from src.application.summary_attempt.state_machine import DailySummaryAttemptStatus
 from src.application.summary_publication import (
@@ -56,8 +48,9 @@ from src.application.summary_publication import (
 )
 from src.models.daily_summary import DailySummary
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
-from src.models.outbox import OutboxEvent as OutboxEventRow
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
+from src.services.dispatch.outbox import flush_task_deliveries
 
 pytestmark = pytest.mark.postgres
 
@@ -69,20 +62,20 @@ pytestmark = pytest.mark.postgres
 
 @pytest.fixture(autouse=True)
 def _reset_emitted_event_ids() -> None:
-    outbox_contracts._reset_emitted_event_ids_for_testing()
+    return None
 
 
 @pytest.fixture(autouse=True)
 def _truncate_publication_tables(postgres_migrated_engine: Engine) -> None:
     """Wipe the four tables the publish flow touches.
 
-    Order matters: ``outbox_event`` first (FK to ``task_log`` is
+    Order matters: ``task_delivery`` first (FK to ``task_log`` is
     ``RESTRICT``), then the two summary tables, then ``task_log``
     itself (FK from ``daily_summary_generation_attempt`` is ``SET NULL``
     but we want a clean slate regardless).
     """
     with postgres_migrated_engine.begin() as conn:
-        conn.execute(sql_text("TRUNCATE TABLE outbox_event RESTART IDENTITY CASCADE"))
+        conn.execute(sql_text("TRUNCATE TABLE task_delivery RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE daily_summary RESTART IDENTITY CASCADE"))
         conn.execute(
             sql_text("TRUNCATE TABLE daily_summary_generation_attempt RESTART IDENTITY CASCADE")
@@ -144,7 +137,7 @@ def _build_cmd(
     attempt: DailySummaryGenerationAttempt,
     task_log_id: int,
     subscribers: list[int],
-    content: Optional[dict[str, Any]] = None,
+    content: dict[str, Any] | None = None,
     dry_run: bool = False,
 ) -> PublishDailySummaryCommand:
     return PublishDailySummaryCommand(
@@ -157,45 +150,13 @@ def _build_cmd(
     )
 
 
-@dataclass
-class _FakeBroker(BrokerPort):
-    """In-memory broker that records every ``send_task`` call."""
-
-    sent_calls: list[dict[str, object]] = field(default_factory=list)
-
-    def send_task(
-        self,
-        *,
-        name: str,
-        args: list,
-        kwargs: dict,
-        queue: str,
-        task_id: str,
-    ) -> str:
-        self.sent_calls.append(
-            {
-                "name": name,
-                "args": list(args),
-                "kwargs": dict(kwargs),
-                "queue": queue,
-                "task_id": task_id,
-            }
-        )
-        return task_id
-
-
-# ---------------------------------------------------------------------------
-# Transactional atomicity
-# ---------------------------------------------------------------------------
-
-
 def test_publish_atomicity_under_pg_transaction(postgres_migrated_engine: Engine) -> None:
     """Uncommitted publish writes are invisible to a second session.
 
     A concurrent ``SELECT … FROM daily_summary`` from a freshly opened
     session sees zero rows while the publish transaction is still open,
     and exactly one row after the publish transaction commits. The
-    same holds for ``outbox_event`` and ``daily_summary_generation_attempt``.
+    same holds for ``task_delivery`` and ``daily_summary_generation_attempt``.
     """
     factory = _session_factory(postgres_migrated_engine)
     publish = factory()
@@ -213,7 +174,7 @@ def test_publish_atomicity_under_pg_transaction(postgres_migrated_engine: Engine
         verify_before = Session(postgres_migrated_engine)
         try:
             assert verify_before.query(DailySummary).count() == 0
-            assert verify_before.query(OutboxEventRow).count() == 0
+            assert verify_before.query(TaskDelivery).count() == 0
         finally:
             verify_before.close()
 
@@ -224,7 +185,7 @@ def test_publish_atomicity_under_pg_transaction(postgres_migrated_engine: Engine
     verify_after = Session(postgres_migrated_engine)
     try:
         assert verify_after.query(DailySummary).count() == 1
-        assert verify_after.query(OutboxEventRow).count() == 2
+        assert verify_after.query(TaskDelivery).count() == 2
         finalised = (
             verify_after.query(DailySummaryGenerationAttempt)
             .filter(DailySummaryGenerationAttempt.id == attempt_id_holder["id"])
@@ -347,7 +308,7 @@ def test_publish_rejects_attempt_in_failed_state(postgres_migrated_engine: Engin
 # ---------------------------------------------------------------------------
 
 
-def test_publish_webhook_outbox_event_ids_unique_per_subscriber(
+def test_publish_webhook_delivery_ids_unique_per_subscriber(
     postgres_migrated_engine: Engine,
 ) -> None:
     """Three subscribers produce three distinct ``event_id`` UUIDs."""
@@ -365,15 +326,18 @@ def test_publish_webhook_outbox_event_ids_unique_per_subscriber(
         assert len(outcome.webhook_event_ids) == 3
         assert len(set(outcome.webhook_event_ids)) == 3
 
-        rows = db.query(OutboxEventRow).all()
+        rows = db.query(TaskDelivery).order_by(TaskDelivery.id).all()
         assert len(rows) == 3
-        db_event_ids = {row.event_id for row in rows}
-        assert len(db_event_ids & set(outcome.webhook_event_ids)) == 3
+        db_task_ids = {
+            db.query(TaskLog).filter(TaskLog.id == row.task_log_id).one().queue_task_id
+            for row in rows
+        }
+        assert db_task_ids == {str(eid) for eid in outcome.webhook_event_ids}
     finally:
         db.close()
 
 
-def test_publish_webhook_outbox_payload_is_json_safe(
+def test_publish_webhook_payload_is_json_safe(
     postgres_migrated_engine: Engine,
 ) -> None:
     """The enrolled ``args_json`` / ``kwargs_json`` round-trip cleanly.
@@ -400,7 +364,7 @@ def test_publish_webhook_outbox_payload_is_json_safe(
         )
         db.commit()
 
-        row = db.query(OutboxEventRow).one()
+        row = db.query(TaskDelivery).one()
         # Round-trip via JSON to assert the payload is canonical JSON.
         args_rt = json.loads(json.dumps(row.args_json))
         kwargs_rt = json.loads(json.dumps(row.kwargs_json))
@@ -423,17 +387,19 @@ def test_publish_webhook_outbox_payload_is_json_safe(
 # ---------------------------------------------------------------------------
 
 
-def test_publish_round_trip_then_outbox_publisher(
+def test_publish_round_trip_then_delivery_flush(
     postgres_migrated_engine: Engine,
 ) -> None:
-    """Publish → publisher claims → broker receives → row marked published.
-
-    Asserts the publisher's hot path (Todo 13) consumes the rows the
-    publish use case enrolls. The broker receives one ``send_task``
-    call per outbox row, with ``task_id=str(event.event_id)``.
-    """
+    """Publish -> flush -> broker receives -> intent rows are gone."""
     factory = _session_factory(postgres_migrated_engine)
     db = factory()
+    sent: list[dict] = []
+
+    def _record_send(name: str, args: list, kwargs: dict, queue: str, task_id: str) -> None:
+        sent.append(
+            {"name": name, "args": args, "kwargs": kwargs, "queue": queue, "task_id": task_id}
+        )
+
     try:
         task_log = _new_task_log(db)
         attempt = _new_running_attempt(db, task_log_id=task_log.id, target=date(2026, 9, 2))
@@ -443,46 +409,20 @@ def test_publish_round_trip_then_outbox_publisher(
         )
         db.commit()
         expected_event_ids = {str(eid) for eid in outcome.webhook_event_ids}
+        deliveries = db.query(TaskDelivery).all()
+        assert len(deliveries) == 2
+        with patch("src.core.celery_app.celery_app.send_task", side_effect=_record_send):
+            assert flush_task_deliveries(db, deliveries) == 2
     finally:
         db.close()
 
-    # Run the publisher twice — ``run_once`` claims one row per call.
-    publisher_db = factory()
-    broker = _FakeBroker()
-    try:
-        publisher = OutboxPublisher(
-            db_session=publisher_db,
-            config=PublisherConfig(
-                claimed_by="publisher-publication",
-                lease_seconds=PUBLISHER_LEASE_SECONDS,
-                max_attempts=3,
-            ),
-            broker=broker,
-        )
-        first_delta = publisher.run_once()
-        publisher_db.commit()
-        second_delta = publisher.run_once()
-        publisher_db.commit()
-    finally:
-        publisher_db.close()
-
-    assert first_delta.published == 1
-    assert second_delta.published == 1
-    assert {call["task_id"] for call in broker.sent_calls} == expected_event_ids
-    for call in broker.sent_calls:
+    assert {call["task_id"] for call in sent} == expected_event_ids
+    for call in sent:
         assert call["name"] == "src.tasks.webhook.send_webhook_task"
         assert call["queue"] == "celery"
 
     verify = Session(postgres_migrated_engine)
     try:
-        rows = (
-            verify.query(OutboxEventRow)
-            .filter(OutboxEventRow.event_id.in_(list(expected_event_ids)))
-            .all()
-        )
-        assert len(rows) == 2
-        for row in rows:
-            assert row.status == OutboxStatus.PUBLISHED.value
-            assert row.published_at is not None
+        assert verify.query(TaskDelivery).count() == 0
     finally:
         verify.close()

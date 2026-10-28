@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -11,9 +11,9 @@ class HomeProfile(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     home_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    family_tags_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    focus_points_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    family_tags_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    focus_points_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     system_style: Mapped[str] = mapped_column(String(32), nullable=False)
-    style_preference_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    style_preference_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     assistant_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    home_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    home_note: Mapped[str | None] = mapped_column(Text, nullable=True)

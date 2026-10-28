@@ -1,9 +1,9 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from src.services.provider_key_crypto import mask_provider_api_key
+from src.core.provider_key_crypto import mask_provider_api_key
 
 
 class LLMProviderBase(BaseModel):
@@ -22,7 +22,7 @@ class LLMProviderBase(BaseModel):
     model_name: str
     timeout_seconds: int = 60
     retry_count: int = 3
-    extra_config_json: Optional[Any] = None
+    extra_config_json: Any | None = None
     enabled: bool = True
     supports_vision: bool = False
     supports_qa: bool = True
@@ -36,7 +36,7 @@ class LLMProviderCreate(LLMProviderBase):
 
 
 class LLMProviderUpdate(LLMProviderBase):
-    api_key: Optional[str] = None
+    api_key: str | None = None
 
 
 class LLMProviderResponse(LLMProviderBase):
@@ -44,9 +44,9 @@ class LLMProviderResponse(LLMProviderBase):
     api_key: str
     availability_status: str = "unknown"
     availability_message: str = "never tested"
-    last_test_status: Optional[str] = None
-    last_test_message: Optional[str] = None
-    last_test_at: Optional[datetime] = None
+    last_test_status: str | None = None
+    last_test_message: str | None = None
+    last_test_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

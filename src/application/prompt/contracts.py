@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -8,7 +8,7 @@ class VideoSourcePromptContext:
     source_name: str
     camera_name: str
     location_name: str
-    prompt_text: Optional[str] = None
+    prompt_text: str | None = None
     source_type: str = "local_directory"
 
 
@@ -18,7 +18,7 @@ class SessionPromptContext:
     source_id: int
     session_start_time: datetime
     session_end_time: datetime
-    total_duration_seconds: Optional[int] = None
+    total_duration_seconds: int | None = None
     segment_index: int = 0
     segment_start_offset_sec: int = 0
     segment_duration_seconds: int = 0

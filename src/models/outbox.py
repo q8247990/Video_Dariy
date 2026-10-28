@@ -4,10 +4,9 @@ The ``outbox_event`` table is the durable side of the PostgreSQL
 transactional outbox. The field list and the index / constraint plan
 are frozen by the contract layer; this module mirrors that contract
 verbatim. The application-level DTO
-(``src.application.outbox.contracts.OutboxEvent``) is the in-memory
+(``src.services.dispatch.outbox``) is the in-memory
 shape used by use cases and tests; this module is the SQLAlchemy
-mapping that the repository (Todo 12) and the Alembic migration (Todo
-12) consume.
+mapping that the repository and the Alembic migration consume.
 
 Why a dedicated persistence model lives next to ``TaskLog`` rather than
 in the application layer:
@@ -23,10 +22,10 @@ in the application layer:
   ``JSON().with_variant(JSONB(), "postgresql")``; the migration emits the
   matching explicit PostgreSQL DDL.
 - the ``OutboxEvent`` dataclass in
-  ``src.application.outbox.contracts`` is what the application /
-  publisher / cutover (Todo 14) import. The dataclass is deliberately
+  the retired cutover dataclass was what the application /
+  publisher / cutover import. The dataclass is deliberately
   framework-agnostic so it can be tested without a database. This
-  module is the SQLAlchemy *row*; the repository (Todo 12) bridges
+  module is the SQLAlchemy *row*; the repository bridges
   the two.
 
 Field mapping (per ADR §2):
@@ -63,8 +62,7 @@ Index / constraint plan (per ADR §2, "Index / constraint plan"):
    DO NOTHING`` returns no row.
 5. ``INDEX (status, next_attempt_at) WHERE status='pending'`` —
    publisher hot path (partial index on PostgreSQL).
-6. ``INDEX (status) WHERE status='failed'`` — failure-scan index
-   (Todo 24 dashboard).
+6. ``INDEX (status) WHERE status='failed'`` — failure-scan index.
 7. ``INDEX (status, published_at) WHERE status='published'`` —
    retention cleanup hot path.
 8. ``FOREIGN KEY (task_log_id) REFERENCES task_log(id) ON DELETE
@@ -77,7 +75,7 @@ Alembic-side the partial indexes are emitted with the explicit
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -114,8 +112,8 @@ PENDING_INDEX_PREDICATE = "status = 'pending' AND task_log_id IS NOT NULL"
 class OutboxEvent(Base):
     """SQLAlchemy mapping for the ``outbox_event`` row.
 
-    The dataclass in ``src.application.outbox.contracts.OutboxEvent`` is
-    the in-memory representation. The repository (Todo 12) translates
+    The dataclass in ``src.services.dispatch.outbox`` is
+    the in-memory representation. The repository translates
     between the two; this class is intentionally bare (no methods, no
     relationships) so the migration emits the columns the ADR
     mandates and nothing else.
@@ -142,7 +140,7 @@ class OutboxEvent(Base):
         nullable=False,
         unique=True,
     )
-    dedupe_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # -- Celery payload ------------------------------------------------
     task_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -167,12 +165,12 @@ class OutboxEvent(Base):
     # -- publisher bookkeeping ----------------------------------------
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    claimed_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+    claimed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # -- ``created_at`` / ``updated_at`` are inherited from Base ------
     # See ``src.db.base_class``. The migration declares them explicitly
@@ -202,7 +200,7 @@ class OutboxEvent(Base):
             "status",
             "next_attempt_at",
         ),
-        # -- Failure-scan index (Todo 24 dashboard, ADR §2 item 6) --
+        # -- Failure-scan index --
         Index(
             "idx_outbox_event_failed",
             "status",

@@ -5,17 +5,17 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.exc import OperationalError
 
 from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, paginate
-from src.api.deps import DB, CurrentUser, Locale, get_container_dep
+from src.api.deps import DB, CurrentUser, Locale
 from src.application.daily_summary import to_daily_summary_response
 from src.application.pipeline.commands import GenerateDailySummaryCommand
 from src.application.pipeline.orchestrator import PipelineOrchestrator
 from src.core.i18n import t
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskType
 from src.models.daily_summary import DailySummary
 from src.models.video_session import VideoSession
 from src.schemas.daily_summary import DailySummaryResponse
 from src.schemas.response import BaseResponse, PaginatedResponse
 from src.services.dispatch import build_dedupe_key, find_duplicate_active_task
-from src.services.pipeline_constants import SessionAnalysisStatus, TaskType
 
 router = APIRouter()
 
@@ -23,11 +23,13 @@ router = APIRouter()
 def _build_orchestrator() -> PipelineOrchestrator:
     """Build the pipeline orchestrator bound to the composition root's dispatcher."""
 
-    return PipelineOrchestrator(dispatcher=get_container_dep().dispatcher)
+    from src.application.bootstrap import get_production_container
+
+    return PipelineOrchestrator(dispatcher=get_production_container().dispatcher)
 
 
 # Module-level orchestrator seam. Endpoints dispatch through this object so
-# tests (and runtime wiring) can substitute the dispatcher by patching
+# tests can substitute the dispatcher by patching
 # ``_pipeline_orchestrator.dispatch_*`` without reassigning the FastAPI
 # dependency graph.
 _pipeline_orchestrator: PipelineOrchestrator = _build_orchestrator()

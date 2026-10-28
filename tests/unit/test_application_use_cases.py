@@ -14,8 +14,7 @@ implementation; the refactor only changed the call site.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from sqlalchemy.orm import Session
@@ -29,16 +28,15 @@ from src.application.bootstrap_fakes import (
 from src.application.home_profile import generate_entity_appearance_use_case
 from src.application.mcp.use_case_tools import MCPToolUseCase
 from src.application.qa.schemas import QARequest
-from src.application.qa.use_case_query import AnswerQuestionUseCase
 from src.application.tasks import (
     retry_task_log_use_case,
     stop_task_log_use_case,
 )
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.llm_provider import LLMProvider
 from src.models.task_log import TaskLog
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import TaskStatus, TaskType
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -49,9 +47,9 @@ def _seed_task_log(
     db: Session,
     *,
     status: str,
-    queue_task_id: Optional[str] = None,
+    queue_task_id: str | None = None,
     task_type: str = TaskType.SESSION_BUILD,
-    task_target_id: Optional[int] = None,
+    task_target_id: int | None = None,
 ) -> TaskLog:
     log = TaskLog(
         task_type=task_type,
@@ -300,30 +298,6 @@ class _RecordingQAService:
             answer_text=f"echo: {request.question}",
             provider_id=None,
         )
-
-
-def test_answer_question_use_case_binds_llm_factory(pg_db: Session) -> None:
-    _RecordingQAService.instances.clear()
-    fake_factory = FakeLLMGatewayFactory()
-    container = bootstrap_for_tests(llm_factory=fake_factory)
-
-    use_case = AnswerQuestionUseCase(
-        db=pg_db,
-        container=container,
-        qa_service_factory=lambda db, llm_factory: _RecordingQAService(
-            db=db, llm_factory=llm_factory
-        ),
-    )
-    result = use_case.execute(
-        QARequest(
-            question="hello",
-            now=datetime(2026, 9, 2, 12, 0, 0),
-        )
-    )
-
-    assert result.answer_text == "echo: hello"
-    assert len(_RecordingQAService.instances) == 1
-    assert _RecordingQAService.instances[0].llm_factory is fake_factory
 
 
 def test_mcp_tool_use_case_routes_ask_home_monitor(pg_db: Session) -> None:

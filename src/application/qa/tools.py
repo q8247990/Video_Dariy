@@ -1,14 +1,14 @@
-"""QA Agent 工具定义与执行。
+"""QA agent tool definitions and execution.
 
-定义暴露给 LLM tool_calling 的工具 schema，
-以及将 LLM 传入的参数转换为 HomeQueryService 调用的执行函数。
+Defines the tool schemas exposed to LLM tool calling and translates the
+model-supplied arguments into ``HomeQueryService`` calls.
 """
 
 import dataclasses
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -150,7 +150,7 @@ QA_TOOLS = [
 # ---------------------------------------------------------------------------
 
 
-def _parse_iso_datetime(value: str) -> Optional[datetime]:
+def _parse_iso_datetime(value: str) -> datetime | None:
     """解析 ISO datetime 字符串。"""
     text = value.strip()
     if not text:

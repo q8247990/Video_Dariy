@@ -1,18 +1,4 @@
-"""Schedule / dispatch-time helpers.
-
-Owns the dispatch-time decisions the Celery scheduler needs:
-
-*   parse the ``daily_summary_schedule`` ``HH:MM`` config string;
-*   resolve the target date (yesterday in the home timezone) and
-    ``home_now``;
-*   detect "an existing summary or in-flight task is already present
-    for this date" so the dispatch loop is idempotent;
-*   claim / release the per-date ``AppRuntimeState`` slot.
-
-The schedule stage never touches the LLM gateway or the
-``DailySummary`` table directly — those concerns belong to the
-generation and finalize stages respectively.
-"""
+"""Scheduling helpers: home timezone, daily trigger and dispatch guard."""
 
 from __future__ import annotations
 
@@ -21,28 +7,30 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus
 from src.models.daily_summary import DailySummary
 from src.models.task_log import TaskLog
 from src.services.app_runtime_state import (
     claim_runtime_state,
     clear_runtime_state,
 )
+from src.services.home_timezone import get_home_timezone
 from src.services.onboarding import DEFAULT_DAILY_SUMMARY_SCHEDULE
-from src.services.pipeline_constants import TaskStatus
-from src.services.summarizer.constants import DISPATCH_GUARD_STATE_KEY_PREFIX
+from src.services.summarizer.contracts import DISPATCH_GUARD_STATE_KEY_PREFIX
 from src.services.system_config_registry import (
     DAILY_SUMMARY_SCHEDULE,
-    HOME_TIMEZONE,
     get_config,
 )
 
 
+# --- schedule.py ---
 def get_daily_schedule(db: Session) -> str:
     """Read the configured ``daily_summary_schedule`` or the default."""
     value = get_config(db, DAILY_SUMMARY_SCHEDULE)
     return str(value) if value else DEFAULT_DAILY_SUMMARY_SCHEDULE
 
 
+# --- schedule.py ---
 def parse_schedule_time(value: str) -> tuple[int, int]:
     """Parse ``HH:MM`` into ``(hour, minute)``.
 
@@ -61,21 +49,19 @@ def parse_schedule_time(value: str) -> tuple[int, int]:
     return hour, minute
 
 
-def get_home_timezone(db: Session) -> ZoneInfo:
-    """Read the configured ``home_timezone`` and return a ``ZoneInfo``."""
-    return ZoneInfo(str(get_config(db, HOME_TIMEZONE)))
-
-
+# --- schedule.py ---
 def resolve_target_date(now: datetime) -> date:
     """Return the summary target date: yesterday in the supplied ``now``."""
     return (now - timedelta(days=1)).date()
 
 
+# --- schedule.py ---
 def _dispatch_guard_key(target_date: date) -> str:
     """Return the ``AppRuntimeState`` key for a per-date dispatch lock."""
     return f"{DISPATCH_GUARD_STATE_KEY_PREFIX}:{target_date.isoformat()}"
 
 
+# --- schedule.py ---
 def has_existing_summary_or_task(db: Session, target_date: date) -> bool:
     """Return ``True`` when a daily summary or in-flight task already exists.
 
@@ -103,6 +89,7 @@ def has_existing_summary_or_task(db: Session, target_date: date) -> bool:
     return task_log is not None
 
 
+# --- schedule.py ---
 def claim_dispatch_guard(db: Session, now: datetime, target_date: date) -> bool:
     """Atomically reserve the per-date dispatch slot.
 
@@ -123,11 +110,13 @@ def claim_dispatch_guard(db: Session, now: datetime, target_date: date) -> bool:
     )
 
 
+# --- schedule.py ---
 def release_dispatch_guard(db: Session, target_date: date) -> None:
     """Clear the per-date dispatch slot so a retry can claim it again."""
     clear_runtime_state(db, _dispatch_guard_key(target_date))
 
 
+# --- schedule.py ---
 def scheduled_local_datetime(now: datetime, schedule_text: str, zone: ZoneInfo) -> datetime:
     """Return the local ``(today, HH:MM)`` datetime for ``schedule_text``."""
     hour, minute = parse_schedule_time(schedule_text)

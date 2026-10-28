@@ -10,34 +10,41 @@ helper :func:`finalize_cancelled_task_log` additionally sets
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
+from sqlalchemy.orm import Session
+
+from src.core.pipeline_constants import TaskStatus
 from src.models.task_log import TaskLog
 from src.services.dispatch.dedupe import ensure_dict_detail
-from src.services.pipeline_constants import TaskStatus
+from src.services.pipeline_state import apply_task_status
 
 
 def finalize_task_log(
+    db: Session,
     task_log: TaskLog,
     status: str,
-    message: Optional[str] = None,
-    detail_json: Optional[dict[str, Any]] = None,
+    message: str | None = None,
+    detail_json: dict[str, Any] | None = None,
 ) -> None:
     """Flip ``task_log`` into ``status``, stamp ``finished_at``, merge details.
 
-    The transition matrix this helper enforces is the in-place
-    counterpart to the centralised CAS UPDATE in
-    :func:`src.services.pipeline_state.transition_task_log`. Use this
-    helper for **direct** finalization (the worker already owns the
-    row and the state-machine audit lives in the caller's session).
-    Use :func:`transition_task_log` when the row's status must be
-    moved from a non-terminal status with full audit-row machinery.
+    The status write goes through
+    :func:`src.services.pipeline_state.apply_task_status`, so the inline
+    ``detail_json`` audit and the append-only ``pipeline_transition_log``
+    row land in the caller's session together with the business UPDATE.
 
     Merges ``detail_json`` keyword into the existing
     :attr:`TaskLog.detail_json` payload; existing keys win only when
     the new value is missing (i.e. ``dict.update`` semantics).
     """
-    task_log.status = status
+    apply_task_status(
+        db,
+        task_log,
+        TaskStatus(status),
+        reason=message or f"Finalized as {status}",
+        source="finalize_task_log",
+    )
     task_log.message = message
     task_log.finished_at = datetime.now(timezone.utc)
     if detail_json is not None:
@@ -47,9 +54,10 @@ def finalize_task_log(
 
 
 def finalize_cancelled_task_log(
+    db: Session,
     task_log: TaskLog,
-    message: Optional[str] = None,
-    detail_json: Optional[dict[str, Any]] = None,
+    message: str | None = None,
+    detail_json: dict[str, Any] | None = None,
 ) -> None:
     """Finalize ``task_log`` as CANCELLED with the ``cancel_requested`` flag set.
 
@@ -59,6 +67,7 @@ def finalize_cancelled_task_log(
     """
     task_log.cancel_requested = True
     finalize_task_log(
+        db,
         task_log,
         TaskStatus.CANCELLED,
         message or "Task cancelled by user",

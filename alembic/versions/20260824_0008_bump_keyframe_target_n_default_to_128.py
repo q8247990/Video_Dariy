@@ -14,16 +14,16 @@ Companion code change: src/schemas/llm_provider.py LLMProviderBase
 default also bumped to 128 so Pydantic and the DB default agree.
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "20260824_0008"
-down_revision: Union[str, None] = "20260824_0007"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260824_0007"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

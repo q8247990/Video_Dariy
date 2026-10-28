@@ -1,12 +1,11 @@
 """Maintenance policy package.
 
-The pre-Wave-5 ``src/tasks/task_maintenance.py`` heartbeat body
-(~373 LOC) owned every maintenance concern: hot-build dispatch,
+The heartbeat body owns every maintenance concern through the
+discrete policy modules in this package: hot-build dispatch,
 running-lease recovery, orphan-pending recovery, missing-file
-reconciliation, and 7-day retention cleanup. Wave 5 splits it into
-the discrete policy modules in this package + a thin aggregator in
-``src/tasks/task_maintenance.py`` that calls each policy and reports
-the deterministic counters.
+reconciliation, and 7-day retention cleanup. A thin aggregator in
+``src/tasks/task_maintenance.py`` calls each policy and reports the
+deterministic counters.
 
 Policy modules:
 

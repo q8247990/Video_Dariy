@@ -39,14 +39,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import src.db.base  # noqa: F401 — registers every model on Base.metadata
-from src.application.outbox import contracts as outbox_contracts
-from src.models.outbox import OutboxEvent
+from src.core.pipeline_constants import TaskStatus, TaskType
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
-from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.session_build import runner
 from src.tasks.session_build import run_hot_build
 
@@ -60,14 +59,14 @@ pytestmark = pytest.mark.postgres
 
 @pytest.fixture(autouse=True)
 def _reset_emitted_event_ids() -> None:
-    outbox_contracts._reset_emitted_event_ids_for_testing()
+    return None
 
 
 @pytest.fixture(autouse=True)
 def _truncate_session_build_tables(postgres_migrated_engine: Engine) -> None:
     """Wipe every table the session-build pipeline touches (FK-safe order)."""
     with postgres_migrated_engine.begin() as conn:
-        conn.execute(sql_text("TRUNCATE TABLE outbox_event RESTART IDENTITY CASCADE"))
+        conn.execute(sql_text("TRUNCATE TABLE task_delivery RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE task_log RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE pipeline_transition_log RESTART IDENTITY CASCADE"))
         conn.execute(sql_text("TRUNCATE TABLE video_session_file_rel RESTART IDENTITY CASCADE"))
@@ -90,7 +89,7 @@ def fake_dispatcher(monkeypatch):
 
     fake = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=fake)
-    monkeypatch.setattr("src.tasks._container._container", container)
+    monkeypatch.setattr("src.application.container_holder._container", container)
     return fake
 
 
@@ -290,11 +289,11 @@ def test_pg_sealed_session_dispatches_exactly_one_outbox_analyze_command(
     postgres_migrated_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A sealed session becomes one ``OutboxEvent`` row + one pending ``TaskLog``.
+    """A sealed session becomes one ``TaskDelivery`` row + one pending ``TaskLog``.
 
     Driving through the public :func:`run_hot_build` orchestration
     entry exercises the full seal+dispatch atomic path. The outbox
-    dispatcher port writes the ``OutboxEvent`` inside the same
+    dispatcher port writes the ``TaskDelivery`` inside the same
     transaction as the ``TaskLog``; the partial unique index on
     ``task_log.dedupe_key`` enforces one active analyzer per
     session. Each pre-seeded stuck-sealed session is redispatched
@@ -321,8 +320,8 @@ def test_pg_sealed_session_dispatches_exactly_one_outbox_analyze_command(
 
     with factory() as db:
         outbox_count = (
-            db.query(OutboxEvent)
-            .filter(OutboxEvent.task_name == "src.tasks.analyzer.analyze_session_task")
+            db.query(TaskDelivery)
+            .filter(TaskDelivery.task_name == "src.tasks.analyzer.analyze_session_task")
             .count()
         )
         pending_logs = (
@@ -542,10 +541,10 @@ def test_pg_outbox_partial_unique_index_serializes_sealed_session_dispatch(
     postgres_migrated_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two concurrent build calls produce one ``OutboxEvent`` per session.
+    """Two concurrent build calls produce one ``TaskDelivery`` per session.
 
     The outbox dispatcher writes the
-    ``OutboxEvent(task_name='src.tasks.analyzer.analyze_session_task')``
+    ``TaskDelivery(task_name='src.tasks.analyzer.analyze_session_task')``
     row inside the same transaction as the ``TaskLog``; the
     partial unique index serialises peer workers to a single
     active row. Driving two concurrent :func:`run_hot_build`
@@ -579,8 +578,8 @@ def test_pg_outbox_partial_unique_index_serializes_sealed_session_dispatch(
 
     with factory() as db:
         event_count = (
-            db.query(OutboxEvent)
-            .filter(OutboxEvent.task_name == "src.tasks.analyzer.analyze_session_task")
+            db.query(TaskDelivery)
+            .filter(TaskDelivery.task_name == "src.tasks.analyzer.analyze_session_task")
             .count()
         )
         assert event_count == len(seeded_ids)

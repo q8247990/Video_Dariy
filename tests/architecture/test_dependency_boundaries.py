@@ -63,6 +63,9 @@ class BoundaryRule:
             ``target_module_prefix``. Used to carve out shared types (the
             ``src.application.ports.*`` Protocol definitions are
             intentionally importable from any layer).
+        excluded_source_subpaths: Optional iterable of source files (relative
+            to the repo root) exempt from the rule — e.g. the composition
+            root in ``src/application/bootstrap.py``.
         owner_todo: Which Wave 1 todo is responsible for clearing violations
             of this rule. Required, non-empty, must be one of ``Todo 5`` /
             ``Todo 6`` / ``Todo 7`` / ``Todo 8``.
@@ -74,6 +77,7 @@ class BoundaryRule:
     source_module_prefix: str
     target_module_prefix: str
     excluded_target_subprefixes: tuple[str, ...] = ()
+    excluded_source_subpaths: tuple[str, ...] = ()
     owner_todo: str = ""
     description: str = ""
 
@@ -135,8 +139,8 @@ RULES: tuple[BoundaryRule, ...] = (
         # case / schema logic — importable from every layer for the
         # same reason ``ports`` are.
         #
-        # ``src.application.outbox.contracts`` / ``src.application.outbox.enqueue``
-        # are the write-only outbox-row enqueue seam the lease-recovery
+        # ``src.application.pipeline.commands`` / ``src.application.ports.*``
+        # are the write-only dispatch-command seam the lease-recovery
         # policy uses to bind the ``OutboxEvent`` to the recovered
         # ``task_log`` in the **same** transaction as the recovery's
         # ``TIMEOUT`` CAS UPDATE — the same "audit-row helper that
@@ -146,8 +150,8 @@ RULES: tuple[BoundaryRule, ...] = (
             "src.application.ports",
             "src.application.transition_log",
             "src.application.pipeline.commands",
-            "src.application.outbox.contracts",
-            "src.application.outbox.enqueue",
+            "src.application.pipeline.commands",
+            "src.application.ports",
         ),
         owner_todo="Todo 5",
         description=(
@@ -169,6 +173,86 @@ RULES: tuple[BoundaryRule, ...] = (
         description=(
             "Adapter binding lives in src/application/bootstrap.py only; "
             "services must not import src.infrastructure.* directly."
+        ),
+    ),
+    BoundaryRule(
+        name="services_no_tasks_import",
+        source_root="src/services",
+        source_module_prefix="src.services",
+        target_module_prefix="src.tasks",
+        owner_todo="Todo 5",
+        description=(
+            "Services must receive dispatchers / factories from the caller; "
+            "importing the Celery task container from src.services is a "
+            "downward dependency on the entry-point layer."
+        ),
+    ),
+    BoundaryRule(
+        name="core_no_application_import",
+        source_root="src/core",
+        source_module_prefix="src.core",
+        target_module_prefix="src.application",
+        owner_todo="Todo 8",
+        description=(
+            "src/core provides primitives (config, i18n, logging, crypto); "
+            "it must not depend on application-layer adapters."
+        ),
+    ),
+    BoundaryRule(
+        name="db_no_services_import",
+        source_root="src/db",
+        source_module_prefix="src.db",
+        target_module_prefix="src.services",
+        owner_todo="Todo 8",
+        description=(
+            "src/db owns session / readiness primitives; domain enums and "
+            "business constants belong in src.core so this layer never "
+            "imports src.services."
+        ),
+    ),
+    BoundaryRule(
+        name="mcp_no_api_import",
+        source_root="src/mcp",
+        source_module_prefix="src.mcp",
+        target_module_prefix="src.api",
+        owner_todo="Todo 6",
+        description=(
+            "MCP is a sibling transport, not an API consumer; shared "
+            "dependencies belong in src.db / src.core."
+        ),
+    ),
+    BoundaryRule(
+        name="models_no_services_import",
+        source_root="src/models",
+        source_module_prefix="src.models",
+        target_module_prefix="src.services",
+        owner_todo="Todo 5",
+        description=(
+            "ORM models may depend on core primitives only; business "
+            "services and crypto helpers live outside the persistence layer."
+        ),
+    ),
+    BoundaryRule(
+        name="schemas_no_services_import",
+        source_root="src/schemas",
+        source_module_prefix="src.schemas",
+        target_module_prefix="src.services",
+        owner_todo="Todo 5",
+        description=(
+            "Request / response schemas must not import business services; "
+            "shared value helpers belong in src.core."
+        ),
+    ),
+    BoundaryRule(
+        name="application_no_infrastructure_import",
+        source_root="src/application",
+        source_module_prefix="src.application",
+        target_module_prefix="src.infrastructure",
+        excluded_source_subpaths=("src/application/bootstrap.py",),
+        owner_todo="Todo 5",
+        description=(
+            "Only the composition root may bind infrastructure adapters; "
+            "use cases receive ports from bootstrap."
         ),
     ),
     BoundaryRule(
@@ -294,6 +378,12 @@ def _detect_violations() -> list[tuple[str, str, int, str]]:
             continue
         for path in _iter_python_files(root):
             module = _path_to_module(path, root=PROJECT_ROOT)
+            rel_path = str(path.relative_to(PROJECT_ROOT))
+            if any(
+                rel_path == excluded or rel_path.startswith(f"{excluded}/")
+                for excluded in rule.excluded_source_subpaths
+            ):
+                continue
             if not module.startswith(rule.source_module_prefix):
                 # Defensive: should never trigger because we already rglob
                 # from ``rule.source_root``, but keep the guard so the rule
@@ -420,10 +510,17 @@ def test_rules_cover_all_target_layers() -> None:
     expected_layers = {
         ("src/api", "src.infrastructure", "Todo 6"),
         ("src/mcp", "src.infrastructure", "Todo 6"),
+        ("src/mcp", "src.api", "Todo 6"),
         ("src/tasks", "src.infrastructure", "Todo 7"),
         ("src/services", "src.application", "Todo 5"),
         ("src/services", "src.infrastructure", "Todo 5"),
+        ("src/services", "src.tasks", "Todo 5"),
+        ("src/core", "src.application", "Todo 8"),
         ("src/core", "src.db.session", "Todo 8"),
+        ("src/db", "src.services", "Todo 8"),
+        ("src/models", "src.services", "Todo 5"),
+        ("src/schemas", "src.services", "Todo 5"),
+        ("src/application", "src.infrastructure", "Todo 5"),
     }
     actual_layers = {(r.source_root, r.target_module_prefix, r.owner_todo) for r in RULES}
     missing = expected_layers - actual_layers

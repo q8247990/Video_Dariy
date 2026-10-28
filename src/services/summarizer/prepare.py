@@ -1,17 +1,14 @@
-"""Pure-text helpers shared by the parse / generate / normalise stages.
-
-None of these helpers touch the DB or the LLM gateway; they exist
-to keep the parse / generate / normalise code focused on flow
-control. The split / clamp logic lives in :func:`clamp_summary_payload`
-(``normalization``); the ``complete_subject_sections`` helper that
-adds the missing-subject fallbacks lives here because both the
-single-pass and serial generation paths reach for it.
-"""
+"""Input preparation: text helpers, evidence building and the Evidence bundle."""
 
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any, Callable
+from zoneinfo import ZoneInfo
+
+from sqlalchemy.orm import Session
 
 from src.core.i18n.locale_directive import (
     get_fallback_summary,
@@ -19,9 +16,20 @@ from src.core.i18n.locale_directive import (
     get_subject_fallback_text,
     get_subject_no_activity_text,
 )
+from src.models.event_record import EventRecord
+from src.schemas.home_profile import coerce_focus_points
+from src.services.attention import attention_focus_keys
+from src.services.daily_summary.preprocess import (
+    build_known_subjects,
+    build_subject_event_mapping,
+    extract_attention_candidates,
+)
 from src.services.daily_summary.schemas import AttentionItem
+from src.services.home_profile import build_home_context
+from src.services.home_timezone import local_day_bounds
 
 
+# --- helpers.py ---
 def clean_generated_text(value: str) -> str:
     """Normalise whitespace / consecutive CJK punctuation in LLM text."""
     text = " ".join((value or "").strip().split())
@@ -32,6 +40,7 @@ def clean_generated_text(value: str) -> str:
     return text.strip()
 
 
+# --- helpers.py ---
 def split_sentences(text: str) -> list[str]:
     """Split ``text`` on sentence-ending punctuation; drop empties."""
     cleaned = clean_generated_text(text)
@@ -41,6 +50,7 @@ def split_sentences(text: str) -> list[str]:
     return [seg.strip() for seg in segments if seg.strip()]
 
 
+# --- helpers.py ---
 def trim_sentences_to_chars(text: str, max_chars: int) -> str:
     """Return up to ``max_chars`` characters, preserving whole sentences."""
     sentences = split_sentences(text)
@@ -58,7 +68,8 @@ def trim_sentences_to_chars(text: str, max_chars: int) -> str:
     return "".join(acc).strip(" \uff0c\u3002")
 
 
-def truncate_text(value: str, max_len: int) -> str:
+# --- helpers.py ---
+def truncate_for_summary(value: str, max_len: int) -> str:
     """Trim trailing whitespace; cap at ``max_len`` characters."""
     text = value.strip()
     if len(text) <= max_len:
@@ -66,6 +77,7 @@ def truncate_text(value: str, max_len: int) -> str:
     return text[:max_len].rstrip("\uff0c\u3002,. ")
 
 
+# --- helpers.py ---
 def estimate_detail_length(
     subject_sections: list[dict[str, Any]], attention_items: list[dict[str, Any]]
 ) -> int:
@@ -93,13 +105,15 @@ def estimate_detail_length(
     return total
 
 
-def build_fallback_overall_summary(*, has_events: bool, locale: Optional[str] = None) -> str:
+# --- helpers.py ---
+def build_fallback_overall_summary(*, has_events: bool, locale: str | None = None) -> str:
     """Return the stable empty-day / non-empty fallback text."""
     return get_fallback_summary(has_events, locale)
 
 
+# --- helpers.py ---
 def build_subject_fallback_summary(
-    subject_section: dict[str, Any], *, locale: Optional[str] = None
+    subject_section: dict[str, Any], *, locale: str | None = None
 ) -> str:
     """Per-subject fallback when the LLM rollup fails parsing."""
     subject_name = str(subject_section.get("subject_name") or "\u8be5\u5bf9\u8c61")
@@ -109,6 +123,7 @@ def build_subject_fallback_summary(
     return get_subject_fallback_text(subject_name, raw_count, len(clusters), locale)
 
 
+# --- helpers.py ---
 def _build_subject_type_map(
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
@@ -131,6 +146,7 @@ def _build_subject_type_map(
     return subject_type_map
 
 
+# --- helpers.py ---
 def _build_activity_score_map(
     subject_sections_payload: list[dict[str, Any]],
 ) -> dict[str, int]:
@@ -145,6 +161,7 @@ def _build_activity_score_map(
     return activity_score_map
 
 
+# --- helpers.py ---
 def _normalise_section(
     item: dict[str, Any],
     subject_type_map: dict[str, str],
@@ -162,11 +179,12 @@ def _normalise_section(
     }
 
 
+# --- helpers.py ---
 def _missing_subject_stub(
     name: str,
     subject_type: str,
     activity_score: int,
-    locale: Optional[str],
+    locale: str | None,
 ) -> dict[str, Any]:
     if activity_score > 0:
         summary = get_subject_activity_text(name, activity_score, locale)
@@ -181,12 +199,13 @@ def _missing_subject_stub(
     }
 
 
+# --- helpers.py ---
 def complete_subject_sections(
     *,
     sections: list[dict[str, Any]],
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
-    locale: Optional[str] = None,
+    locale: str | None = None,
 ) -> list[dict[str, Any]]:
     """Merge LLM-produced sections with the known / missing-subject map.
 
@@ -220,6 +239,7 @@ def complete_subject_sections(
     return normalized
 
 
+# --- helpers.py ---
 def normalise_attention_items(
     attention_items: list[Any], *, max_count: int = 3
 ) -> list[dict[str, Any]]:
@@ -240,7 +260,135 @@ def normalise_attention_items(
     return normalized
 
 
+# --- evidence.py ---
+PromptBuilder = Callable[..., tuple[str, str]]
+
+
+# --- evidence.py ---
+@dataclass(frozen=True)
+class Evidence:
+    """All inputs the generation stage needs to produce a summary.
+
+    Attributes:
+        target_date: The summary date (timezone-naive ``date``).
+        start_dt / end_dt: UTC half-open range of the day's events.
+        home_context: Snapshot of ``build_home_context(db)`` —
+            home profile, members and pets.
+        known_subjects: Compact ``[{"subject_name", "subject_type"}]``
+            list extracted from the home context.
+        subject_sections: Per-subject roll-up of events.
+        missing_subjects: Known subjects with zero events.
+        attention_candidates: Operator-facing attention candidates.
+        events: Ordered list of the day's ``EventRecord`` rows.
+        prompt: The ``(system, user)`` prompt tuple.
+        prompt_chars: ``len(prompt[1])`` — convenient for the
+            single-vs-serial decision.
+        locale: Locale directive passed to the prompt builder.
+        single_pass_user_prompt_chars: ``len(prompt[1])`` —
+            duplicated for the orchestrator's split-decision logic.
+    """
+
+    target_date: date
+    start_dt: datetime
+    end_dt: datetime
+    home_context: dict[str, Any]
+    known_subjects: list[dict[str, str]]
+    subject_sections: list[dict[str, Any]]
+    missing_subjects: list[str]
+    attention_candidates: list[dict[str, Any]]
+    events: list[EventRecord]
+    prompt: tuple[str, str]
+    prompt_chars: int
+    locale: str | None = None
+    single_pass_user_prompt_chars: int = 0
+
+
+# --- evidence.py ---
+def build_evidence(
+    db: Session,
+    *,
+    target_date: date,
+    zone: ZoneInfo,
+    prompt_builder: PromptBuilder,
+    prompt_input_factory: Callable[..., Any],
+    locale: str | None = None,
+) -> Evidence:
+    """Build an :class:`Evidence` for ``target_date`` using ``zone``.
+
+    Args:
+        db: Caller-owned ``Session``; the helper runs one events
+            query and reads the home profile. The caller owns the
+            commit / rollback.
+        target_date: The date the summary covers.
+        zone: Home timezone (``ZoneInfo`` instance).
+        prompt_builder: Callable that builds the daily-summary
+            prompt. Signature ``(prompt_input) -> (system, user)``.
+            The production wiring supplies
+            :func:`src.application.prompt.compiler.compile_daily_summary_prompt`.
+        prompt_input_factory: Callable that builds the
+            ``DailySummaryPromptInput`` payload from the evidence
+            fields. The production wiring supplies
+            :class:`src.application.prompt.contracts.DailySummaryPromptInput`.
+            Accepting the factory as a parameter keeps
+            :mod:`src.services.summarizer` free of
+            :mod:`src.application.*` imports.
+        locale: Optional locale directive.
+    """
+    start_dt, end_dt = local_day_bounds(zone, target_date)
+    events = (
+        db.query(EventRecord)
+        .filter(
+            EventRecord.event_start_time >= start_dt,
+            EventRecord.event_start_time < end_dt,
+        )
+        .order_by(EventRecord.event_start_time.asc())
+        .all()
+    )
+
+    home_context = build_home_context(db)
+    known_subjects = build_known_subjects(home_context)
+    subject_sections, missing_subjects, _ = build_subject_event_mapping(events, known_subjects)
+    attention_keys = attention_focus_keys(
+        coerce_focus_points(home_context["home_profile"].get("focus_items"))
+    )
+    attention_candidates = extract_attention_candidates(events, attention_keys=attention_keys)
+
+    subject_sections_payload = [item.model_dump() for item in subject_sections]
+    attention_candidates_payload = [item.model_dump() for item in attention_candidates]
+
+    prompt_input = prompt_input_factory(
+        home_context=home_context,
+        summary_date=target_date,
+        time_range_start=start_dt.isoformat(),
+        time_range_end=end_dt.isoformat(),
+        subject_sections=subject_sections_payload,
+        missing_subjects=missing_subjects,
+        attention_candidates=attention_candidates_payload,
+        locale=locale,
+    )
+    prompt = prompt_builder(prompt_input)
+
+    return Evidence(
+        target_date=target_date,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        home_context=home_context,
+        known_subjects=known_subjects,
+        subject_sections=subject_sections_payload,
+        missing_subjects=missing_subjects,
+        attention_candidates=attention_candidates_payload,
+        events=events,
+        prompt=prompt,
+        prompt_chars=len(prompt[1]),
+        locale=locale,
+        single_pass_user_prompt_chars=len(prompt[1]),
+    )
+
+
 __all__ = [
+    "Evidence",
+    "PromptBuilder",
+    "build_evidence",
     "build_fallback_overall_summary",
     "build_subject_fallback_summary",
     "clean_generated_text",
@@ -249,5 +397,5 @@ __all__ = [
     "normalise_attention_items",
     "split_sentences",
     "trim_sentences_to_chars",
-    "truncate_text",
+    "truncate_for_summary",
 ]

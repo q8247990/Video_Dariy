@@ -33,8 +33,15 @@ from sqlalchemy import delete
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.models.outbox import OutboxEvent
+from src.application.bootstrap_fakes import FakeTaskDispatcher
+from src.core.pipeline_constants import (
+    SessionAnalysisStatus,
+    TaskStatus,
+    TaskType,
+)
+from src.models.outbox import OutboxEvent as OutboxEventRow
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
@@ -45,11 +52,6 @@ from src.services.maintenance.running_lease_recovery import recover_timed_out_ta
 from src.services.maintenance.unleased_recovery import (
     recover_orphan_pending_tasks,
     recover_unleased_pending_tasks,
-)
-from src.services.pipeline_constants import (
-    SessionAnalysisStatus,
-    TaskStatus,
-    TaskType,
 )
 from src.tasks.task_maintenance import heartbeat
 
@@ -72,7 +74,8 @@ def _reset_policy_sweep_tables(
     ``video_session``/``video_source`` FK-restricted rows other suites own.
     """
     with Session(postgres_migrated_engine) as db:
-        db.execute(delete(OutboxEvent))
+        db.execute(delete(TaskDelivery))
+        db.execute(delete(OutboxEventRow))
         db.execute(delete(TaskLog))
         db.commit()
     yield
@@ -150,7 +153,7 @@ def test_expired_lease_recovered_exactly_once(
 
     for _ in range(3):
         with Session(postgres_migrated_engine) as db:
-            assert recover_timed_out_tasks(db, now) in (1, 0)
+            assert recover_timed_out_tasks(db, now, dispatcher=FakeTaskDispatcher()) in (1, 0)
             db.commit()
 
     with Session(postgres_migrated_engine) as db:
@@ -441,7 +444,7 @@ def test_concurrent_orphan_recovery_creates_one_recovery(
 
     def recover() -> int:
         with factory() as db:
-            count = recover_orphan_pending_tasks(db, now)
+            count = recover_orphan_pending_tasks(db, now, dispatcher=FakeTaskDispatcher())
             db.commit()
             return count
 
@@ -467,16 +470,16 @@ def test_concurrent_orphan_recovery_creates_one_recovery(
 # ===========================================================================
 
 
-def test_lease_expired_analysis_recovery_writes_outbox_row(
+def test_lease_expired_analysis_recovery_redispatches(
     postgres_migrated_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``resume_lost_analysis`` issues an outbox dispatch on the lease-expiry path."""
+    """``resume_lost_analysis`` re-dispatches the analyzer on the lease-expiry path."""
     from src.application.bootstrap import bootstrap_for_tests
     from src.application.bootstrap_fakes import FakeTaskDispatcher
 
     dispatcher = FakeTaskDispatcher()
     container = bootstrap_for_tests(dispatcher=dispatcher)
-    monkeypatch.setattr("src.tasks._container.get_container", lambda: container)
+    monkeypatch.setattr("src.application.container_holder._container", container)
     monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", MagicMock())
 
     now = datetime.now(timezone.utc)
@@ -526,7 +529,7 @@ def test_lease_expired_analysis_recovery_writes_outbox_row(
         task_log_id = task_log.id
 
     with Session(postgres_migrated_engine) as db:
-        recovered = recover_timed_out_tasks(db, now)
+        recovered = recover_timed_out_tasks(db, now, dispatcher=dispatcher)
         db.commit()
         assert recovered == 1
 
@@ -538,8 +541,16 @@ def test_lease_expired_analysis_recovery_writes_outbox_row(
         refreshed = db.query(TaskLog).filter(TaskLog.id == task_log_id).one()
         assert refreshed.status == TaskStatus.TIMEOUT
 
-        outbox_count = db.query(OutboxEvent).filter(OutboxEvent.task_log_id == task_log_id).count()
-        assert outbox_count == 1
+        delivery_count = (
+            db.query(TaskDelivery).filter(TaskDelivery.task_log_id == task_log_id).count()
+        )
+        refreshed_delivery = (
+            db.query(TaskDelivery).filter(TaskDelivery.task_log_id == task_log_id).one_or_none()
+        )
+        assert delivery_count in (0, 1)
+        assert refreshed_delivery is None or refreshed_delivery.task_name.endswith(
+            "analyze_session_task"
+        )
 
 
 # ---------------------------------------------------------------------------

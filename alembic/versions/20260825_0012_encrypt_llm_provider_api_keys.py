@@ -8,17 +8,17 @@ This data migration is intentionally irreversible. Back up the database before
 upgrading; restore that verified backup if encryption cannot complete.
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 from sqlalchemy import text
 
 from alembic import op
-from src.services.provider_key_crypto import encrypt_provider_api_key, is_encrypted_provider_api_key
+from src.core.provider_key_crypto import encrypt_provider_api_key, is_encrypted_provider_api_key
 
 revision: str = "20260825_0012"
-down_revision: Union[str, None] = "20260825_0011"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260825_0011"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -1,6 +1,7 @@
-"""Jinja2 模板渲染引擎。
+"""Jinja2 template rendering engine.
 
-提供全局单例 Environment，加载 templates/ 目录下的 .j2 模板文件。
+Owns the process-wide ``Environment`` that loads the ``.j2`` templates
+from the ``templates/`` directory.
 """
 
 import json

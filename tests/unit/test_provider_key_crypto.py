@@ -2,14 +2,14 @@ from datetime import datetime
 
 import pytest
 
-from src.models.llm_provider import LLMProvider
-from src.schemas.llm_provider import LLMProviderResponse
-from src.services.provider_key_crypto import (
+from src.core.provider_key_crypto import (
     ProviderKeyDecryptionError,
     decrypt_provider_api_key,
     encrypt_provider_api_key,
     is_encrypted_provider_api_key,
 )
+from src.models.llm_provider import LLMProvider
+from src.schemas.llm_provider import LLMProviderResponse
 
 
 def test_provider_api_key_encrypts_and_decrypts_non_empty_value() -> None:

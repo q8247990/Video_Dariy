@@ -1,6 +1,6 @@
 """Daily-summary attempt error hierarchy.
 
-Mirrors the shape of :mod:`src.application.outbox.errors` — a base
+Mirrors the shape of the retired outbox error hierarchy — a base
 class so callers can catch every attempt-contract violation uniformly,
 plus a concrete subclass for illegal state transitions. Each error
 carries a ``payload`` keyword so the offending values can be attached
@@ -16,7 +16,7 @@ split (ADR §1) is meant to avoid.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 
 class DailySummaryAttemptError(Exception):
@@ -28,7 +28,7 @@ class DailySummaryAttemptError(Exception):
     caller-supplied data.
     """
 
-    def __init__(self, message: str, *, payload: Optional[Any] = None) -> None:
+    def __init__(self, message: str, *, payload: Any | None = None) -> None:
         super().__init__(message)
         self.payload = payload
 

@@ -54,7 +54,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ class ReducerPlan:
       order the reducer opened them.
     """
 
-    extend_session_id: Optional[int] = None
+    extend_session_id: int | None = None
     next_sort_index: int = 0
     append_actions: list[ReducerAppendAction] = field(default_factory=list)
     new_sessions: list[ReducerSessionToCreate] = field(default_factory=list)
@@ -151,15 +151,15 @@ class _State:
     ``existing_open_session`` proxy.
     """
 
-    extend_id: Optional[int]
-    extend_end_time: Optional[datetime]
+    extend_id: int | None
+    extend_end_time: datetime | None
     next_extend_sort: int
     next_new_sort: int
-    new_session_index: Optional[int]
-    new_session_end_time: Optional[datetime]
+    new_session_index: int | None
+    new_session_end_time: datetime | None
 
 
-def _initial_state(existing_open_session: Optional[Any]) -> _State:
+def _initial_state(existing_open_session: Any | None) -> _State:
     if existing_open_session is None:
         return _State(None, None, 0, 0, None, None)
     return _State(
@@ -179,7 +179,7 @@ def _within_merge_gap(start_time: datetime, end_time: datetime, *, merge_gap_sec
 
 def _decide_target(
     state: _State, video_file: Any, *, merge_gap_seconds: int
-) -> tuple[Optional[str], int]:
+) -> tuple[str | None, int]:
     """Return ``(target, sort_index)`` for the next file; ``None`` triggers a new session.
 
     Pure decision: no mutation. The caller updates
@@ -248,7 +248,7 @@ def _update_state_after_new_session_append(state: _State, video_file: Any) -> _S
 def reduce_files(
     inserted_files: list[Any],
     *,
-    existing_open_session: Optional[Any] = None,
+    existing_open_session: Any | None = None,
     merge_gap_seconds: int = 1,
 ) -> ReducerPlan:
     """Compute the merge plan; no DB I/O, no mutation.
@@ -267,7 +267,7 @@ def reduce_files(
             source).
         merge_gap_seconds: Override for the merge window. The
             default (``1``) matches the
-            :data:`src.services.session_build.constants.MERGE_GAP_SECONDS`
+            :data:`src.services.session_build.types.MERGE_GAP_SECONDS`
             constant; tests use larger windows to assert the
             over-gap branch.
 

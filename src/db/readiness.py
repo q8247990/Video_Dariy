@@ -4,7 +4,7 @@ import redis as redis_lib
 from sqlalchemy import text
 
 from src.core.config import settings
-from src.db.init_db import EXPECTED_ALEMBIC_REVISION, get_current_alembic_revision
+from src.db.init_db import get_current_alembic_revision, get_expected_alembic_revision
 from src.db.session import engine
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def check_redis() -> bool:
 
 def check_alembic_head() -> bool:
     """Return True when the live schema is at the expected Alembic head."""
-    return get_current_alembic_revision() == EXPECTED_ALEMBIC_REVISION
+    return get_current_alembic_revision() == get_expected_alembic_revision()
 
 
 def readiness_checks() -> dict[str, bool]:

@@ -4,16 +4,16 @@ Revision ID: 20260826_0017
 Revises: 20260826_0016
 """
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "20260826_0017"
-down_revision: Union[str, None] = "20260826_0016"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "20260826_0016"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _replace_fk(table: str, column: str, referred_table: str, ondelete: str) -> None:

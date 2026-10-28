@@ -37,19 +37,20 @@ from sqlalchemy.orm import Session
 from src.api import deps as api_deps
 from src.api.error_status import ResponseStatusMiddleware
 from src.api.v1.endpoints import daily_summaries as daily_summaries_module
+from src.application import container_holder
 from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
 from src.application.pipeline.commands import GenerateDailySummaryCommand
 from src.application.pipeline.orchestrator import PipelineOrchestrator
-from src.models.daily_summary import DailySummary
-from src.models.task_log import TaskLog
-from src.models.video_session import VideoSession
-from src.models.video_source import VideoSource
-from src.services.pipeline_constants import (
+from src.core.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.daily_summary import DailySummary
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 
 
 @pytest.fixture
@@ -110,7 +111,7 @@ def fake_dispatcher() -> Iterator[FakeTaskDispatcher]:
 
     The endpoint module (``daily_summaries.py``) holds a module-level
     singleton built at import time from the production container, so
-    swapping ``api_deps._container`` alone is not enough — the test
+    swapping ``container_holder._container`` alone is not enough — the test
     client must also override the endpoint's ``get_orchestrator``
     dependency (see the ``client_with_fake_dispatcher`` fixture below).
 
@@ -118,7 +119,7 @@ def fake_dispatcher() -> Iterator[FakeTaskDispatcher]:
     not contaminated by our fake.
     """
 
-    original = api_deps._container
+    original = container_holder._container
     fake = FakeTaskDispatcher()
     api_deps.set_container_for_tests(bootstrap_for_tests(dispatcher=fake))
     try:

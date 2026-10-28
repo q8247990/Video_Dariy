@@ -5,7 +5,7 @@ TaskLog" lookup that gates every dispatch call. The helpers here are
 the seam between the dispatcher (which asks "is there an active row
 for this work?") and the persistence layer (TaskLog rows).
 
-Split out from the pre-Wave-5 ``task_dispatch_control.py`` so the
+Split out from ``task_dispatch_control.py`` so the
 policy can be unit-tested against an in-memory TaskLog table without
 standing up the rest of the dispatch-control pipeline. The functions
 are pure of side effects except for the SQLAlchemy session argument
@@ -14,12 +14,12 @@ they take.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import TaskStatus, TaskType
 
 
 def ensure_dict_detail(detail_json: Any) -> dict[str, Any]:
@@ -38,12 +38,12 @@ def ensure_dict_detail(detail_json: Any) -> dict[str, Any]:
 
 def build_dedupe_key(
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     detail_json: dict[str, Any],
 ) -> str:
     """Compute the dedupe-key that pins one logical work unit to one active row.
 
-    The key rules are preserved verbatim from the pre-Wave-5 monolith:
+    The key rules are preserved verbatim from the monolith:
 
     * ``session_build`` always dedupes by source (the source scan is the
       logical unit — hot and full are mutually exclusive regardless of
@@ -64,7 +64,7 @@ def build_dedupe_key(
 
 def _ensure_dedupe_key(
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     detail_json: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
     """Resolve the dedupe-key, mutating ``detail_json`` to carry it when computed.
@@ -86,9 +86,9 @@ def _ensure_dedupe_key(
 def find_duplicate_active_task(
     db: Session,
     task_type: str,
-    task_target_id: Optional[int],
+    task_target_id: int | None,
     dedupe_key: str,
-) -> Optional[TaskLog]:
+) -> TaskLog | None:
     """Return the active (PENDING / RUNNING) TaskLog for the dedupe-key, if any.
 
     Uses the task-type-specific lookup shape:
@@ -148,8 +148,8 @@ def find_duplicate_active_task(
 def is_singleton_task_running(
     db: Session,
     task_type: str,
-    task_target_id: Optional[int],
-    scan_mode: Optional[str] = None,
+    task_target_id: int | None,
+    scan_mode: str | None = None,
 ) -> bool:
     """Check if a singleton task (session_build hot/full) is already active.
 

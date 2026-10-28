@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     MEDIA_SIGNING_KEY: str = _DEVELOPMENT_MEDIA_SIGNING_KEY
     PROVIDER_KEY_ENCRYPTION_KEY: str = _DEVELOPMENT_PROVIDER_KEY_ENCRYPTION_KEY
     MCP_TOKEN: str = "change_me_mcp_token"
+    # Empty keeps /metrics and /health/bootstrap open for local development;
+    # set a value in production to require the X-Metrics-Token header.
+    METRICS_TOKEN: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
     # Bootstrap admin
@@ -45,6 +48,14 @@ class Settings(BaseSettings):
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         return self.DATABASE_URL
+
+    # Browser origins allowed to call the API with credentials. Empty means
+    # same-origin only (the production nginx setup proxies /api itself).
+    CORS_ALLOW_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        return [item.strip() for item in self.CORS_ALLOW_ORIGINS.split(",") if item.strip()]
 
     # Redis & Celery
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -60,7 +71,7 @@ class Settings(BaseSettings):
     ANALYSIS_PROGRESS_GRACE_SECONDS: int = 600
     ANALYSIS_PENDING_GRACE_SECONDS: int = 1800
     ANALYSIS_RECOVERY_MAX_ATTEMPTS: int = 3
-    PENDING_UNLEASSED_TIMEOUT_SECONDS: int = 300
+    PENDING_UNLEASED_TIMEOUT_SECONDS: int = 300
 
     # DB bootstrap
     DB_INIT_MAX_RETRIES: int = 120

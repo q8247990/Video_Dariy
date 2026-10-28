@@ -1,19 +1,36 @@
-"""Exceptions raised by the analysis stages.
-
-These are *signal* errors the slim Celery task translates into state
-machine transitions or Celery ``self.retry`` calls. They never leak
-out of ``src/tasks/analyzer.py`` as unhandled exceptions — the task
-catches each one, writes the appropriate TaskLog / Session status, and
-either re-raises a Celery-friendly error or returns a structured dict.
-"""
+"""Analysis-pipeline contracts: tunables, exception hierarchy and port bundle."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable
 
+# --- constants.py ---
+RAW_MP4_NUM_FRAMES: int = 120
+
+
+# --- constants.py ---
+WEBHOOK_EVENT_SESSION_ANALYZED: str = "session_analyzed"
+
+
+# --- constants.py ---
+DEADLOCK_MAX_RETRIES: int = 3
+
+
+# --- constants.py ---
+NOT_FOUND_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.5, 1.0, 2.0)
+
+
+# --- constants.py ---
+POSTGRES_RETRYABLE_SQLSTATES: frozenset[str] = frozenset({"40P01", "40001"})
+
+
+# --- errors.py ---
 class AnalysisStageError(Exception):
     """Base class for the analysis-stage module tree."""
 
 
+# --- errors.py ---
 class LateWorkerFencingError(AnalysisStageError):
     """The worker's claim has been invalidated by a recovery take-over.
 
@@ -25,6 +42,7 @@ class LateWorkerFencingError(AnalysisStageError):
     """
 
 
+# --- errors.py ---
 class DeadlockRetrySignal(AnalysisStageError):
     """Internal: the analyzer hit a retryable PG serialization fault.
 
@@ -38,6 +56,7 @@ class DeadlockRetrySignal(AnalysisStageError):
         self.original = original
 
 
+# --- errors.py ---
 class RecoverySignalError(AnalysisStageError):
     """Internal: the analyzer exhausted its retry budget.
 
@@ -52,6 +71,7 @@ class RecoverySignalError(AnalysisStageError):
         self.original = original
 
 
+# --- errors.py ---
 class RawResponseCapture(AnalysisStageError):
     """Internal: a parser / post-LLM stage failed but we captured the
     raw gateway response for the failure log.
@@ -69,10 +89,69 @@ class RawResponseCapture(AnalysisStageError):
         self.raw_response_text = raw_response_text
 
 
+# --- ports.py ---
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.models.event_record import EventRecord
+    from src.services.analysis.plan import AnalysisPlan
+
+
+# --- ports.py ---
+PlanAnalysisFn = Callable[["Session", int], "AnalysisPlan"]
+
+
+# --- ports.py ---
+VideoDataUrlFn = Callable[[str], str]
+
+
+# --- ports.py ---
+ReplaceSessionEventsFn = Callable[["Session", int, "list[EventRecord]"], int]
+
+
+# --- ports.py ---
+@dataclass(frozen=True)
+class AnalysisPorts:
+    """Frozen bundle of the helpers the analyzer orchestration depends on.
+
+    The dataclass is frozen so a fake instance is also immutable (the
+    production wiring must not drift under the feet of a running worker).
+    """
+
+    plan_analysis: PlanAnalysisFn
+    video_data_url: VideoDataUrlFn
+    replace_session_events: ReplaceSessionEventsFn
+
+
+# --- ports.py ---
+def build_analysis_ports() -> AnalysisPorts:
+    """Return the production :class:`AnalysisPorts` bundle.
+
+    Imports are lazy so the analyzer task's module load-time graph does
+    not change.
+    """
+    from src.services.analysis.finalize import _replace_session_events
+    from src.services.analysis.plan import build_analysis_plan
+    from src.services.session_analysis_video import build_video_data_url
+
+    return AnalysisPorts(
+        plan_analysis=build_analysis_plan,
+        video_data_url=build_video_data_url,
+        replace_session_events=_replace_session_events,
+    )
+
+
 __all__ = [
+    "AnalysisPorts",
     "AnalysisStageError",
+    "DEADLOCK_MAX_RETRIES",
     "DeadlockRetrySignal",
     "LateWorkerFencingError",
+    "NOT_FOUND_RETRY_DELAYS_SECONDS",
+    "POSTGRES_RETRYABLE_SQLSTATES",
+    "RAW_MP4_NUM_FRAMES",
     "RawResponseCapture",
     "RecoverySignalError",
+    "WEBHOOK_EVENT_SESSION_ANALYZED",
+    "build_analysis_ports",
 ]

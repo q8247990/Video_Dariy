@@ -1,16 +1,16 @@
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from sqlalchemy.orm import Session
 
 from src.core.celery_app import celery_app
+from src.core.pipeline_constants import TaskStatus, TaskType
 from src.db.session import task_db_session
 from src.models.webhook_config import WebhookConfig
 from src.models.webhook_delivery_log import WebhookDeliveryLog
 from src.services.dispatch import bind_or_create_running_task_log, finalize_task_log
-from src.services.pipeline_constants import TaskStatus, TaskType
 from src.services.webhook_payload import is_webhook_event_payload, to_json_safe
 from src.services.webhook_subscription import webhook_subscribes
 from src.services.webhook_url_policy import WebhookUrlPolicyError, validate_webhook_url
@@ -82,7 +82,7 @@ def _deliver_to_hook(
     payload_version: str,
     payload: dict[str, Any],
     attempt: int,
-) -> tuple[int, int, list[int], Optional[str]]:
+) -> tuple[int, int, list[int], str | None]:
     """Deliver to the targeted ``hook_id`` only.
 
     Returns ``(successes, failures, delivery_ids, skip_reason)``.
@@ -114,7 +114,7 @@ def send_webhook_task(
     self: Any,
     event_type: str,
     payload: dict[str, Any],
-    webhook_id: Optional[int] = None,
+    webhook_id: int | None = None,
 ) -> dict[str, Any]:
     """Deliver one webhook event.
 
@@ -152,7 +152,7 @@ def send_webhook_task(
             successes, failures, delivery_ids = _record_delivery_batch(
                 db, event_type, safe_payload, self.request.retries + 1
             )
-            skip_reason: Optional[str] = None
+            skip_reason: str | None = None
         else:
             payload_version = str(safe_payload.get("version") or "")
             successes, failures, delivery_ids, skip_reason = _deliver_to_hook(
@@ -174,6 +174,7 @@ def send_webhook_task(
 
         if skip_reason is not None:
             finalize_task_log(
+                db,
                 task_log,
                 TaskStatus.SUCCESS,
                 f"Webhook delivery skipped: {skip_reason} (webhook_id={webhook_id})",
@@ -184,7 +185,10 @@ def send_webhook_task(
 
         final_status = TaskStatus.SUCCESS if failures == 0 else TaskStatus.FAILED
         finalize_task_log(
-            task_log, final_status, f"Webhook deliveries: {successes} succeeded, {failures} failed"
+            db,
+            task_log,
+            final_status,
+            f"Webhook deliveries: {successes} succeeded, {failures} failed",
         )
         task_log.retry_count = self.request.retries
         db.commit()

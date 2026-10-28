@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, ForeignKey, Index, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -11,12 +11,12 @@ class ChatQueryLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_question: Mapped[str] = mapped_column(Text, nullable=False)
-    parsed_condition_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    parsed_condition_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     answer_text: Mapped[str] = mapped_column(Text, nullable=False)
-    referenced_event_ids_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
-    provider_id: Mapped[Optional[int]] = mapped_column(
+    referenced_event_ids_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    provider_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("llm_provider.id", ondelete="SET NULL"), nullable=True
     )
-    provider_name_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    provider_name_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("idx_chat_query_log_created_at", "created_at"),)

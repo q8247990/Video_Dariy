@@ -3,8 +3,8 @@ from unittest.mock import patch
 import pytest
 
 from src.application.bootstrap_fakes import FakeLLMGateway, FakeLLMGatewayFactory
+from src.core.provider_key_crypto import encrypt_provider_api_key
 from src.services.llm_provider_tester import ProviderTestResult, check_provider_connectivity
-from src.services.provider_key_crypto import encrypt_provider_api_key
 
 
 def _make_provider():

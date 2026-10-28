@@ -7,8 +7,8 @@ from sqlalchemy import or_
 from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, paginate
 from src.api.deps import DB, CurrentUser, Locale
 from src.core.i18n import t
+from src.core.pipeline_constants import ValidationStatus
 from src.models.event_record import EventRecord
-from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.schemas.response import BaseResponse, PaginatedResponse
 from src.schemas.video_source import (
@@ -19,7 +19,7 @@ from src.schemas.video_source import (
     VideoSourceStatusResponse,
     VideoSourceUpdate,
 )
-from src.services.pipeline_constants import ValidationStatus
+from src.services.source_deletion import delete_source_with_sessions
 from src.services.video_source_policy import is_source_type_supported
 from src.services.video_source_status import (
     build_video_source_status,
@@ -138,17 +138,13 @@ def update_video_source(
 
     updates = data.model_dump(exclude_unset=True)
     old_source_type = source.source_type
-    old_config_json = (
-        source.config_json if isinstance(source.config_json, dict) else source.config_json
-    )
+    old_config_json = source.config_json
 
     for key, value in updates.items():
         setattr(source, key, value)
 
     new_source_type = source.source_type
-    new_config_json = (
-        source.config_json if isinstance(source.config_json, dict) else source.config_json
-    )
+    new_config_json = source.config_json
     if old_source_type != new_source_type or old_config_json != new_config_json:
         source.last_validate_status = None
         source.last_validate_message = None
@@ -175,11 +171,10 @@ def delete_video_source(db: DB, current_user: CurrentUser, locale: Locale, id: i
     if has_retained_history is not None:
         return BaseResponse(
             code=4004,
-            message="Cannot delete video source while retained event history exists",
+            message=t("source.has_retained_history", locale),
         )
 
-    db.query(VideoSession).filter(VideoSession.source_id == id).delete(synchronize_session=False)
-    db.delete(source)
+    delete_source_with_sessions(db, source)
     db.commit()
     return BaseResponse(data={})
 

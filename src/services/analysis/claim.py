@@ -1,52 +1,41 @@
-"""Claim stage: acquire the exclusive right to run the analysis.
-
-A claim binds three things together:
-
-* the ``analysis_run_id`` derived from the chunk file identities
-  (computed lazily by the chunk_plan stage);
-* a ``generation`` integer equal to ``task_log.recovery_attempt`` at
-  claim time, mirrored into ``TaskLog.detail_json["generation"]`` so
-  a late worker can be detected without a schema migration;
-* a ``lease_owner`` string taken from the live ``TaskLog.lease_owner``
-  (Celery queue_task_id).
-
-The :class:`ClaimContext` carries these guards back to the rest of
-the pipeline. Every checkpoint / event write path checks them via
-:func:`checkpoint_writer.enforce_fencing`; a stale claim raises
-:class:`LateWorkerFencingError` and the slim task treats that as a
-silent no-op (the new worker already owns the lease).
-"""
+"""Analysis claim stage: bind the task, take the lease, mark failures."""
 
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
-from src.models.task_log import TaskLog
-from src.models.video_session import VideoSession
-from src.models.video_source import VideoSource
-from src.services.analysis.checkpoint_writer import ClaimGuards
-from src.services.analysis.constants import NOT_FOUND_RETRY_DELAYS_SECONDS
-from src.services.dispatch import (
-    bind_or_create_running_task_log,
-    finalize_task_log,
-)
-from src.services.pipeline_constants import (
+from src.core.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
+from src.services.analysis.contracts import (
+    NOT_FOUND_RETRY_DELAYS_SECONDS,
+    POSTGRES_RETRYABLE_SQLSTATES,
+)
+from src.services.analysis.execute import ClaimGuards, record_recovery_failure
+from src.services.dispatch import (
+    bind_or_create_running_task_log,
+    finalize_task_log,
+)
 from src.services.pipeline_state import transition_session, transition_task_log
 
+# --- claim.py ---
 logger = logging.getLogger(__name__)
 
 
+# --- claim.py ---
 @dataclass(frozen=True)
 class ClaimContext:
     """Returned by :func:`claim_session_for_analysis` on a successful claim.
@@ -55,7 +44,7 @@ class ClaimContext:
     (checkpoint / event_record / session update).
 
     ``lease_owner`` mirrors :attr:`TaskLog.lease_owner` and is typed as
-    ``Optional[str]`` for the same reason: a manually-bound pending row
+    ``str | None`` for the same reason: a manually-bound pending row
     (e.g. from the heartbeat without a Celery queue_task_id) can have
     ``lease_owner=None``. In production the analyzer task always
     carries a queue_task_id, so this is normally a non-empty string.
@@ -66,7 +55,7 @@ class ClaimContext:
     task_log: TaskLog
     analysis_run_id: str
     generation: int
-    lease_owner: Optional[str]
+    lease_owner: str | None
 
     def to_guards(self) -> ClaimGuards:
         return ClaimGuards(
@@ -77,15 +66,17 @@ class ClaimContext:
         )
 
 
+# --- claim.py ---
 @dataclass(frozen=True)
 class SkipOutcome:
     """Returned when the claim is refused and the task should be SKIPPED."""
 
     reason: str  # "already_analyzing" / "session_open" / "not_found" / "stale_message"
     detail_message: str
-    current_status: Optional[str] = None
+    current_status: str | None = None
 
 
+# --- claim.py ---
 def purge_stale_checkpoints(db: Session, *, session_id: int, keep_run_id: str) -> int:
     """Delete checkpoints from previous analysis runs of one session.
 
@@ -107,12 +98,13 @@ def purge_stale_checkpoints(db: Session, *, session_id: int, keep_run_id: str) -
     )
 
 
+# --- claim.py ---
 def _claim_session_for_analysis(
     db: Session, session_id: int, analysis_run_id: str
 ) -> tuple[VideoSession | None, str | None]:
     """Acquire ``ANALYZING`` ownership of a sealed / partial session.
 
-    Mirrors the pre-Wave-5 contract: keep trying the SEALED →
+    Mirrors the contract: keep trying the SEALED →
     ANALYZING and PARTIAL → ANALYZING transitions until one
     succeeds; a session already in ANALYZING is reported as
     ``already_analyzing`` so the worker skips cleanly.
@@ -157,6 +149,7 @@ def _claim_session_for_analysis(
     return None, "not_found"
 
 
+# --- claim.py ---
 def _resolve_skip_message(reason: str, session_id: int) -> str:
     if reason == "not_found":
         return f"Skipped session {session_id}, not found"
@@ -169,14 +162,15 @@ def _resolve_skip_message(reason: str, session_id: int) -> str:
     return f"Skipped session {session_id}, current status is {reason}"
 
 
+# --- claim.py ---
 def claim_session_for_analysis(
     db: Session,
     *,
     session_id: int,
     priority: str,
-    queue_task_id: Optional[str],
+    queue_task_id: str | None,
     analysis_run_id: str,
-) -> tuple[Optional[ClaimContext], Optional[SkipOutcome]]:
+) -> tuple[ClaimContext | None, SkipOutcome | None]:
     """Bind a TaskLog, take the lease, transition the session to ANALYZING.
 
     Returns either a :class:`ClaimContext` (success) or a
@@ -221,6 +215,7 @@ def claim_session_for_analysis(
     )
 
 
+# --- claim.py ---
 def _build_claim_context(
     db: Session,
     *,
@@ -256,6 +251,7 @@ def _build_claim_context(
     ), None
 
 
+# --- claim.py ---
 def finalize_skip(
     db: Session,
     *,
@@ -282,16 +278,18 @@ def finalize_skip(
         reason="analysis_skipped",
         source="skip_analysis_task",
     )
-    finalize_task_log(task_log, TaskStatus.SKIPPED, outcome.detail_message, detail)
+    finalize_task_log(db, task_log, TaskStatus.SKIPPED, outcome.detail_message, detail)
     db.commit()
     return {"events_created": 0, "skipped": True, "reason": outcome.reason}
 
 
+# --- claim.py ---
 def finalize_stale_message() -> dict[str, Any]:
     """Return the dict emitted when the queue message itself is stale."""
     return {"skipped": True, "reason": "stale_message"}
 
 
+# --- claim.py ---
 def mark_session_sealed_for_retry(db: Session, session_id: int) -> None:
     """Roll a session back from ANALYZING to SEALED on a deadlock retry."""
     session = db.query(VideoSession).filter(VideoSession.id == session_id).first()
@@ -308,12 +306,56 @@ def mark_session_sealed_for_retry(db: Session, session_id: int) -> None:
         )
 
 
+# --- claim.py ---
+def handle_deadlock_retry_exhausted(
+    db: Session,
+    *,
+    exc: BaseException,
+    claim: ClaimContext,
+    session_id: int,
+) -> None:
+    """Mark the run as FAILED once the deadlock retry budget is exhausted."""
+    record_recovery_failure(
+        db,
+        claim=claim.to_guards(),
+        task_log=claim.task_log,
+        error=exc,
+        failed_chunk_index=None,
+        failed_sub_chunk_index=None,
+        last_prompt_text=None,
+        last_response_text=None,
+        last_raw_response_text=None,
+        priority="hot",
+        session_id=session_id,
+    )
+    db.commit()
+
+
+# --- claim.py ---
+def is_deadlock_operational_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is a PG deadlock / serialization fault."""
+    if not isinstance(exc, OperationalError):
+        return False
+    original = getattr(exc, "orig", None)
+    if original is None:
+        return False
+
+    pgcode = str(getattr(original, "pgcode", "") or "")
+    if pgcode in POSTGRES_RETRYABLE_SQLSTATES:
+        return True
+
+    message = str(original).lower()
+    return "deadlock detected" in message or "could not serialize access" in message
+
+
 __all__ = [
     "ClaimContext",
     "SkipOutcome",
     "claim_session_for_analysis",
     "finalize_skip",
     "finalize_stale_message",
+    "handle_deadlock_retry_exhausted",
+    "is_deadlock_operational_error",
     "mark_session_sealed_for_retry",
     "purge_stale_checkpoints",
 ]

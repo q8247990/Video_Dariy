@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -31,7 +31,7 @@ class DailySummaryPromptResult(BaseModel):
 
 class SubjectEventSummary(BaseModel):
     event_id: int
-    event_type: Optional[str] = None
+    event_type: str | None = None
     title: str
     summary: str
     recognition_status: str
@@ -46,6 +46,6 @@ class SubjectEventSection(BaseModel):
 
 class AttentionCandidate(BaseModel):
     event_id: int
-    event_type: Optional[str] = None
+    event_type: str | None = None
     title: str
     summary: str

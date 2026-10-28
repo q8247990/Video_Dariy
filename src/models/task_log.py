@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -37,28 +37,28 @@ class TaskLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     task_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    task_target_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    dedupe_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    task_target_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    queue_task_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    queue_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     recovery_attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    lease_owner: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     # ``Text`` (not ``String(512)``): terminal failures store ``str(exc)``
     # which includes the full SQL + bound parameters and can easily exceed
     # 512 chars; truncating it would lose the diagnostic detail, and a
     # fixed varchar(N) would just overflow again on a larger payload.
-    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    detail_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         CheckConstraint(

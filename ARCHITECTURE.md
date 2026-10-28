@@ -192,7 +192,7 @@
 - `session.py`：Engine / SessionLocal / get_db
 - `init_db.py`：Alembic 升级、默认管理员初始化、数据库可用性重试、迁移咨询锁
 - `readiness.py`：`/livez` / `/readyz` 的健康检查实现
-- `metrics.py`：`/metrics` 的可观测性指标（outbox 延迟/失败、任务恢复、checkpoint 进度）
+- `metrics.py`：`/metrics` 的可观测性指标（投递台账延迟/失败、任务恢复、checkpoint 进度）
 - `base.py`：模型注册
 
 迁移约定：
@@ -341,7 +341,7 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 6. 如果 prompt 规模过大，走 `split_serial`：先按对象生成摘要，再生成总述
 7. 将结果裁剪到更适合展示的长度区间
 8. 以 `summary_date` 为唯一键发布日报，并以 `DailySummaryGenerationAttempt` 保留每次尝试
-9. 对每个匹配订阅者写入一个定向 webhook outbox 事件，事件类型为 `daily_summary_generated`
+9. 对每个匹配订阅者写入一个定向 webhook 投递意图（`task_delivery`），事件类型为 `daily_summary_generated`
 
 保护机制：
 
@@ -432,7 +432,7 @@ DailySummary 1 --- 1 summary_date
   - 按天汇总的结构化结果
 - `TaskLog`
   - 记录任务状态、目标、消息、重试、队列任务 ID（业务运行生命周期）
-- `OutboxEvent`（事务性 outbox，与 `TaskLog` 1:1）
+- `TaskDelivery`（派发意图台账，与 `TaskLog` 1:1；由心跳对账重发）
   - 记录发布意图：Celery 任务名、队列、payload、状态（pending/publishing/published/failed）、重试与租约
   - 独立 publisher 进程以其 `event_id` 作为 broker `task_id`（ADR 0011）
 - `DailySummaryGenerationAttempt`
@@ -462,7 +462,6 @@ DailySummary 1 --- 1 summary_date
     - `worker`：消费 `celery` 队列（扫描、日报、Webhook、维护），concurrency=2
     - `vision-worker`：以 `concurrency=1` 消费 `analysis_hot` / `analysis_full` 队列
     - `beat`：定时派发心跳与日报任务（单实例）
-    - `outbox-publisher`：事务性 outbox 发布器
 - `frontend`
   - Nginx 托管前端静态资源并代理后端接口
 
@@ -473,7 +472,7 @@ DailySummary 1 --- 1 summary_date
 - 前端镜像为两阶段构建：Node 构建，Nginx 运行
 - `backend` 依赖 `postgres` 和 `redis` 健康检查；`frontend` 依赖 `backend` 健康检查
 - `backend` 容器内任一进程崩溃由 supervisord 自动拉起；进程级健康可用
-  `/metrics`（outbox 延迟、任务恢复计数）与 `docker top hm_backend` 观察
+  `/metrics`（投递台账延迟、任务恢复计数）与 `docker top hm_backend` 观察
 - 重启 / 重建 `backend` 会中断进行中的任务：`acks_late` 使消息回队重投，
   分析断点续跑保证不丢数据、不重复计费
 
@@ -619,11 +618,11 @@ Session 分析状态（`analysis_status`）主要包括：
 - **结构化 JSON 日志与脱敏**：`src/core/logging_config.py` 提供
   `configure_logging()`（单行 JSON 根 handler）、`RedactingJsonFormatter` 与
   `redact()`（擦除密钥、连接串、敏感 JSON 值、`VIDEO_ROOT_PATH` 路径）。
-- **关联 ID**：outbox `event_id` 经 FastAPI `CorrelationMiddleware`、
-  调度日志、outbox 发布日志、Celery `task_prerun` 信号串联，单 id 可检索
-  API → outbox → worker 全链路。
+- **关联 ID**：预置 `task_id` 经 FastAPI `CorrelationMiddleware`、
+  调度日志、投递日志、Celery `task_prerun` 信号串联，单 id 可检索
+  API → broker → worker 全链路。
 - **健康探针与指标**：`/livez`、`/readyz`（DB + Redis + alembic head）、
-  `GET /metrics`（outbox 延迟/失败、任务恢复计数、checkpoint 进度）。
+  `GET /metrics`（投递台账延迟/失败、任务恢复计数、checkpoint 进度）。
 - **备份/恢复**：`scripts/backup_restore_db.py` 提供 checksum 化的
   backup / verify / restore，用于不可逆迁移前的已验证备份。
 - **迁移串行化**：`init_db` 通过 PostgreSQL 咨询锁（`pg_advisory_lock`）

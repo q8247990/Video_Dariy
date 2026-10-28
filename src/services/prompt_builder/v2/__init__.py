@@ -1,4 +1,4 @@
-"""v2 prompt builders — Jinja2 模板版本。"""
+"""v2 prompt builders backed by Jinja2 templates."""
 
 from src.services.prompt_builder.v2.daily_summary import (
     build_daily_data_input_prompt,

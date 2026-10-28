@@ -29,15 +29,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from src.application.bootstrap import Container
 from src.application.tasks.use_case_retry import retry_task
 from src.core.i18n import t
+from src.core.pipeline_constants import TaskStatus
 from src.models.task_log import TaskLog
-from src.services.pipeline_constants import TaskStatus
+from src.services.pipeline_state import apply_task_status
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class StopTaskLogResult:
 
     error_code: int
     error_message: str
-    payload: Optional[dict[str, object]] = None
+    payload: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +71,7 @@ class RetryTaskLogResult:
 
     error_code: int
     error_message: str
-    task_id: Optional[str] = None
+    task_id: str | None = None
 
 
 def stop_task_log_use_case(
@@ -107,7 +107,7 @@ def stop_task_log_use_case(
     if row.queue_task_id:
         try:
             container.task_control.revoke(row.queue_task_id, terminate=True)
-        except Exception as exc:  # noqa: BLE001 — surface broker errors as 5001
+        except Exception as exc:
             logger.exception("Failed to revoke task_id=%s", row.queue_task_id)
             return StopTaskLogResult(
                 error_code=5001,
@@ -116,7 +116,13 @@ def stop_task_log_use_case(
 
     row.cancel_requested = True
     if row.status == TaskStatus.PENDING:
-        row.status = TaskStatus.CANCELLED
+        apply_task_status(
+            db,
+            row,
+            TaskStatus.CANCELLED,
+            reason="cancelled_before_exec",
+            source="stop_task_log_use_case",
+        )
         row.message = t("task.cancelled_before_exec", locale)
         row.finished_at = datetime.now(timezone.utc)
     else:

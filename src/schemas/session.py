@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -9,15 +9,15 @@ class VideoSessionResponse(BaseModel):
     source_id: int
     session_start_time: datetime
     session_end_time: datetime
-    total_duration_seconds: Optional[int] = None
-    merge_rule: Optional[str] = None
+    total_duration_seconds: int | None = None
+    merge_rule: str | None = None
     analysis_status: str
-    summary_text: Optional[str] = None
-    activity_level: Optional[str] = None
-    main_subjects_json: Optional[Any] = None
-    has_attention_event: Optional[bool] = None
-    analysis_notes_json: Optional[Any] = None
-    last_analyzed_at: Optional[datetime] = None
+    summary_text: str | None = None
+    activity_level: str | None = None
+    main_subjects_json: Any | None = None
+    has_attention_event: bool | None = None
+    analysis_notes_json: Any | None = None
+    last_analyzed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

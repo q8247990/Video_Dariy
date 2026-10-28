@@ -1,5 +1,3 @@
-from typing import Optional
-
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from src.services.video_analysis.enums import (
@@ -26,9 +24,9 @@ class SessionSummaryDTO(BaseModel):
 class RelatedEntityDTO(BaseModel):
     entity_type: str
     display_name: str
-    matched_profile_name: Optional[str] = None
+    matched_profile_name: str | None = None
     recognition_status: str
-    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("recognition_status")
     @classmethod

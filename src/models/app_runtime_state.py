@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -11,4 +11,4 @@ class AppRuntimeState(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     state_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
-    state_value: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    state_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)

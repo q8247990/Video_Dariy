@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from src.api.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
-from src.api.deps import DB, CurrentUser, Locale
+from src.api.deps import DB, ContainerDep, CurrentUser, Locale
 from src.application.qa.errors import QAProviderInvokeError, QAProviderNotConfiguredError
 from src.application.qa.schemas import QARequest
 from src.application.qa.service import QAService
@@ -12,19 +12,26 @@ from src.core.i18n import t
 from src.models.chat_query_log import ChatQueryLog
 from src.schemas.chat import ChatAskRequest, ChatAskResponse, ChatQueryLogResponse
 from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
+from src.services.home_timezone import get_home_timezone
 
 router = APIRouter()
 
 
 @router.post("/ask", response_model=BaseResponse[ChatAskResponse])
-def ask_question(db: DB, current_user: CurrentUser, locale: Locale, request: ChatAskRequest) -> Any:
+def ask_question(
+    db: DB,
+    current_user: CurrentUser,
+    locale: Locale,
+    container: ContainerDep,
+    request: ChatAskRequest,
+) -> Any:
     try:
-        service = QAService(db)
+        service = QAService(db, llm_factory=container.llm_factory)
         result = service.answer(
             QARequest(
                 question=request.question,
                 now=datetime.now(timezone.utc),
-                timezone="Asia/Shanghai",
+                timezone=get_home_timezone(db).key,
                 write_query_log=True,
                 request_source="web",
                 locale=locale,

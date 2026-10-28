@@ -4,14 +4,14 @@ from unittest.mock import MagicMock
 from sqlalchemy.orm import Session
 
 from src.application.tasks.use_case_retry import RetryResult, retry_task
-from src.models.task_log import TaskLog
-from src.models.video_session import VideoSession
-from src.models.video_source import VideoSource
-from src.services.pipeline_constants import (
+from src.core.pipeline_constants import (
     SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
+from src.models.video_source import VideoSource
 
 
 def _mock_dispatcher() -> MagicMock:
