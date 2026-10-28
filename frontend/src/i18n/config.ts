@@ -22,7 +22,7 @@ i18n
     fallbackLng: 'zh-CN',
     supportedLngs: ['zh-CN', 'en-US'],
     interpolation: {
-      escapeValue: false, 
+      escapeValue: false,
     },
     detection: {
       order: ['localStorage', 'navigator'],

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
+import { Pager } from '../../components/common/Pager'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import {
@@ -10,6 +11,7 @@ import {
   triggerAllDailySummaries,
   triggerDailySummary,
 } from './api'
+import { confirmDialog } from '../../lib/confirm'
 
 function levelLabel(level: string, t: (key: string) => string): string {
   if (level === 'high') {
@@ -83,20 +85,27 @@ export function DailySummariesPage() {
               value={manualDate}
               onChange={(event) => setManualDate(event.target.value)}
             />
-            <button onClick={() => triggerMutation.mutate(manualDate)} disabled={triggerMutation.isPending}>
-              {triggerMutation.isPending ? t('daily_summaries.triggering') : t('daily_summaries.generate')}
+            <button
+              onClick={() => triggerMutation.mutate(manualDate)}
+              disabled={triggerMutation.isPending}
+            >
+              {triggerMutation.isPending
+                ? t('daily_summaries.triggering')
+                : t('daily_summaries.generate')}
             </button>
             <button
               className="ghost"
               onClick={() => {
-                if (!window.confirm(t('daily_summaries.batch_confirm'))) {
+                if (!confirmDialog(t('daily_summaries.batch_confirm'))) {
                   return
                 }
                 triggerAllMutation.mutate()
               }}
               disabled={triggerAllMutation.isPending}
             >
-              {triggerAllMutation.isPending ? t('daily_summaries.generating') : t('daily_summaries.generate_all')}
+              {triggerAllMutation.isPending
+                ? t('daily_summaries.generating')
+                : t('daily_summaries.generate_all')}
             </button>
           </div>
         }
@@ -122,11 +131,14 @@ export function DailySummariesPage() {
                   {(listQuery.data?.list ?? []).map((item) => (
                     <tr
                       key={item.id}
-                       className={resolvedSelectedDate === item.summary_date ? 'row-selected' : ''}
+                      className={resolvedSelectedDate === item.summary_date ? 'row-selected' : ''}
                       onClick={() => setSelectedDate(item.summary_date)}
                     >
                       <td>{item.summary_date}</td>
-                      <td>{item.summary_title || t('daily_summaries.default_title', { date: item.summary_date })}</td>
+                      <td>
+                        {item.summary_title ||
+                          t('daily_summaries.default_title', { date: item.summary_date })}
+                      </td>
                     </tr>
                   ))}
                   {(listQuery.data?.list.length ?? 0) === 0 ? (
@@ -139,35 +151,36 @@ export function DailySummariesPage() {
                 </tbody>
               </table>
 
-              <div className="pager">
-                <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-                  {t('daily_summaries.pager_prev')}
-                </button>
-                <span>
-                  {t('daily_summaries.pager_info', { page, totalPages, total })}
-                </span>
-                <button
-                  className="ghost"
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                >
-                  {t('daily_summaries.pager_next')}
-                </button>
-              </div>
+              <Pager
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                onPrev={() => setPage((p) => Math.max(1, p - 1))}
+                onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+              />
             </>
           ) : null}
         </div>
 
         <div className="card">
           <h3>{t('daily_summaries.detail_title')}</h3>
-          {!resolvedSelectedDate ? <p className="text-muted">{t('daily_summaries.select_prompt')}</p> : null}
-          {detailQuery.isLoading ? <LoadingBlock text={t('daily_summaries.loading_detail')} /> : null}
-          {detailQuery.error ? <ApiErrorAlert message={(detailQuery.error as Error).message} /> : null}
+          {!resolvedSelectedDate ? (
+            <p className="text-muted">{t('daily_summaries.select_prompt')}</p>
+          ) : null}
+          {detailQuery.isLoading ? (
+            <LoadingBlock text={t('daily_summaries.loading_detail')} />
+          ) : null}
+          {detailQuery.error ? (
+            <ApiErrorAlert message={(detailQuery.error as Error).message} />
+          ) : null}
           {detail ? (
             <div className="summary-four-grid">
               <section className="summary-field-block">
                 <p className="summary-field-label">{t('daily_summaries.field_title')}</p>
-                <article>{detail.summary_title || t('daily_summaries.default_title', { date: detail.summary_date })}</article>
+                <article>
+                  {detail.summary_title ||
+                    t('daily_summaries.default_title', { date: detail.summary_date })}
+                </article>
               </section>
 
               <section className="summary-field-block">
@@ -177,7 +190,9 @@ export function DailySummariesPage() {
 
               <section className="summary-field-block">
                 <p className="summary-field-label">{t('daily_summaries.field_overall')}</p>
-                <article>{detail.overall_summary?.trim() || t('daily_summaries.empty_overall')}</article>
+                <article>
+                  {detail.overall_summary?.trim() || t('daily_summaries.empty_overall')}
+                </article>
               </section>
 
               <section className="summary-field-block">
@@ -185,7 +200,10 @@ export function DailySummariesPage() {
                 {subjectSections.length > 0 ? (
                   <div className="summary-subject-list">
                     {subjectSections.map((item, index) => (
-                      <article key={`${item.subject_name}-${index}`} className="summary-subject-card">
+                      <article
+                        key={`${item.subject_name}-${index}`}
+                        className="summary-subject-card"
+                      >
                         <header>
                           <strong>{item.subject_name}</strong>
                           <span className="text-muted">

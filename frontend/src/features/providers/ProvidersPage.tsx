@@ -17,6 +17,7 @@ import {
   updateProvider,
 } from './api'
 import { ProviderForm } from './ProviderForm'
+import { confirmDialog } from '../../lib/confirm'
 
 export function ProvidersPage() {
   const { t } = useTranslation()
@@ -49,7 +50,8 @@ export function ProvidersPage() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: ProviderUpdate }) => updateProvider(id, payload),
+    mutationFn: ({ id, payload }: { id: number; payload: ProviderUpdate }) =>
+      updateProvider(id, payload),
     onSuccess: () => {
       setEditing(null)
       setMessage(t('providers.update_success'))
@@ -131,9 +133,7 @@ export function ProvidersPage() {
       <PageHeader
         title={t('providers.title')}
         subtitle={t('providers.subtitle')}
-        actions={
-          <button onClick={() => setShowCreate(true)}>{t('providers.add_provider')}</button>
-        }
+        actions={<button onClick={() => setShowCreate(true)}>{t('providers.add_provider')}</button>}
       />
 
       <div className="card tool-row tool-row-inline">
@@ -206,7 +206,9 @@ export function ProvidersPage() {
                 </td>
                 <td>
                   {item.id === activeVisionProviderId ? t('providers.vision_label') : ''}
-                  {item.id === activeVisionProviderId && item.id === activeQaProviderId ? ' + ' : ''}
+                  {item.id === activeVisionProviderId && item.id === activeQaProviderId
+                    ? ' + '
+                    : ''}
                   {item.id === activeQaProviderId ? t('providers.qa_label') : ''}
                   {item.id !== activeVisionProviderId && item.id !== activeQaProviderId ? '-' : ''}
                 </td>
@@ -222,14 +224,18 @@ export function ProvidersPage() {
                       {t('providers.action_edit')}
                     </button>
                     <button
-                      className={item.id === activeVisionProviderId ? 'ghost role-action-active' : 'ghost'}
+                      className={
+                        item.id === activeVisionProviderId ? 'ghost role-action-active' : 'ghost'
+                      }
                       disabled={!item.supports_vision || defaultVisionMutation.isPending}
                       onClick={() => defaultVisionMutation.mutate(item.id)}
                     >
                       {t('providers.set_vision')}
                     </button>
                     <button
-                      className={item.id === activeQaProviderId ? 'ghost role-action-active' : 'ghost'}
+                      className={
+                        item.id === activeQaProviderId ? 'ghost role-action-active' : 'ghost'
+                      }
                       disabled={!item.supports_qa || defaultQaMutation.isPending}
                       onClick={() => defaultQaMutation.mutate(item.id)}
                     >
@@ -242,7 +248,9 @@ export function ProvidersPage() {
                       className="ghost"
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        if (window.confirm(t('providers.delete_confirm', { name: item.provider_name }))) {
+                        if (
+                          confirmDialog(t('providers.delete_confirm', { name: item.provider_name }))
+                        ) {
                           deleteMutation.mutate(item.id)
                         }
                       }}
@@ -258,7 +266,10 @@ export function ProvidersPage() {
       </div>
 
       {(showCreate || editing) && (
-        <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
+        <div
+          className="dialog-mask"
+          onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}
+        >
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
             <h3>{editing ? t('providers.edit_provider') : t('providers.add_provider')}</h3>
             <ProviderForm

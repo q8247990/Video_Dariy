@@ -32,30 +32,46 @@ export function DashboardLayout() {
   const clearAuth = useAuthStore((state) => state.clearAuth)
   const theme = useThemeStore((state) => state.theme)
 
-  const topLinks = useMemo(() => [
-    { to: '/dashboard', label: t('layouts.dashboard'), icon: LayoutDashboard },
-    { to: '/chat', label: t('layouts.chat'), icon: MessagesSquare },
-    { to: '/events', label: t('layouts.events'), icon: FileSearch2 },
-    { to: '/daily-summaries', label: t('layouts.daily_summary'), icon: ScrollText },
-  ], [t])
+  const topLinks = useMemo(
+    () => [
+      { to: '/dashboard', label: t('layouts.dashboard'), icon: LayoutDashboard },
+      { to: '/chat', label: t('layouts.chat'), icon: MessagesSquare },
+      { to: '/events', label: t('layouts.events'), icon: FileSearch2 },
+      { to: '/daily-summaries', label: t('layouts.daily_summary'), icon: ScrollText },
+    ],
+    [t],
+  )
 
-  const homeProfileChildren = useMemo(() => [
-    { to: '/home-profile/overview', label: t('home_profile.title'), icon: House },
-    { to: '/home-profile/members', label: t('home_profile.members'), icon: Users },
-    { to: '/home-profile/pets', label: t('home_profile.pets'), icon: PawPrint },
-  ], [t])
+  const homeProfileChildren = useMemo(
+    () => [
+      { to: '/home-profile/overview', label: t('home_profile.title'), icon: House },
+      { to: '/home-profile/members', label: t('home_profile.members'), icon: Users },
+      { to: '/home-profile/pets', label: t('home_profile.pets'), icon: PawPrint },
+    ],
+    [t],
+  )
 
-  const settingsChildren = useMemo(() => [
-    { to: '/system-config', label: t('settings.entry_daily_summary_title'), icon: SlidersHorizontal },
-    { to: '/video-sources', label: t('video_sources.title'), icon: Camera },
-    { to: '/providers', label: t('providers.title'), icon: Bot },
-    { to: '/system-status', label: t('system_status.title'), icon: Activity },
-    { to: '/tasks', label: t('tasks.title'), icon: ListChecks },
-    { to: '/webhooks', label: t('webhooks.title'), icon: BellRing },
-  ], [t])
+  const settingsChildren = useMemo(
+    () => [
+      {
+        to: '/system-config',
+        label: t('settings.entry_daily_summary_title'),
+        icon: SlidersHorizontal,
+      },
+      { to: '/video-sources', label: t('video_sources.title'), icon: Camera },
+      { to: '/providers', label: t('providers.title'), icon: Bot },
+      { to: '/system-status', label: t('system_status.title'), icon: Activity },
+      { to: '/tasks', label: t('tasks.title'), icon: ListChecks },
+      { to: '/webhooks', label: t('webhooks.title'), icon: BellRing },
+    ],
+    [t],
+  )
 
   const homeProfileActive = useMemo(() => {
-    return location.pathname === '/home-profile' || homeProfileChildren.some((item) => location.pathname.startsWith(item.to))
+    return (
+      location.pathname === '/home-profile' ||
+      homeProfileChildren.some((item) => location.pathname.startsWith(item.to))
+    )
   }, [location.pathname, homeProfileChildren])
   const settingsActive = useMemo(() => {
     if (location.pathname === '/settings') {
@@ -118,7 +134,10 @@ export function DashboardLayout() {
           >
             <House size={16} />
             <span>{t('home_profile.title')}</span>
-            <ChevronDown size={14} className={homeProfileExpanded ? 'nav-chevron open' : 'nav-chevron'} />
+            <ChevronDown
+              size={14}
+              className={homeProfileExpanded ? 'nav-chevron open' : 'nav-chevron'}
+            />
           </button>
 
           {homeProfileExpanded ? (
@@ -148,14 +167,19 @@ export function DashboardLayout() {
           >
             <Settings size={16} />
             <span>{t('layouts.settings')}</span>
-            <ChevronDown size={14} className={settingsExpanded ? 'nav-chevron open' : 'nav-chevron'} />
+            <ChevronDown
+              size={14}
+              className={settingsExpanded ? 'nav-chevron open' : 'nav-chevron'}
+            />
           </button>
 
           {settingsExpanded ? (
             <div className="nav-sub-list">
               <NavLink
                 to="/settings"
-                className={({ isActive }) => (isActive ? 'nav-item nav-sub-item active' : 'nav-item nav-sub-item')}
+                className={({ isActive }) =>
+                  isActive ? 'nav-item nav-sub-item active' : 'nav-item nav-sub-item'
+                }
               >
                 <Settings size={14} />
                 <span>{t('layouts.settings')}</span>
@@ -183,7 +207,9 @@ export function DashboardLayout() {
         <header className="topbar">
           <div>
             <h2>{t('common.family_assistant')}</h2>
-            <p>{t('common.welcome_back', { username: username ?? t('common.default_username') })}</p>
+            <p>
+              {t('common.welcome_back', { username: username ?? t('common.default_username') })}
+            </p>
           </div>
           <button onClick={onLogout}>{t('layouts.logout')}</button>
         </header>

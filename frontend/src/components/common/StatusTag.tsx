@@ -29,9 +29,5 @@ export function StatusTag({ status }: StatusTagProps) {
     unknown: t('common.status_unknown'),
   }
 
-  return (
-    <span className={`status-tag status-${status}`}>
-      {statusLabelMap[status] ?? status}
-    </span>
-  )
+  return <span className={`status-tag status-${status}`}>{statusLabelMap[status] ?? status}</span>
 }

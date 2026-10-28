@@ -63,7 +63,7 @@ apiClient.interceptors.response.use(
       if (payload.code === 4011) {
         recoverFromUnauthorized()
       }
-        return Promise.reject(new ApiError(payload.message || '请求失败', response.status))
+      return Promise.reject(new ApiError(payload.message || '请求失败', response.status))
     }
     return response
   },

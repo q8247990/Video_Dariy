@@ -4,10 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
+import { formatDateTime } from '../../lib/datetime'
 import { fetchDashboardOverview } from './api'
 import type { DashboardSystemStatusItem } from '../../types/api'
 
-function statusText(status: DashboardSystemStatusItem['status'], t: (key: string) => string): string {
+function statusText(
+  status: DashboardSystemStatusItem['status'],
+  t: (key: string) => string,
+): string {
   if (status === 'ok') {
     return t('dashboard.status_ok')
   }
@@ -18,22 +22,6 @@ function statusText(status: DashboardSystemStatusItem['status'], t: (key: string
     return t('dashboard.status_error')
   }
   return t('dashboard.status_uncompleted')
-}
-
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return '-'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hour}:${minute}`
 }
 
 export function DashboardPage() {

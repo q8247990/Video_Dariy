@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
+import { Pager } from '../../components/common/Pager'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { StatusTag } from '../../components/common/StatusTag'
@@ -14,7 +15,6 @@ const TASK_TYPE_VALUES = [
   'session_build',
   'session_analysis',
   'daily_summary_generation',
-  'video_pipeline_alert',
   'webhook_push',
 ] as const
 
@@ -31,35 +31,10 @@ function taskTypeLabel(value: string, t: (key: string) => string): string {
   if (value === 'daily_summary_generation') {
     return t('tasks.task_daily_summary_generation')
   }
-  if (value === 'video_pipeline_alert') {
-    return t('tasks.task_video_pipeline_alert')
-  }
   if (value === 'webhook_push') {
     return t('tasks.task_webhook_push')
   }
   return t('tasks.task_other')
-}
-
-function formatAlertDetail(detailJson: Record<string, unknown> | null, fallback: string | null, t: TFunction): string {
-  if (!detailJson) {
-    return fallback ?? '-'
-  }
-
-  const alertState = String(detailJson.alert_state ?? 'triggered')
-  const alertType = String(detailJson.alert_type ?? '-')
-  const sourceName = String(detailJson.source_name ?? '-')
-  const cameraName = String(detailJson.camera_name ?? '-')
-  const metricValue = detailJson.metric_value
-  const consecutiveCount = detailJson.consecutive_count
-
-  const stateText = alertState === 'recovered' ? t('tasks.alert_recovered') : t('tasks.alert_triggered')
-  const typeText = alertType === 'latency' ? t('tasks.alert_latency') : alertType
-
-  const metricText = metricValue === undefined || metricValue === null ? '-' : String(metricValue)
-  const countText =
-    consecutiveCount === undefined || consecutiveCount === null ? '-' : String(consecutiveCount)
-
-  return `${stateText} | ${typeText} | ${t('tasks.source_label')}:${sourceName}(${cameraName}) | ${t('tasks.metric_label')}:${metricText} | ${t('tasks.consecutive_label')}:${countText}`
 }
 
 function formatSessionAnalysisDetail(
@@ -87,7 +62,8 @@ function formatSessionAnalysisDetail(
     return t('tasks.skip_session_open')
   }
   if (reason.startsWith('status_')) {
-    const currentStatus = typeof detailJson.current_status === 'string' ? detailJson.current_status : reason.slice(7)
+    const currentStatus =
+      typeof detailJson.current_status === 'string' ? detailJson.current_status : reason.slice(7)
     return t('tasks.skip_status', { status: currentStatus })
   }
 
@@ -176,7 +152,8 @@ export function TasksPage() {
     onError: (error) => setMessage((error as Error).message),
   })
 
-  const hasPendingAction = deleteMutation.isPending || stopMutation.isPending || retryMutation.isPending
+  const hasPendingAction =
+    deleteMutation.isPending || stopMutation.isPending || retryMutation.isPending
 
   if (query.isLoading) {
     return <LoadingBlock text={t('tasks.loading')} />
@@ -264,29 +241,45 @@ export function TasksPage() {
                 </td>
                 <td>{row.retry_count}</td>
                 <td className="break-all">
-                  {row.task_type === 'video_pipeline_alert'
-                    ? formatAlertDetail(row.detail_json, row.message, t)
-                    : row.task_type === 'session_analysis'
-                      ? formatSessionAnalysisDetail(row.detail_json, row.message, row.status, t)
-                      : row.message ?? '-'}
+                  {row.task_type === 'session_analysis'
+                    ? formatSessionAnalysisDetail(row.detail_json, row.message, row.status, t)
+                    : (row.message ?? '-')}
                 </td>
                 <td>{row.created_at}</td>
                 <td>
                   {row.status === 'running' || row.status === 'pending' ? (
-                    <button className="ghost" disabled={hasPendingAction} onClick={() => stopMutation.mutate(row.id)}>
+                    <button
+                      className="ghost"
+                      disabled={hasPendingAction}
+                      onClick={() => stopMutation.mutate(row.id)}
+                    >
                       {t('tasks.action_stop')}
                     </button>
-                  ) : row.status === 'failed' || row.status === 'timeout' || row.status === 'cancelled' ? (
+                  ) : row.status === 'failed' ||
+                    row.status === 'timeout' ||
+                    row.status === 'cancelled' ? (
                     <>
-                      <button className="ghost" disabled={hasPendingAction} onClick={() => retryMutation.mutate(row.id)}>
+                      <button
+                        className="ghost"
+                        disabled={hasPendingAction}
+                        onClick={() => retryMutation.mutate(row.id)}
+                      >
                         {t('tasks.action_retry')}
                       </button>
-                      <button className="ghost" disabled={hasPendingAction} onClick={() => deleteMutation.mutate(row.id)}>
+                      <button
+                        className="ghost"
+                        disabled={hasPendingAction}
+                        onClick={() => deleteMutation.mutate(row.id)}
+                      >
                         {t('tasks.action_delete')}
                       </button>
                     </>
                   ) : row.status === 'success' || row.status === 'skipped' ? (
-                    <button className="ghost" disabled={hasPendingAction} onClick={() => deleteMutation.mutate(row.id)}>
+                    <button
+                      className="ghost"
+                      disabled={hasPendingAction}
+                      onClick={() => deleteMutation.mutate(row.id)}
+                    >
                       {t('tasks.action_delete')}
                     </button>
                   ) : (
@@ -305,31 +298,13 @@ export function TasksPage() {
           </tbody>
         </table>
 
-        <div className="pager">
-          <button
-            className="ghost"
-            disabled={page <= 1}
-            onClick={() => {
-              const nextPage = Math.max(1, page - 1)
-              syncSearchParams({ page: nextPage })
-            }}
-          >
-            {t('tasks.pager_prev')}
-          </button>
-          <span>
-            {t('tasks.pager_info', { page, totalPages, total })}
-          </span>
-          <button
-            className="ghost"
-            disabled={page >= totalPages}
-            onClick={() => {
-              const nextPage = Math.min(totalPages, page + 1)
-              syncSearchParams({ page: nextPage })
-            }}
-          >
-            {t('tasks.pager_next')}
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          onPrev={() => syncSearchParams({ page: Math.max(1, page - 1) })}
+          onNext={() => syncSearchParams({ page: Math.min(totalPages, page + 1) })}
+        />
       </div>
     </div>
   )

@@ -8,7 +8,10 @@ export async function askQuestion(question: string): Promise<ChatAskResponse> {
   return unwrapApi<ChatAskResponse>(response)
 }
 
-export async function getChatHistory(page = 1, pageSize = 20): Promise<PaginatedData<ChatHistoryItem>> {
+export async function getChatHistory(
+  page = 1,
+  pageSize = 20,
+): Promise<PaginatedData<ChatHistoryItem>> {
   const params = new URLSearchParams({
     page: String(page),
     page_size: String(pageSize),

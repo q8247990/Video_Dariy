@@ -216,7 +216,15 @@ export type EventDetail = EventRecord & {
   source_name: string
   camera_name: string
   location_name: string
-  tags: { id: number; tag_name: string; tag_type: string; description: string | null; enabled: boolean }[] | null
+  tags:
+    | {
+        id: number
+        tag_name: string
+        tag_type: string
+        description: string | null
+        enabled: boolean
+      }[]
+    | null
 }
 
 export type DashboardAction = {
@@ -346,7 +354,8 @@ export type WebhookUpdate = {
 }
 
 export type AnalysisStatus = 'open' | 'sealed' | 'analyzing' | 'partial' | 'success' | 'failed'
-export type TaskStatus = 'pending' | 'running' | 'success' | 'skipped' | 'failed' | 'timeout' | 'cancelled'
+export type TaskStatus =
+  'pending' | 'running' | 'success' | 'skipped' | 'failed' | 'timeout' | 'cancelled'
 
 export type VideoSession = {
   id: number
@@ -356,7 +365,6 @@ export type VideoSession = {
   total_duration_seconds: number | null
   merge_rule: string | null
   analysis_status: AnalysisStatus
-  analysis_retryable?: boolean
   summary_text: string | null
   activity_level: 'low' | 'medium' | 'high' | null
   main_subjects_json: string[] | null
@@ -369,18 +377,24 @@ export type VideoSession = {
 
 export type SessionPlaybackFile = {
   file_id: number
-  file_name: string
-  stream_url: string
+  file_name: string | null
+  // Null when the underlying recording is missing or unavailable.
+  stream_url: string | null
   sort_index: number
+  available: boolean
+  unavailable_reason: string | null
+  missing_at?: string | null
 }
 
 export type SessionPlayback = {
   session_id: number
   session_start_time: string
   session_end_time: string
-  playback_url: string
+  playback_mode: 'merged_stream' | 'per_file' | string
+  playback_url: string | null
   hls_url: string
   files: SessionPlaybackFile[]
+  availability: 'available' | 'partial' | 'unavailable' | string
 }
 
 export type DailySummary = {
@@ -419,7 +433,14 @@ export type SystemConfig = {
   scan_hot_window_hours?: number
   tag_recommendation_enabled?: boolean
   mcp_enabled?: boolean
+  // Write-only: the API redacts the stored token and reports
+  // ``mcp_token_set`` instead.
   mcp_token?: string
+  mcp_token_set?: boolean
+  home_profile_initialized?: boolean
+  default_locale?: string
+  llm_daily_token_quota_global?: number
+  llm_daily_token_quota_per_provider?: number
   media_manifest_ttl_seconds?: number
   media_segment_ttl_seconds?: number
   media_entity_image_ttl_seconds?: number

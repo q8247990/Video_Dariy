@@ -62,7 +62,8 @@ export function OnboardingBasicProviderPage() {
     createMutation.mutate(payload)
   }
 
-  const canSave = provider.api_base_url.trim() && provider.api_key.trim() && provider.model_name.trim()
+  const canSave =
+    provider.api_base_url.trim() && provider.api_key.trim() && provider.model_name.trim()
 
   return (
     <div>

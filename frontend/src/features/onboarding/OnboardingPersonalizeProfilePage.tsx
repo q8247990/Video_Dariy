@@ -129,7 +129,7 @@ export function OnboardingPersonalizeProfilePage() {
                       })
                     }
                   />
-                  {preset.label}
+                  {t(`home_profile.focus_point.${preset.key}`, preset.label)}
                 </label>
               )
             })}
@@ -162,7 +162,9 @@ export function OnboardingPersonalizeProfilePage() {
             }
             disabled={!canSave || saveMutation.isPending}
           >
-            {saveMutation.isPending ? t('onboarding.saving') : t('onboarding.home_profile_save_and_next')}
+            {saveMutation.isPending
+              ? t('onboarding.saving')
+              : t('onboarding.home_profile_save_and_next')}
           </button>
         </div>
       </div>

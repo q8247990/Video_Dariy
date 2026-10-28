@@ -4,7 +4,7 @@ import type { VideoSession } from '../../types/api'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { getSessionEvents } from './api'
-import { formatSessionStartTime } from './utils'
+import { formatDateTime } from '../../lib/datetime'
 
 type SessionEventsRowProps = {
   session: VideoSession
@@ -22,8 +22,12 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
     <tr>
       <td colSpan={6}>
         <div className="session-events-wrap">
-          {eventsQuery.isLoading ? <LoadingBlock text={t('events.loading_session_events', '加载事件中')} /> : null}
-          {eventsQuery.error ? <ApiErrorAlert message={(eventsQuery.error as Error).message} /> : null}
+          {eventsQuery.isLoading ? (
+            <LoadingBlock text={t('events.loading_session_events', '加载事件中')} />
+          ) : null}
+          {eventsQuery.error ? (
+            <ApiErrorAlert message={(eventsQuery.error as Error).message} />
+          ) : null}
 
           {!eventsQuery.isLoading && !eventsQuery.error ? (
             <table className="table table-sub">
@@ -37,7 +41,7 @@ export function SessionEventsRow({ session, onOpenEventDetail }: SessionEventsRo
               <tbody>
                 {(eventsQuery.data ?? []).map((event) => (
                   <tr key={event.id}>
-                    <td>{formatSessionStartTime(event.event_start_time)}</td>
+                    <td>{formatDateTime(event.event_start_time, { seconds: true })}</td>
                     <td>{event.title ?? event.summary ?? event.description}</td>
                     <td>
                       <button className="ghost" onClick={() => onOpenEventDetail(event.id)}>

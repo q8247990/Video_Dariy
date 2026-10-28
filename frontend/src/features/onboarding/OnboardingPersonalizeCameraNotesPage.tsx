@@ -58,7 +58,9 @@ export function OnboardingPersonalizeCameraNotesPage() {
       />
       <div className="card config-form">
         {message ? <div className="api-ok">{message}</div> : null}
-        {rows.length === 0 ? <p className="text-muted">{t('onboarding.camera_notes_no_sources')}</p> : null}
+        {rows.length === 0 ? (
+          <p className="text-muted">{t('onboarding.camera_notes_no_sources')}</p>
+        ) : null}
         {rows.map((row) => (
           <label key={row.id}>
             {row.source_name}（{row.camera_name}）

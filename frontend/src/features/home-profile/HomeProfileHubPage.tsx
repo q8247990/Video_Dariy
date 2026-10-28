@@ -5,7 +5,7 @@ import { PageHeader } from '../../components/common/PageHeader'
 export function HomeProfileHubPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  
+
   const profileEntries = [
     {
       key: 'overview',
@@ -29,7 +29,10 @@ export function HomeProfileHubPage() {
 
   return (
     <div>
-      <PageHeader title={t('home_profile.title', '家庭档案')} subtitle={t('home_profile.hub_subtitle', '先完善整体档案，再补充成员和宠物信息')} />
+      <PageHeader
+        title={t('home_profile.title', '家庭档案')}
+        subtitle={t('home_profile.hub_subtitle', '先完善整体档案，再补充成员和宠物信息')}
+      />
 
       <article className="card">
         <div className="settings-grid">

@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
+import { Pager } from '../../components/common/Pager'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
+import { usePagination } from '../../hooks/usePagination'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { StatusTag } from '../../components/common/StatusTag'
 import type { VideoSource, VideoSourceCreate, VideoSourceStatus } from '../../types/api'
@@ -22,6 +24,7 @@ import {
 import { VideoSourceForm } from './VideoSourceForm'
 import { VideoSourceStatusDialog } from './VideoSourceStatusDialog'
 import { analysisStateText } from './utils'
+import { confirmDialog } from '../../lib/confirm'
 
 function mapValidateStatusLabel(status: string | null, t: (key: string) => string): string {
   if (status === 'success') {
@@ -38,7 +41,8 @@ export function VideoSourcesPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [keyword, setKeyword] = useState('')
-  const [page] = useState(1)
+  const pagination = usePagination()
+  const page = pagination.page
   const [showCreate, setShowCreate] = useState(false)
   const [editing, setEditing] = useState<VideoSource | null>(null)
   const [selectedStatusSourceId, setSelectedStatusSourceId] = useState<number | null>(null)
@@ -78,8 +82,7 @@ export function VideoSourcesPage() {
 
   const scanMutation = useMutation({
     mutationFn: triggerFullScan,
-    onSuccess: (data) =>
-      setMessage(`${t('video_sources.scan_triggered')}：${data.task_id}`),
+    onSuccess: (data) => setMessage(`${t('video_sources.scan_triggered')}：${data.task_id}`),
     onError: (error) => setMessage(formatScanErrorMessage(error as Error, t)),
   })
 
@@ -129,6 +132,8 @@ export function VideoSourcesPage() {
   })
 
   const rows = useMemo(() => listQuery.data?.list ?? [], [listQuery.data?.list])
+  const total = listQuery.data?.pagination.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / 20))
   const statusBatchQuery = useQuery({
     queryKey: ['video-source-status-batch', rows.map((item) => item.id).join(',')],
     queryFn: () => getVideoSourceStatusesBatch(rows.map((item) => item.id)),
@@ -143,7 +148,8 @@ export function VideoSourcesPage() {
   }, [statusBatchQuery.data])
   const sourceIdParam = searchParams.get('source_id')
   const queryStatusSourceId = Number(sourceIdParam)
-  const resolvedStatusSourceId = selectedStatusSourceId ?? (Number.isFinite(queryStatusSourceId) ? queryStatusSourceId : null)
+  const resolvedStatusSourceId =
+    selectedStatusSourceId ?? (Number.isFinite(queryStatusSourceId) ? queryStatusSourceId : null)
   const statusSource = rows.find((item) => item.id === resolvedStatusSourceId) ?? null
   const statusQuery = useQuery({
     queryKey: ['video-source-status', statusSource?.id],
@@ -179,7 +185,7 @@ export function VideoSourcesPage() {
     if (!status) {
       return t('video_sources.source_row_status_loading')
     }
-    return analysisStateText(status.analysis_state)
+    return analysisStateText(status.analysis_state, t)
   }
 
   function sourceRowFreshnessText(item: VideoSource): string {
@@ -197,13 +203,18 @@ export function VideoSourcesPage() {
       <PageHeader
         title={t('video_sources.title')}
         subtitle={t('video_sources.subtitle')}
-        actions={<button onClick={() => setShowCreate(true)}>{t('video_sources.add_source')}</button>}
+        actions={
+          <button onClick={() => setShowCreate(true)}>{t('video_sources.add_source')}</button>
+        }
       />
 
       <div className="card tool-row">
         <input
           value={keyword}
-          onChange={(event) => setKeyword(event.target.value)}
+          onChange={(event) => {
+            setKeyword(event.target.value)
+            pagination.resetPage()
+          }}
           placeholder={t('video_sources.search_placeholder')}
         />
       </div>
@@ -233,8 +244,14 @@ export function VideoSourcesPage() {
                 <td>{item.location_name}</td>
                 <td>
                   <div>
-                    <StatusTag status={item.enabled ? (item.source_paused ? 'paused' : 'enabled') : 'disabled'} />
-                    <div style={{ fontSize: '0.82rem', marginTop: '0.2rem' }}>{sourceRowStatusText(item)}</div>
+                    <StatusTag
+                      status={
+                        item.enabled ? (item.source_paused ? 'paused' : 'enabled') : 'disabled'
+                      }
+                    />
+                    <div style={{ fontSize: '0.82rem', marginTop: '0.2rem' }}>
+                      {sourceRowStatusText(item)}
+                    </div>
                     <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
                       {sourceRowFreshnessText(item)}
                     </div>
@@ -273,7 +290,11 @@ export function VideoSourcesPage() {
                       className="ghost"
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        if (!window.confirm(t('video_sources.delete_confirm', { name: item.source_name }))) {
+                        if (
+                          !confirmDialog(
+                            t('video_sources.delete_confirm', { name: item.source_name }),
+                          )
+                        ) {
                           return
                         }
                         deleteMutation.mutate(item.id)
@@ -287,10 +308,24 @@ export function VideoSourcesPage() {
             ))}
           </tbody>
         </table>
+
+        <Pager
+          page={pagination.page}
+          totalPages={totalPages}
+          total={total}
+          pageInput={pagination.pageInput}
+          onPageInputChange={pagination.setPageInput}
+          onJumpToPage={() => pagination.jumpToPage(totalPages)}
+          onPrev={pagination.goToPrev}
+          onNext={() => pagination.goToNext(totalPages)}
+        />
       </div>
 
       {(showCreate || editing) && (
-        <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
+        <div
+          className="dialog-mask"
+          onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}
+        >
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
             <h3>{editing ? t('video_sources.edit_source') : t('video_sources.add_source')}</h3>
             <VideoSourceForm
@@ -324,10 +359,7 @@ export function VideoSourcesPage() {
   )
 }
 
-function formatScanErrorMessage(
-  error: Error,
-  t: (key: string) => string,
-): string {
+function formatScanErrorMessage(error: Error, t: (key: string) => string): string {
   const text = error.message || ''
   if (text.includes('source_not_validated')) {
     return t('video_sources.verify_not_passed')
@@ -344,10 +376,7 @@ function formatScanErrorMessage(
   return text
 }
 
-function formatDeleteErrorMessage(
-  error: Error,
-  t: (key: string) => string,
-): string {
+function formatDeleteErrorMessage(error: Error, t: (key: string) => string): string {
   const text = error.message || ''
   if (text.includes('running task')) {
     return t('video_sources.verify_running_task')

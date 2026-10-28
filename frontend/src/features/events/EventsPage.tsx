@@ -13,8 +13,8 @@ import { getSessions } from '../sessions/api'
 import { triggerSessionAnalyze } from './api'
 import { EventsFilterBar } from './EventsFilterBar'
 import { SessionEventsRow } from './SessionEventsRow'
-import { formatSessionStartTime } from './utils'
-import { Pager } from './Pager'
+import { formatDateTime } from '../../lib/datetime'
+import { Pager } from '../../components/common/Pager'
 
 export function EventsPage() {
   const { t } = useTranslation()
@@ -38,14 +38,14 @@ export function EventsPage() {
   const query = useQuery({
     queryKey,
     queryFn: () =>
-        getSessions({
-          page: pagination.page,
-          pageSize: 20,
-          sourceId,
-          analysisStatus,
-          startTime,
-          endTime,
-        }),
+      getSessions({
+        page: pagination.page,
+        pageSize: 20,
+        sourceId,
+        analysisStatus,
+        startTime,
+        endTime,
+      }),
   })
 
   const analyzeMutation = useMutation({
@@ -140,7 +140,7 @@ export function EventsPage() {
               <Fragment key={item.id}>
                 <tr>
                   <td>{item.id}</td>
-                  <td>{formatSessionStartTime(item.session_start_time)}</td>
+                  <td>{formatDateTime(item.session_start_time)}</td>
                   <td>{formatDurationMinutes(item.total_duration_seconds, t)}</td>
                   <td>{item.summary_text ?? '-'}</td>
                   <td>
@@ -151,7 +151,9 @@ export function EventsPage() {
                           setExpandedSessionId((old) => (old === item.id ? null : item.id))
                         }
                       >
-                        {expandedSessionId === item.id ? t('events.collapse_events') : t('events.expand_events')}
+                        {expandedSessionId === item.id
+                          ? t('events.collapse_events')
+                          : t('events.expand_events')}
                       </button>
                       <button className="ghost" onClick={() => setSelectedSessionId(item.id)}>
                         {t('events.view_playback')}
@@ -161,7 +163,9 @@ export function EventsPage() {
                         onClick={() => void handleReanalyze(item.id)}
                         disabled={analyzingSessionIds.has(item.id)}
                       >
-                        {analyzingSessionIds.has(item.id) ? t('events.reanalyzing') : t('events.reanalyze')}
+                        {analyzingSessionIds.has(item.id)
+                          ? t('events.reanalyzing')
+                          : t('events.reanalyze')}
                       </button>
                     </div>
                   </td>

@@ -1,4 +1,4 @@
-export function formatSessionStartTime(value: string | null): string {
+export function formatDateTime(value: string | null, options?: { seconds?: boolean }): string {
   if (!value) {
     return '-'
   }
@@ -13,6 +13,10 @@ export function formatSessionStartTime(value: string | null): string {
   const day = String(date.getDate()).padStart(2, '0')
   const hour = String(date.getHours()).padStart(2, '0')
   const minute = String(date.getMinutes()).padStart(2, '0')
+  const base = `${year}-${month}-${day} ${hour}:${minute}`
 
-  return `${year}-${month}-${day}:${hour}:${minute}`
+  if (!options?.seconds) {
+    return base
+  }
+  return `${base}:${String(date.getSeconds()).padStart(2, '0')}`
 }

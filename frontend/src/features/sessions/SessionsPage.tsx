@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { HlsVideoPlayer } from '../../components/common/HlsVideoPlayer'
 import { PageHeader } from '../../components/common/PageHeader'
+import { Pager } from '../../components/common/Pager'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { StatusTag } from '../../components/common/StatusTag'
@@ -122,8 +123,8 @@ export function SessionsPage() {
                   {item.has_attention_event === null
                     ? '-'
                     : item.has_attention_event
-                    ? t('sessions.yes')
-                    : t('sessions.no')}
+                      ? t('sessions.yes')
+                      : t('sessions.no')}
                 </td>
                 <td>{item.summary_text ?? '-'}</td>
                 <td>
@@ -134,7 +135,9 @@ export function SessionsPage() {
                     {t('sessions.action_view_playback')}
                   </button>
                   {item.analysis_status === 'partial' ? (
-                    <span className="status-tag status-partial">{t('common.status_retryable')}</span>
+                    <span className="status-tag status-partial">
+                      {t('common.status_retryable')}
+                    </span>
                   ) : null}
                 </td>
               </tr>
@@ -149,21 +152,13 @@ export function SessionsPage() {
           </tbody>
         </table>
 
-        <div className="pager">
-          <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-            {t('sessions.pager_prev')}
-          </button>
-          <span>
-            {t('sessions.pager_format', { page, totalPages, total })}
-          </span>
-          <button
-            className="ghost"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            {t('sessions.pager_next')}
-          </button>
-        </div>
+        <Pager
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          onPrev={() => setPage((p) => Math.max(1, p - 1))}
+          onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+        />
       </div>
 
       {selectedSessionId !== null ? (
@@ -176,16 +171,16 @@ export function SessionsPage() {
           </div>
 
           {playbackQuery.isLoading ? <LoadingBlock text={t('sessions.playback_loading')} /> : null}
-          {playbackQuery.error ? <ApiErrorAlert message={(playbackQuery.error as Error).message} /> : null}
+          {playbackQuery.error ? (
+            <ApiErrorAlert message={(playbackQuery.error as Error).message} />
+          ) : null}
 
           {!playbackQuery.isLoading && !playbackQuery.error ? (
             <div className="playback-grid">
               {playbackQuery.data?.playback_url ? (
                 <article className="playback-item">
                   <h4>{t('sessions.merged_playback')}</h4>
-                  <HlsVideoPlayer
-                    src={playbackQuery.data.playback_url}
-                  />
+                  <HlsVideoPlayer src={playbackQuery.data.playback_url} />
                 </article>
               ) : (
                 <div className="empty-cell">{t('sessions.playback_empty')}</div>

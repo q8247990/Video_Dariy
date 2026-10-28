@@ -62,7 +62,8 @@
   --paw-bg: linear-gradient(135deg, #f8d8e6 0%, #f1bfd6 100%);
   --paw-fg: #fff;
 
-  font-family: 'Manrope', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family:
+    'Manrope', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   line-height: 1.5;
   font-weight: 500;
   color: var(--text);
@@ -1213,4 +1214,44 @@ button.settings-entry span {
   .summary-generate {
     width: 100%;
   }
+}
+
+.entity-image-field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.entity-image {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.entity-image-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed #ccc;
+  color: #999;
+  font-size: 12px;
+}
+
+.entity-image-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.entity-image-error {
+  color: #e53e3e;
+  font-size: 12px;
+}
+
+.visually-hidden {
+  display: none;
 }

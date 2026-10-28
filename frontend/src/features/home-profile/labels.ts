@@ -10,10 +10,6 @@ export function familyTagLabel(t: TFunction, value: string): string {
   return lookupLabel(t, 'family_tag', value)
 }
 
-export function focusPointLabel(t: TFunction, value: string): string {
-  return lookupLabel(t, 'focus_point', value)
-}
-
 export function systemStyleLabel(t: TFunction, value: string): string {
   return lookupLabel(t, 'system_style_label', value)
 }

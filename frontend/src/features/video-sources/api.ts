@@ -1,5 +1,10 @@
 import { apiClient, unwrapApi } from '../../lib/axios'
-import type { PaginatedData, VideoSource, VideoSourceCreate, VideoSourceStatus } from '../../types/api'
+import type {
+  PaginatedData,
+  VideoSource,
+  VideoSourceCreate,
+  VideoSourceStatus,
+} from '../../types/api'
 
 export type VideoSourceQuery = {
   page: number
@@ -7,7 +12,9 @@ export type VideoSourceQuery = {
   keyword: string
 }
 
-export async function getVideoSources(query: VideoSourceQuery): Promise<PaginatedData<VideoSource>> {
+export async function getVideoSources(
+  query: VideoSourceQuery,
+): Promise<PaginatedData<VideoSource>> {
   const params = new URLSearchParams({
     page: String(query.page),
     page_size: String(query.pageSize),
@@ -26,7 +33,10 @@ export async function createVideoSource(payload: VideoSourceCreate): Promise<Vid
   return unwrapApi<VideoSource>(response)
 }
 
-export async function updateVideoSource(id: number, payload: Partial<VideoSourceCreate>): Promise<VideoSource> {
+export async function updateVideoSource(
+  id: number,
+  payload: Partial<VideoSourceCreate>,
+): Promise<VideoSource> {
   const response = await apiClient.put(`/video-sources/${id}`, payload)
   return unwrapApi<VideoSource>(response)
 }
@@ -62,11 +72,15 @@ export async function getVideoSourceStatus(sourceId: number): Promise<VideoSourc
   return unwrapApi<VideoSourceStatus>(response)
 }
 
-export async function getVideoSourceStatusesBatch(sourceIds: number[]): Promise<VideoSourceStatus[]> {
+export async function getVideoSourceStatusesBatch(
+  sourceIds: number[],
+): Promise<VideoSourceStatus[]> {
   if (sourceIds.length === 0) {
     return []
   }
-  const response = await apiClient.get(`/video-sources/status/batch?source_ids=${sourceIds.join(',')}`)
+  const response = await apiClient.get(
+    `/video-sources/status/batch?source_ids=${sourceIds.join(',')}`,
+  )
   return unwrapApi<VideoSourceStatus[]>(response)
 }
 

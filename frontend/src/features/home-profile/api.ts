@@ -44,7 +44,10 @@ export async function createPet(payload: PetPayload): Promise<HomeEntity> {
   return unwrapApi<HomeEntity>(response)
 }
 
-export async function updateEntity(id: number, payload: Partial<MemberPayload & PetPayload>): Promise<HomeEntity> {
+export async function updateEntity(
+  id: number,
+  payload: Partial<MemberPayload & PetPayload>,
+): Promise<HomeEntity> {
   const response = await apiClient.put(`/home-profile/entities/${id}`, payload)
   return unwrapApi<HomeEntity>(response)
 }

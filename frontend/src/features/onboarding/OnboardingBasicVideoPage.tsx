@@ -117,7 +117,9 @@ export function OnboardingBasicVideoPage() {
             onClick={() => validateMutation.mutate(video.root_path.trim())}
             disabled={!video.root_path.trim() || validateMutation.isPending}
           >
-            {validateMutation.isPending ? t('onboarding.verify_pending') : t('onboarding.verify_path')}
+            {validateMutation.isPending
+              ? t('onboarding.verify_pending')
+              : t('onboarding.verify_path')}
           </button>
           <button onClick={onSubmit} disabled={!canSubmit || createMutation.isPending}>
             {createMutation.isPending ? t('onboarding.saving') : t('onboarding.save_next')}

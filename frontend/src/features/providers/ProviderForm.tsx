@@ -74,12 +74,7 @@ function getInitialState(initialValue?: Provider): FormState {
   }
 }
 
-export function ProviderForm({
-  initialValue,
-  pending,
-  onCancel,
-  onSubmit,
-}: ProviderFormProps) {
+export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: ProviderFormProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
   const [testing, setTesting] = useState(false)
@@ -161,7 +156,9 @@ export function ProviderForm({
         <div className="capability-buttons">
           <button
             type="button"
-            className={form.supports_vision ? 'capability-btn capability-btn-active' : 'capability-btn'}
+            className={
+              form.supports_vision ? 'capability-btn capability-btn-active' : 'capability-btn'
+            }
             onClick={() =>
               setForm((old) => ({
                 ...old,
@@ -185,7 +182,9 @@ export function ProviderForm({
           </button>
           <button
             type="button"
-            className={form.supports_tool_calling ? 'capability-btn capability-btn-active' : 'capability-btn'}
+            className={
+              form.supports_tool_calling ? 'capability-btn capability-btn-active' : 'capability-btn'
+            }
             onClick={() =>
               setForm((old) => ({
                 ...old,
@@ -197,7 +196,9 @@ export function ProviderForm({
           </button>
         </div>
       </label>
-      {capabilityError ? <div className="api-error">{t('providers.capability_required')}</div> : null}
+      {capabilityError ? (
+        <div className="api-error">{t('providers.capability_required')}</div>
+      ) : null}
 
       <label>
         {t('providers.provider_name_label')}
@@ -311,16 +312,17 @@ export function ProviderForm({
 
       {initialValue ? (
         <div className="test-section">
-          <button
-            type="button"
-            className="ghost"
-            disabled={testing}
-            onClick={handleTest}
-          >
+          <button type="button" className="ghost" disabled={testing} onClick={handleTest}>
             {testing ? t('providers.testing') : t('providers.test_capability')}
           </button>
           {testResult ? (
-            <div className={testResult.success ? 'test-result test-result-success' : 'test-result test-result-fail'}>
+            <div
+              className={
+                testResult.success
+                  ? 'test-result test-result-success'
+                  : 'test-result test-result-fail'
+              }
+            >
               <span>
                 {testResult.success
                   ? t('providers.test_connectivity_ok')

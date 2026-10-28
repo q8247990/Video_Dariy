@@ -44,7 +44,11 @@ export function OnboardingPersonalizeStylePage() {
             <button
               type="button"
               key={style}
-              className={homeProfile.system_style === style ? 'ghost onboarding-style active' : 'ghost onboarding-style'}
+              className={
+                homeProfile.system_style === style
+                  ? 'ghost onboarding-style active'
+                  : 'ghost onboarding-style'
+              }
               onClick={() => setHomeProfile({ system_style: style })}
             >
               {systemStyleLabel(t, style)}
@@ -70,18 +74,24 @@ export function OnboardingPersonalizeStylePage() {
         </label>
 
         <div className="onboarding-actions">
-          <button className="ghost" onClick={() => navigate('/onboarding/personalize/camera-notes')}>
+          <button
+            className="ghost"
+            onClick={() => navigate('/onboarding/personalize/camera-notes')}
+          >
             {t('onboarding.step_prev')}
           </button>
           <button
             onClick={() =>
               mutation.mutate({
-                home_name: homeProfile.home_name.trim() || t('onboarding.system_style_default_home_name'),
+                home_name:
+                  homeProfile.home_name.trim() || t('onboarding.system_style_default_home_name'),
                 family_tags: homeProfile.family_tags,
                 focus_points: homeProfile.focus_points,
                 system_style: homeProfile.system_style,
                 style_preference_text: homeProfile.style_preference_text.trim(),
-                assistant_name: homeProfile.assistant_name.trim() || t('onboarding.system_style_default_assistant_name'),
+                assistant_name:
+                  homeProfile.assistant_name.trim() ||
+                  t('onboarding.system_style_default_assistant_name'),
                 home_note: homeProfile.home_note.trim(),
               })
             }

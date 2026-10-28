@@ -20,7 +20,9 @@ export function OnboardingWelcomePage() {
         <p>{t('onboarding.welcome_phase1')}</p>
         <p>{t('onboarding.welcome_phase2')}</p>
         <div className="onboarding-actions">
-          <button onClick={() => navigate('/onboarding/basic/video')}>{t('onboarding.start_config')}</button>
+          <button onClick={() => navigate('/onboarding/basic/video')}>
+            {t('onboarding.start_config')}
+          </button>
           <button className="ghost" onClick={() => setShowConfirm(true)}>
             {t('onboarding.skip_onboarding')}
           </button>

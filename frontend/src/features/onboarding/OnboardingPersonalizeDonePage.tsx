@@ -37,7 +37,9 @@ export function OnboardingPersonalizeDonePage() {
       <div className="card onboarding-summary-card">
         <p>
           {t('onboarding.step_personalize_done_home_profile')}
-          {status.steps.home_profile.configured ? t('system_status.completed') : t('system_status.uncompleted')}
+          {status.steps.home_profile.configured
+            ? t('system_status.completed')
+            : t('system_status.uncompleted')}
         </p>
         <p>
           {t('onboarding.step_personalize_done_camera_notes')}

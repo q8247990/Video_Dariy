@@ -23,7 +23,9 @@ export default defineConfig({
     headless: true,
     locale: 'zh-CN',
     // 以 root 运行时 Chromium 需要关闭沙箱，否则无法启动。
-    launchOptions: { args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] },
+    launchOptions: {
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    },
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'off',

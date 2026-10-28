@@ -31,8 +31,8 @@ export const useLocaleStore = create<LocaleState>((set) => ({
     }
     const detectedLng = i18n.language
     if (isLocaleMode(detectedLng)) {
-       set({ locale: detectedLng })
-       return
+      set({ locale: detectedLng })
+      return
     }
     set({ locale: 'zh-CN' })
     i18n.changeLanguage('zh-CN')

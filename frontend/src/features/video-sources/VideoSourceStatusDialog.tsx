@@ -1,7 +1,8 @@
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { formatDateTime } from '../../lib/datetime'
 import type { VideoSource, VideoSourceStatus } from '../../types/api'
-import { formatDateTime, analysisStateText } from './utils'
+import { analysisStateText } from './utils'
 
 type VideoSourceStatusDialogProps = {
   statusSource: VideoSource
@@ -26,12 +27,27 @@ export function VideoSourceStatusDialog({
   return (
     <div className="dialog-mask" onClick={onClose}>
       <div className="dialog" onClick={(event) => event.stopPropagation()}>
-        <h3>{t('video_sources.status_dialog_title', '视频源状态：{{name}}', { name: statusSource.source_name })}</h3>
+        <h3>
+          {t('video_sources.status_dialog_title', '视频源状态：{{name}}', {
+            name: statusSource.source_name,
+          })}
+        </h3>
         {statusQuery.isLoading ? <p>{t('video_sources.status_loading', '加载状态中...')}</p> : null}
-        {statusQuery.error ? <p>{t('video_sources.status_error', '加载失败：{{msg}}', { msg: (statusQuery.error as Error).message })}</p> : null}
+        {statusQuery.error ? (
+          <p>
+            {t('video_sources.status_error', '加载失败：{{msg}}', {
+              msg: (statusQuery.error as Error).message,
+            })}
+          </p>
+        ) : null}
         {statusQuery.data ? (
           <div className="summary-detail">
-            <p>{t('video_sources.status_desc', '说明：本状态用于家庭用户查看处理进展，指标按视频时间范围计算。')}</p>
+            <p>
+              {t(
+                'video_sources.status_desc',
+                '说明：本状态用于家庭用户查看处理进展，指标按视频时间范围计算。',
+              )}
+            </p>
             <article>
               <p>
                 <strong>{t('video_sources.status_earliest_video', '最早视频时间')}</strong>
@@ -74,11 +90,15 @@ export function VideoSourceStatusDialog({
             </article>
             <article>
               <p>
-                <strong>{t('video_sources.status_time_since_new', '上次产生新视频文件已过去')}</strong>
+                <strong>
+                  {t('video_sources.status_time_since_new', '上次产生新视频文件已过去')}
+                </strong>
               </p>
               <p>
                 {statusQuery.data.minutes_since_last_new_video !== null
-                  ? t('video_sources.minutes_format', '{{minutes}} 分钟', { minutes: statusQuery.data.minutes_since_last_new_video })
+                  ? t('video_sources.minutes_format', '{{minutes}} 分钟', {
+                      minutes: statusQuery.data.minutes_since_last_new_video,
+                    })
                   : '-'}
               </p>
             </article>
@@ -86,7 +106,11 @@ export function VideoSourceStatusDialog({
               <p>
                 <strong>{t('video_sources.status_full_scan', '全量扫描任务')}</strong>
               </p>
-              <p>{statusQuery.data.full_build_running ? t('video_sources.scan_running', '运行中') : t('video_sources.scan_not_running', '未运行')}</p>
+              <p>
+                {statusQuery.data.full_build_running
+                  ? t('video_sources.scan_running', '运行中')
+                  : t('video_sources.scan_not_running', '未运行')}
+              </p>
             </article>
             <article>
               <p>
@@ -109,7 +133,9 @@ export function VideoSourceStatusDialog({
                 }
               }}
             >
-              {statusSource.source_paused ? t('video_sources.resume_source', '恢复视频源') : t('video_sources.pause_source', '暂停视频源')}
+              {statusSource.source_paused
+                ? t('video_sources.resume_source', '恢复视频源')
+                : t('video_sources.pause_source', '暂停视频源')}
             </button>
           ) : null}
           <button className="ghost" onClick={onClose}>

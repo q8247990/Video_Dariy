@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 
+import { DEFAULT_DAILY_SUMMARY_SCHEDULE } from '../../lib/systemConfigDefaults'
 import type { FocusPointItem } from '../../types/api'
 
 const STORAGE_KEY = 'onboarding_draft_v1'
@@ -79,7 +80,7 @@ const defaultState = {
     skipped: false,
   },
   summary: {
-    daily_summary_schedule: '10:00',
+    daily_summary_schedule: DEFAULT_DAILY_SUMMARY_SCHEDULE,
   },
   homeProfile: {
     home_name: '我的家庭',
@@ -96,7 +97,13 @@ const defaultState = {
 function saveToStorage(
   state: Omit<
     OnboardingDraftState,
-    'setVideo' | 'setProvider' | 'setSummary' | 'setHomeProfile' | 'setCameraNote' | 'hydrate' | 'clear'
+    | 'setVideo'
+    | 'setProvider'
+    | 'setSummary'
+    | 'setHomeProfile'
+    | 'setCameraNote'
+    | 'hydrate'
+    | 'clear'
   >,
 ): void {
   const provider: StoredProviderDraft = {

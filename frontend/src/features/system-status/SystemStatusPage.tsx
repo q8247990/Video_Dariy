@@ -7,6 +7,7 @@ import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
 import { StatusTag } from '../../components/common/StatusTag'
+import { formatDateTime } from '../../lib/datetime'
 import { onboardingRouteByAction } from '../onboarding/routes'
 import { fetchSystemStatusOverview } from './api'
 
@@ -51,22 +52,6 @@ function mapTaskTypeLabel(taskType: string, t: TFunction): string {
   return t('tasks.task_other')
 }
 
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return '-'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hour}:${minute}`
-}
-
 export function SystemStatusPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -84,7 +69,9 @@ export function SystemStatusPage() {
 
     const latestBuild = query.data.taskLogs.find((item) => item.task_type === 'session_build')
     const latestAnalysis = query.data.taskLogs.find((item) => item.task_type === 'session_analysis')
-    const latestSummary = query.data.taskLogs.find((item) => item.task_type === 'daily_summary_generation')
+    const latestSummary = query.data.taskLogs.find(
+      (item) => item.task_type === 'daily_summary_generation',
+    )
 
     const failedCount24h = query.data.taskLogs.filter((item) => {
       if (item.status !== 'failed') {
@@ -122,20 +109,26 @@ export function SystemStatusPage() {
     return <ApiErrorAlert message={t('system_status.error_fetch')} />
   }
 
-  const { onboarding, videoSources, providers, homeProfile, systemConfig, videoPipelineHealth, alertSources } =
-    query.data
+  const {
+    onboarding,
+    videoSources,
+    providers,
+    homeProfile,
+    systemConfig,
+    videoPipelineHealth,
+    alertSources,
+  } = query.data
 
   const enabledVideoSources = videoSources.filter((item) => item.enabled)
-  const validatedVideoSources = enabledVideoSources.filter((item) => item.last_validate_status === 'success')
+  const validatedVideoSources = enabledVideoSources.filter(
+    (item) => item.last_validate_status === 'success',
+  )
   const enabledProviders = providers.filter((item) => item.enabled)
   const testedProviders = enabledProviders.filter((item) => item.last_test_status === 'success')
 
   return (
     <div>
-      <PageHeader
-        title={t('system_status.title')}
-        subtitle={t('system_status.subtitle')}
-      />
+      <PageHeader title={t('system_status.title')} subtitle={t('system_status.subtitle')} />
 
       <article className="card">
         <h3>{t('system_status.onboarding_status_title')}</h3>
@@ -342,7 +335,9 @@ export function SystemStatusPage() {
             <span>{t('system_status.max_no_video_time')}</span>
             <strong>
               {videoPipelineHealth.maxMinutesSinceLastNewVideo !== null
-                ? t('common.minutes_format', { minutes: videoPipelineHealth.maxMinutesSinceLastNewVideo })
+                ? t('common.minutes_format', {
+                    minutes: videoPipelineHealth.maxMinutesSinceLastNewVideo,
+                  })
                 : '-'}
             </strong>
           </div>
@@ -354,7 +349,8 @@ export function SystemStatusPage() {
             {latestStatus.recentFailedTasks.map((item) => (
               <article key={item.id}>
                 <p>
-                  <strong>{mapTaskTypeLabel(item.task_type, t)}</strong> · {formatDateTime(item.created_at)}
+                  <strong>{mapTaskTypeLabel(item.task_type, t)}</strong> ·{' '}
+                  {formatDateTime(item.created_at)}
                 </p>
                 <p>{item.message || t('system_status.no_error_msg')}</p>
               </article>
@@ -372,7 +368,11 @@ export function SystemStatusPage() {
                 </p>
                 <p>
                   {t('system_status.source_status')}
-                  {item.analysisState === 'paused' ? t('system_status.paused') : item.analysisState === 'stopped' ? t('system_status.stopped') : t('system_status.analyzing')}
+                  {item.analysisState === 'paused'
+                    ? t('system_status.paused')
+                    : item.analysisState === 'stopped'
+                      ? t('system_status.stopped')
+                      : t('system_status.analyzing')}
                   {item.minutesSinceLastNewVideo !== null
                     ? t('system_status.time_since_new', { minutes: item.minutesSinceLastNewVideo })
                     : ''}

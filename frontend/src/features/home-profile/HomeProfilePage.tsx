@@ -93,7 +93,10 @@ export function HomeProfilePage() {
 
   return (
     <div>
-      <PageHeader title={t('home_profile.title')} subtitle={t('home_profile.hub_profile_subtitle')} />
+      <PageHeader
+        title={t('home_profile.title')}
+        subtitle={t('home_profile.hub_profile_subtitle')}
+      />
 
       {message ? <div className="api-ok">{message}</div> : null}
 
@@ -149,186 +152,186 @@ function HomeProfileForm({ initialForm, options, pending, onSubmit }: HomeProfil
 
   return (
     <div className="card config-form">
-        <label>
-          {t('home_profile.field_home_name')}
-          <input
-            value={form.home_name}
-            onChange={(event) => setForm((old) => ({ ...old, home_name: event.target.value }))}
-            maxLength={128}
-          />
-        </label>
+      <label>
+        {t('home_profile.field_home_name')}
+        <input
+          value={form.home_name}
+          onChange={(event) => setForm((old) => ({ ...old, home_name: event.target.value }))}
+          maxLength={128}
+        />
+      </label>
 
-        <div>
-          <p className="text-muted">{t('home_profile.field_family_tags')}</p>
-          <div className="inline-fields">
-            {options.family_tags.map((item) => (
-              <label className="checkbox-field" key={item}>
+      <div>
+        <p className="text-muted">{t('home_profile.field_family_tags')}</p>
+        <div className="inline-fields">
+          {options.family_tags.map((item) => (
+            <label className="checkbox-field" key={item}>
+              <input
+                type="checkbox"
+                checked={isChecked(form.family_tags, item)}
+                onChange={() =>
+                  setForm((old) => ({
+                    ...old,
+                    family_tags: toggleValue(old.family_tags, item),
+                  }))
+                }
+              />
+              {familyTagLabel(t, item)}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-muted">{t('home_profile.field_focus_points')}</p>
+        <div className="focus-list">
+          {form.focus_points.map((item, index) => (
+            <div className="focus-row" key={item.key}>
+              <input
+                value={item.label}
+                maxLength={20}
+                placeholder={t('home_profile.focus_label_placeholder')}
+                onChange={(event) =>
+                  setForm((old) => ({
+                    ...old,
+                    focus_points: old.focus_points.map((fp, i) =>
+                      i === index ? { ...fp, label: event.target.value } : fp,
+                    ),
+                  }))
+                }
+              />
+              <input
+                value={item.description}
+                maxLength={100}
+                placeholder={t('home_profile.focus_description_placeholder')}
+                onChange={(event) =>
+                  setForm((old) => ({
+                    ...old,
+                    focus_points: old.focus_points.map((fp, i) =>
+                      i === index ? { ...fp, description: event.target.value } : fp,
+                    ),
+                  }))
+                }
+              />
+              <label className="checkbox-field">
                 <input
                   type="checkbox"
-                  checked={isChecked(form.family_tags, item)}
-                  onChange={() =>
+                  checked={item.attention}
+                  onChange={(event) =>
                     setForm((old) => ({
                       ...old,
-                      family_tags: toggleValue(old.family_tags, item),
+                      focus_points: old.focus_points.map((fp, i) =>
+                        i === index ? { ...fp, attention: event.target.checked } : fp,
+                      ),
                     }))
                   }
                 />
-                {familyTagLabel(t, item)}
+                {t('home_profile.focus_attention')}
               </label>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="text-muted">{t('home_profile.field_focus_points')}</p>
-          <div className="focus-list">
-            {form.focus_points.map((item, index) => (
-              <div className="focus-row" key={item.key}>
-                <input
-                  value={item.label}
-                  maxLength={20}
-                  placeholder={t('home_profile.focus_label_placeholder')}
-                  onChange={(event) =>
-                    setForm((old) => ({
-                      ...old,
-                      focus_points: old.focus_points.map((fp, i) =>
-                        i === index ? { ...fp, label: event.target.value } : fp,
-                      ),
-                    }))
-                  }
-                />
-                <input
-                  value={item.description}
-                  maxLength={100}
-                  placeholder={t('home_profile.focus_description_placeholder')}
-                  onChange={(event) =>
-                    setForm((old) => ({
-                      ...old,
-                      focus_points: old.focus_points.map((fp, i) =>
-                        i === index ? { ...fp, description: event.target.value } : fp,
-                      ),
-                    }))
-                  }
-                />
-                <label className="checkbox-field">
-                  <input
-                    type="checkbox"
-                    checked={item.attention}
-                    onChange={(event) =>
-                      setForm((old) => ({
-                        ...old,
-                        focus_points: old.focus_points.map((fp, i) =>
-                          i === index ? { ...fp, attention: event.target.checked } : fp,
-                        ),
-                      }))
-                    }
-                  />
-                  {t('home_profile.focus_attention')}
-                </label>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() =>
-                    setForm((old) => ({
-                      ...old,
-                      focus_points: old.focus_points.filter((_, i) => i !== index),
-                    }))
-                  }
-                >
-                  {t('home_profile.focus_remove')}
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="inline-fields">
-            {options.focus_points.map((preset) => (
               <button
                 type="button"
                 className="ghost"
-                key={preset.key}
-                disabled={form.focus_points.some((fp) => fp.key === preset.key)}
                 onClick={() =>
                   setForm((old) => ({
                     ...old,
-                    focus_points: [...old.focus_points, { ...preset }],
+                    focus_points: old.focus_points.filter((_, i) => i !== index),
                   }))
                 }
               >
-                {preset.label}
+                {t('home_profile.focus_remove')}
               </button>
-            ))}
+            </div>
+          ))}
+        </div>
+        <div className="inline-fields">
+          {options.focus_points.map((preset) => (
             <button
               type="button"
               className="ghost"
+              key={preset.key}
+              disabled={form.focus_points.some((fp) => fp.key === preset.key)}
               onClick={() =>
                 setForm((old) => ({
                   ...old,
-                  focus_points: [
-                    ...old.focus_points,
-                    {
-                      key: nextFocusKey(old.focus_points),
-                      label: '',
-                      description: '',
-                      enabled: true,
-                      attention: false,
-                    },
-                  ],
+                  focus_points: [...old.focus_points, { ...preset }],
                 }))
               }
             >
-              {t('home_profile.focus_add_custom')}
+              {t(`home_profile.focus_point.${preset.key}`, preset.label)}
             </button>
-          </div>
-        </div>
-
-        <label>
-          {t('home_profile.field_system_style')}
-          <select
-            value={form.system_style}
-            onChange={(event) => setForm((old) => ({ ...old, system_style: event.target.value }))}
-          >
-            {options.system_styles.map((item) => (
-              <option key={item} value={item}>
-                {systemStyleLabel(t, item)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          {t('home_profile.field_style_preference')}
-          <textarea
-            value={form.style_preference_text}
-            onChange={(event) =>
-              setForm((old) => ({ ...old, style_preference_text: event.target.value }))
+          ))}
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              setForm((old) => ({
+                ...old,
+                focus_points: [
+                  ...old.focus_points,
+                  {
+                    key: nextFocusKey(old.focus_points),
+                    label: '',
+                    description: '',
+                    enabled: true,
+                    attention: false,
+                  },
+                ],
+              }))
             }
-            maxLength={1000}
-          />
-        </label>
-
-        <label>
-          {t('home_profile.field_assistant_name')}
-          <input
-            value={form.assistant_name}
-            onChange={(event) => setForm((old) => ({ ...old, assistant_name: event.target.value }))}
-            maxLength={128}
-          />
-        </label>
-
-        <label>
-          {t('home_profile.field_home_note')}
-          <textarea
-            value={form.home_note}
-            onChange={(event) => setForm((old) => ({ ...old, home_note: event.target.value }))}
-            maxLength={1000}
-          />
-        </label>
-
-        <div className="dialog-actions">
-          <button onClick={() => onSubmit(form)} disabled={pending}>
-            {pending ? t('common.saving') : t('home_profile.save_profile')}
+          >
+            {t('home_profile.focus_add_custom')}
           </button>
         </div>
       </div>
+
+      <label>
+        {t('home_profile.field_system_style')}
+        <select
+          value={form.system_style}
+          onChange={(event) => setForm((old) => ({ ...old, system_style: event.target.value }))}
+        >
+          {options.system_styles.map((item) => (
+            <option key={item} value={item}>
+              {systemStyleLabel(t, item)}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label>
+        {t('home_profile.field_style_preference')}
+        <textarea
+          value={form.style_preference_text}
+          onChange={(event) =>
+            setForm((old) => ({ ...old, style_preference_text: event.target.value }))
+          }
+          maxLength={1000}
+        />
+      </label>
+
+      <label>
+        {t('home_profile.field_assistant_name')}
+        <input
+          value={form.assistant_name}
+          onChange={(event) => setForm((old) => ({ ...old, assistant_name: event.target.value }))}
+          maxLength={128}
+        />
+      </label>
+
+      <label>
+        {t('home_profile.field_home_note')}
+        <textarea
+          value={form.home_note}
+          onChange={(event) => setForm((old) => ({ ...old, home_note: event.target.value }))}
+          maxLength={1000}
+        />
+      </label>
+
+      <div className="dialog-actions">
+        <button onClick={() => onSubmit(form)} disabled={pending}>
+          {pending ? t('common.saving') : t('home_profile.save_profile')}
+        </button>
+      </div>
+    </div>
   )
 }

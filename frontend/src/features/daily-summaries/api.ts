@@ -1,7 +1,10 @@
 import { apiClient, unwrapApi } from '../../lib/axios'
 import type { DailySummary, DailySummaryDetail, PaginatedData } from '../../types/api'
 
-export async function getDailySummaries(page = 1, pageSize = 20): Promise<PaginatedData<DailySummary>> {
+export async function getDailySummaries(
+  page = 1,
+  pageSize = 20,
+): Promise<PaginatedData<DailySummary>> {
   const params = new URLSearchParams({
     page: String(page),
     page_size: String(pageSize),

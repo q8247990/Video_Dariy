@@ -8,6 +8,7 @@ import { StatusTag } from '../../components/common/StatusTag'
 import type { WebhookConfig, WebhookCreate, WebhookUpdate } from '../../types/api'
 import { createWebhook, deleteWebhook, getWebhooks, testWebhook, updateWebhook } from './api'
 import { WebhookForm } from './WebhookForm'
+import { confirmDialog } from '../../lib/confirm'
 
 const webhookDailySummarySample = {
   event: 'daily_summary_generated',
@@ -88,7 +89,8 @@ export function WebhooksPage() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: WebhookUpdate }) => updateWebhook(id, payload),
+    mutationFn: ({ id, payload }: { id: number; payload: WebhookUpdate }) =>
+      updateWebhook(id, payload),
     onSuccess: () => {
       setEditing(null)
       setMessage(t('webhooks.update_success'))
@@ -180,7 +182,7 @@ export function WebhooksPage() {
                     <button
                       className="ghost"
                       onClick={() => {
-                        if (window.confirm(t('webhooks.delete_confirm', { name: item.name }))) {
+                        if (confirmDialog(t('webhooks.delete_confirm', { name: item.name }))) {
                           deleteMutation.mutate(item.id)
                         }
                       }}
@@ -217,7 +219,10 @@ export function WebhooksPage() {
       </div>
 
       {(showCreate || editing) && (
-        <div className="dialog-mask" onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}>
+        <div
+          className="dialog-mask"
+          onClick={() => (showCreate ? setShowCreate(false) : setEditing(null))}
+        >
           <div className="dialog" onClick={(event) => event.stopPropagation()}>
             <h3>{editing ? t('webhooks.edit_webhook') : t('webhooks.add_webhook')}</h3>
             <WebhookForm

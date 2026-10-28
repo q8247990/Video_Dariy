@@ -153,7 +153,7 @@ test.describe.serial('全路由渲染巡检', () => {
       const httpErrors = meaningfulHttpErrors(issues)
       expect(
         httpErrors.filter((e) => e.status >= 500),
-        `出现 5xx 响应: ${JSON.stringify(httpErrors)}`
+        `出现 5xx 响应: ${JSON.stringify(httpErrors)}`,
       ).toEqual([])
     })
   }
@@ -228,7 +228,9 @@ test.describe.serial('功能交互', () => {
     const playbackBtn = page.getByRole('button', { name: '查看回放' }).first()
     if (await playbackBtn.count()) {
       await playbackBtn.click()
-      await expect(page.locator('.dialog, .playback-card, [class*="playback"]').first()).toBeVisible({
+      await expect(
+        page.locator('.dialog, .playback-card, [class*="playback"]').first(),
+      ).toBeVisible({
         timeout: 15_000,
       })
       await shot(page, '33-events-playback')
@@ -320,7 +322,9 @@ test.describe.serial('功能交互', () => {
     await expect(page.locator('.dialog h3')).toContainText('添加模型服务')
     const dialogBox = await page.locator('.dialog').boundingBox()
     const viewport = page.viewportSize()!
-    expect(dialogBox!.height, '弹窗高度必须不超过视口，底部按钮才可达').toBeLessThanOrEqual(viewport.height)
+    expect(dialogBox!.height, '弹窗高度必须不超过视口，底部按钮才可达').toBeLessThanOrEqual(
+      viewport.height,
+    )
     await shot(page, '41-provider-dialog')
     await page.locator('.dialog').getByRole('button', { name: '取消' }).click({ timeout: 5_000 })
     await expect(page.locator('.dialog-mask')).toHaveCount(0)

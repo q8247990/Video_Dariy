@@ -34,17 +34,17 @@ export function SessionPlaybackModal({ sessionId, open, onClose }: SessionPlayba
         </div>
 
         {playbackQuery.isLoading ? <LoadingBlock text={t('sessions.playback_loading')} /> : null}
-        {playbackQuery.error ? <ApiErrorAlert message={(playbackQuery.error as Error).message} /> : null}
+        {playbackQuery.error ? (
+          <ApiErrorAlert message={(playbackQuery.error as Error).message} />
+        ) : null}
 
         {!playbackQuery.isLoading && !playbackQuery.error ? (
           <div className="playback-grid">
             {playbackQuery.data?.playback_url ? (
-                <article className="playback-item">
-                  <h4>{t('sessions.merged_playback')}</h4>
-                  <HlsVideoPlayer
-                    src={playbackQuery.data.playback_url}
-                  />
-                </article>
+              <article className="playback-item">
+                <h4>{t('sessions.merged_playback')}</h4>
+                <HlsVideoPlayer src={playbackQuery.data.playback_url} />
+              </article>
             ) : (
               <div className="empty-cell">{t('sessions.playback_empty')}</div>
             )}

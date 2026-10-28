@@ -6,22 +6,8 @@ import { ApiErrorAlert } from '../../components/common/ApiErrorAlert'
 import { LoadingBlock } from '../../components/common/LoadingBlock'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SessionPlaybackModal } from '../../components/common/SessionPlaybackModal'
+import { formatDateTime } from '../../lib/datetime'
 import { getEventDetail, getSessionEvents, triggerSessionAnalyze } from './api'
-
-function formatDateTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hour = String(date.getHours()).padStart(2, '0')
-  const minute = String(date.getMinutes()).padStart(2, '0')
-  const second = String(date.getSeconds()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
-}
-
 export function EventDetailPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -95,7 +81,9 @@ export function EventDetailPage() {
               disabled={reanalyzeMutation.isPending}
               onClick={() => reanalyzeMutation.mutate(detail.session_id)}
             >
-              {reanalyzeMutation.isPending ? t('events.reanalyzing') : t('events.reanalyze_session')}
+              {reanalyzeMutation.isPending
+                ? t('events.reanalyzing')
+                : t('events.reanalyze_session')}
             </button>
           </div>
         }
@@ -116,7 +104,7 @@ export function EventDetailPage() {
         </p>
         <p>
           <strong>{t('events.detail_field_time')}</strong>
-          {formatDateTime(detail.event_start_time)}
+          {formatDateTime(detail.event_start_time, { seconds: true })}
         </p>
         <p>
           <strong>{t('events.detail_field_object_type')}</strong>
@@ -145,7 +133,8 @@ export function EventDetailPage() {
           {relatedEntities.length > 0
             ? relatedEntities
                 .map((item) => {
-                  const name = item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity')
+                  const name =
+                    item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity')
                   const status = item.recognition_status ?? 'unknown'
                   return `${name}(${status})`
                 })
@@ -166,7 +155,9 @@ export function EventDetailPage() {
 
       <article className="card summary-detail">
         <h3>{t('events.all_session_events', { id: detail.session_id })}</h3>
-        {sessionEventsQuery.isLoading ? <LoadingBlock text={t('events.loading_session_events')} /> : null}
+        {sessionEventsQuery.isLoading ? (
+          <LoadingBlock text={t('events.loading_session_events')} />
+        ) : null}
         {sessionEventsQuery.error ? (
           <ApiErrorAlert message={(sessionEventsQuery.error as Error).message} />
         ) : null}
@@ -182,7 +173,7 @@ export function EventDetailPage() {
             <tbody>
               {(sessionEventsQuery.data ?? []).map((item) => (
                 <tr key={item.id} className={item.id === detail.id ? 'row-selected' : ''}>
-                  <td>{formatDateTime(item.event_start_time)}</td>
+                  <td>{formatDateTime(item.event_start_time, { seconds: true })}</td>
                   <td>{item.title ?? item.summary ?? item.description}</td>
                   <td>
                     <button className="ghost" onClick={() => navigate(`/events/${item.id}`)}>

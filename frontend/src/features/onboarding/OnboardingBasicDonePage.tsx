@@ -58,7 +58,9 @@ export function OnboardingBasicDonePage() {
             : t('onboarding.step_basic_done_status_not_ready')}
         </p>
         <div className="onboarding-actions">
-          <button onClick={() => navigate('/dashboard')}>{t('onboarding.step_basic_done_enter_system')}</button>
+          <button onClick={() => navigate('/dashboard')}>
+            {t('onboarding.step_basic_done_enter_system')}
+          </button>
           <button className="ghost" onClick={() => navigate('/onboarding/personalize/profile')}>
             {t('onboarding.step_basic_done_continue_personalize')}
           </button>

@@ -37,15 +37,17 @@ function getInitialState(initialValue?: VideoSource): FormState {
   }
 }
 
-export function VideoSourceForm({ initialValue, pending, onCancel, onSubmit }: VideoSourceFormProps) {
+export function VideoSourceForm({
+  initialValue,
+  pending,
+  onCancel,
+  onSubmit,
+}: VideoSourceFormProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
 
   const submitLabel = useMemo(
-    () =>
-      initialValue
-        ? t('video_sources.save_changes')
-        : t('video_sources.submit_create'),
+    () => (initialValue ? t('video_sources.save_changes') : t('video_sources.submit_create')),
     [initialValue, t],
   )
 

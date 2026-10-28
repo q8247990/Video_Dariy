@@ -7,6 +7,8 @@ import { getHomeProfile } from '../home-profile/api'
 import { useThemeStore } from '../../store/themeStore'
 import { useLocaleStore } from '../../store/localeStore'
 
+const TANGTANG_THEME_ASSISTANT_NAMES = ['小糖', '糖糖']
+
 type SettingEntry = {
   key: string
   titleKey: string
@@ -29,7 +31,7 @@ export function SettingsPage() {
 
   const tangtangEnabled = useMemo(() => {
     const name = homeProfileQuery.data?.assistant_name?.trim() ?? ''
-    return name === '小糖' || name === '糖糖'
+    return TANGTANG_THEME_ASSISTANT_NAMES.includes(name)
   }, [homeProfileQuery.data?.assistant_name])
 
   useEffect(() => {
@@ -121,7 +123,9 @@ export function SettingsPage() {
             {tangtangEnabled ? (
               <button
                 type="button"
-                className={theme === 'tangtang' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
+                className={
+                  theme === 'tangtang' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'
+                }
                 onClick={() => setTheme('tangtang')}
               >
                 {t('settings.theme_tangtang')}
@@ -135,14 +139,18 @@ export function SettingsPage() {
           <div className="theme-switcher">
             <button
               type="button"
-              className={locale === 'zh-CN' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
+              className={
+                locale === 'zh-CN' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'
+              }
               onClick={() => setLocale('zh-CN')}
             >
               {t('settings.language_zh')}
             </button>
             <button
               type="button"
-              className={locale === 'en-US' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'}
+              className={
+                locale === 'en-US' ? 'ghost theme-btn theme-btn-active' : 'ghost theme-btn'
+              }
               onClick={() => setLocale('en-US')}
             >
               {t('settings.language_en')}

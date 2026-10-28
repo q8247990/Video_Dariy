@@ -81,7 +81,9 @@ export function ChatPage() {
             <ul className="list-simple">
               {(answerCard.referenced_events ?? []).slice(0, 10).map((event) => (
                 <li key={event.id}>
-                  <p>[#{event.id}] {event.description}</p>
+                  <p>
+                    [#{event.id}] {event.description}
+                  </p>
                 </li>
               ))}
             </ul>
@@ -92,7 +94,9 @@ export function ChatPage() {
       <div className="card">
         <h3>{t('chat.history')}</h3>
         {historyQuery.isLoading ? <LoadingBlock text={t('chat.loading')} /> : null}
-        {historyQuery.error ? <ApiErrorAlert message={(historyQuery.error as Error).message} /> : null}
+        {historyQuery.error ? (
+          <ApiErrorAlert message={(historyQuery.error as Error).message} />
+        ) : null}
         {!historyQuery.isLoading && !historyQuery.error ? (
           <ul className="chat-history-list">
             {(historyQuery.data?.list ?? []).map((item) => (

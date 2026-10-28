@@ -57,22 +57,26 @@ export async function fetchSystemStatusOverview(): Promise<SystemStatusOverview>
 
   const avgAnalyzedCoveragePercent =
     coverageValues.length > 0
-      ? Number((coverageValues.reduce((sum, item) => sum + item, 0) / coverageValues.length).toFixed(2))
+      ? Number(
+          (coverageValues.reduce((sum, item) => sum + item, 0) / coverageValues.length).toFixed(2),
+        )
       : null
-  const maxMinutesSinceLastNewVideo = freshnessValues.length > 0 ? Math.max(...freshnessValues) : null
+  const maxMinutesSinceLastNewVideo =
+    freshnessValues.length > 0 ? Math.max(...freshnessValues) : null
   const sourceMap = new Map(enabledVideoSources.map((item) => [item.id, item]))
-  const alertSources: AlertSource[] = statusList
-    .filter((item) => item.analysis_state !== 'analyzing')
-    .map((item) => {
-      const source = sourceMap.get(item.source_id)
-      return {
-        sourceId: item.source_id,
-        sourceName: source?.source_name ?? `视频源 ${item.source_id}`,
-        cameraName: source?.camera_name ?? '-',
-        analysisState: item.analysis_state,
-        minutesSinceLastNewVideo: item.minutes_since_last_new_video,
-      }
-    })
+  const needsAttention = (item: VideoSourceStatus): boolean =>
+    item.analysis_state === 'paused' ||
+    (item.minutes_since_last_new_video !== null && item.minutes_since_last_new_video >= 60)
+  const alertSources: AlertSource[] = statusList.filter(needsAttention).map((item) => {
+    const source = sourceMap.get(item.source_id)
+    return {
+      sourceId: item.source_id,
+      sourceName: source?.source_name ?? `视频源 ${item.source_id}`,
+      cameraName: source?.camera_name ?? '-',
+      analysisState: item.analysis_state,
+      minutesSinceLastNewVideo: item.minutes_since_last_new_video,
+    }
+  })
 
   return {
     onboarding,
@@ -83,7 +87,7 @@ export async function fetchSystemStatusOverview(): Promise<SystemStatusOverview>
     taskLogs: taskLogData.list,
     videoPipelineHealth: {
       sourceCount: statusList.length,
-      attentionSourceCount: statusList.filter((item) => item.analysis_state !== 'analyzing').length,
+      attentionSourceCount: alertSources.length,
       pausedSourceCount: statusList.filter((item) => item.analysis_state === 'paused').length,
       avgAnalyzedCoveragePercent,
       maxMinutesSinceLastNewVideo,

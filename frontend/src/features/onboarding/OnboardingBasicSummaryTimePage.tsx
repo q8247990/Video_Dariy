@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/common/PageHeader'
+import { DEFAULT_DAILY_SUMMARY_SCHEDULE } from '../../lib/systemConfigDefaults'
 import { saveDailySummarySchedule } from './api'
 import { useOnboardingDraftStore } from './state'
 
@@ -29,7 +30,10 @@ export function OnboardingBasicSummaryTimePage() {
 
   return (
     <div>
-      <PageHeader title={t('onboarding.summary_time_title', '阶段一 · 设置日报时间')} subtitle={t('onboarding.summary_time_subtitle', '默认每天上午 10:00 生成昨天日报')} />
+      <PageHeader
+        title={t('onboarding.summary_time_title', '阶段一 · 设置日报时间')}
+        subtitle={t('onboarding.summary_time_subtitle', '默认每天上午 10:00 生成昨天日报')}
+      />
       <div className="card config-form">
         {message ? <div className="api-ok">{message}</div> : null}
         <label>
@@ -48,8 +52,8 @@ export function OnboardingBasicSummaryTimePage() {
           <button
             className="ghost"
             onClick={() => {
-              setSummary({ daily_summary_schedule: '10:00' })
-              mutation.mutate('10:00')
+              setSummary({ daily_summary_schedule: DEFAULT_DAILY_SUMMARY_SCHEDULE })
+              mutation.mutate(DEFAULT_DAILY_SUMMARY_SCHEDULE)
             }}
             disabled={mutation.isPending}
           >
@@ -59,7 +63,9 @@ export function OnboardingBasicSummaryTimePage() {
             onClick={() => mutation.mutate(summary.daily_summary_schedule)}
             disabled={!summary.daily_summary_schedule || mutation.isPending}
           >
-            {mutation.isPending ? t('common.saving', '保存中...') : t('common.save_and_next', '保存并下一步')}
+            {mutation.isPending
+              ? t('common.saving', '保存中...')
+              : t('common.save_and_next', '保存并下一步')}
           </button>
         </div>
       </div>
