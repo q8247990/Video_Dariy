@@ -516,7 +516,10 @@ class FakeAnalysisPorts:
     * a stable data URL prefix shared by every sub-chunk;
     * a ``replace_session_events`` callable that, by default, delegates
       to the real :func:`replace_session_events` from the aggregator so
-      tests exercise the production event-persistence path.
+      tests exercise the production event-persistence path;
+    * a ``frame_set`` port (image-input path) that, by default, returns
+      a deterministic three-frame :class:`FrameSet` without any I/O;
+      every invocation is recorded on :attr:`frame_set_calls`.
 
     The deadlock test passes ``replace_events=<callable raising
     OperationalError pgcode='40P01'>`` at construction time to drive
@@ -532,6 +535,8 @@ class FakeAnalysisPorts:
         file_path: str = "/tmp/mock.mp4",
         data_url: str = "data:video/mp4;base64,AAAA",
         replace_events: Callable[[Any, int, list[Any]], int] | None = None,
+        frame_set: Callable[[Any, str, Any], Any] | None = None,
+        frame_set_error: Exception | None = None,
     ) -> None:
         self._chunks = chunks
         self._sub_chunks_per_chunk = sub_chunks_per_chunk
@@ -544,6 +549,10 @@ class FakeAnalysisPorts:
             self._replace_events = replace_session_events
         else:
             self._replace_events = replace_events
+        self._frame_set_override = frame_set
+        self._frame_set_error = frame_set_error
+        # One (provider, video_path, plan) tuple per frame-set invocation.
+        self.frame_set_calls: list[tuple[Any, str, Any]] = []
 
     def plan_analysis(self, db: Any, session_id: int) -> Any:
         del db
@@ -577,6 +586,50 @@ class FakeAnalysisPorts:
 
     def replace_session_events(self, db: Any, session_id: int, events: list[Any]) -> int:
         return self._replace_events(db, session_id, events)
+
+    def frame_set(self, provider: Any, video_path: str, plan: Any) -> Any:
+        """Frame-set port for the image-input path (todo 13).
+
+        Records ``(provider, video_path, plan)`` on :attr:`frame_set_calls`
+        on every invocation, then:
+
+        * raises :attr:`frame_set_error` verbatim when configured (the
+          failure-path tests pass e.g. ``SamplerUnavailable``);
+        * otherwise returns the scripted ``frame_set`` override when one
+          was supplied at construction;
+        * otherwise returns a deterministic three-frame
+          :class:`FrameSet` (no sampler, no filesystem, no network).
+        """
+        self.frame_set_calls.append((provider, video_path, plan))
+        if self._frame_set_error is not None:
+            raise self._frame_set_error
+        if self._frame_set_override is not None:
+            return self._frame_set_override(provider, video_path, plan)
+        return self._default_frame_set()
+
+    def _default_frame_set(self) -> Any:
+        """Build the deterministic default :class:`FrameSet` (no I/O).
+
+        Lazy import mirrors ``plan_analysis``: the module load-time graph
+        of :mod:`src.application.bootstrap_fakes` stays free of the
+        frame-sampling value types (and of ``src.infrastructure``).
+        """
+        from src.services.frame_sampling.types import EventCandidate, FrameSample, FrameSet
+
+        frames = tuple(
+            FrameSample(
+                t_seconds=timestamp,
+                jpeg_bytes=b"\xff\xd8" + f"fake-frame-{index}".encode("ascii") + b"\xff\xd9",
+                reason="uniform",
+            )
+            for index, timestamp in enumerate((0.0, 1.0, 2.0))
+        )
+        return FrameSet(
+            frames=frames,
+            candidates=(EventCandidate(0.0, 2.0, ("scene",)),),
+            source="sampler",
+            elapsed_ms=12,
+        )
 
 
 __all__ = [
