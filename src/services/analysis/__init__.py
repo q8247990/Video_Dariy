@@ -42,6 +42,8 @@ from src.services.analysis.contracts import (
     build_analysis_ports,
 )
 from src.services.analysis.execute import (
+    FRAMES_FINGERPRINT_PREFIX,
+    VIDEO_FINGERPRINT_PREFIX,
     CheckpointWriteResult,
     ClaimGuards,
     SubChunkRunResult,
@@ -50,10 +52,12 @@ from src.services.analysis.execute import (
     build_sub_chunk_video_url,
     enforce_fencing,
     execute_sub_chunk,
+    frames_mode_frame_fingerprint,
     get_or_create_checkpoint,
     mark_checkpoint_error,
     mark_checkpoint_processing,
     record_recovery_failure,
+    video_mode_frame_fingerprint,
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
@@ -85,6 +89,7 @@ __all__ = [
     "CheckpointWriteResult",
     "DEADLOCK_MAX_RETRIES",
     "DeadlockRetrySignal",
+    "FRAMES_FINGERPRINT_PREFIX",
     "LateWorkerFencingError",
     "NOT_FOUND_RETRY_DELAYS_SECONDS",
     "POSTGRES_RETRYABLE_SQLSTATES",
@@ -94,6 +99,7 @@ __all__ = [
     "SkipOutcome",
     "SubChunkPlan",
     "SubChunkRunResult",
+    "VIDEO_FINGERPRINT_PREFIX",
     "WEBHOOK_EVENT_SESSION_ANALYZED",
     "analysis_run_id_for_paths",
     "build_analysis_plan",
@@ -111,6 +117,7 @@ __all__ = [
     "finalize_skip",
     "finalize_stale_message",
     "find_session_analyzed_subscribers",
+    "frames_mode_frame_fingerprint",
     "get_or_create_checkpoint",
     "handle_deadlock_retry_exhausted",
     "is_deadlock_operational_error",
@@ -124,6 +131,7 @@ __all__ = [
     "record_recovery_failure",
     "replace_session_events",
     "sub_chunk_fingerprint",
+    "video_mode_frame_fingerprint",
     "write_sub_chunk_checkpoint",
     "write_token_usage",
 ]

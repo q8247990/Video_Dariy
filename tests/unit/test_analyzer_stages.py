@@ -64,6 +64,7 @@ from src.services.analysis import (
     mark_checkpoint_error,
     record_recovery_failure,
     sub_chunk_fingerprint,
+    video_mode_frame_fingerprint,
     write_sub_chunk_checkpoint,
     write_token_usage,
 )
@@ -242,13 +243,13 @@ def test_analysis_plan_computes_expected_offsets_and_fingerprints(pg_db: Session
     fingerprint_a = sub_chunk_fingerprint(
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
         sub_chunk=plan_item,
     )
     fingerprint_b = sub_chunk_fingerprint(
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,BBB",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,BBB"),
         sub_chunk=plan_item,
     )
     assert fingerprint_a != fingerprint_b
@@ -370,7 +371,7 @@ def test_checkpoint_write_requires_matching_run_id_and_generation(
         sub_chunk=sub_chunk,
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     assert checkpoint.state == "pending"
     pg_db.commit()
@@ -430,7 +431,7 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
         sub_chunk=sub_chunk,
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     pg_db.commit()
 
@@ -503,7 +504,7 @@ def test_late_worker_cannot_write_checkpoint_or_event(
         sub_chunk=sub_chunk,
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     pg_db.commit()
 
@@ -561,7 +562,7 @@ def test_failure_marks_checkpoint_failed_and_returns_recovery_signal(
         sub_chunk=sub_chunk,
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     pg_db.commit()
 
@@ -647,7 +648,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
         sub_chunk=sub_chunks[0],
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     pg_db.commit()
     write_sub_chunk_checkpoint(
@@ -668,7 +669,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
         sub_chunk=sub_chunks[1],
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,BBB",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,BBB"),
     )
     pg_db.commit()
     mark_checkpoint_error(
@@ -690,7 +691,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
         sub_chunk=sub_chunks[0],
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     resumed_failed = get_or_create_checkpoint(
         pg_db,
@@ -699,7 +700,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
         sub_chunk=sub_chunks[1],
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,BBB",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,BBB"),
     )
     fresh = get_or_create_checkpoint(
         pg_db,
@@ -708,7 +709,7 @@ def test_partial_resume_skips_successful_sub_chunks(pg_db: Session) -> None:
         sub_chunk=sub_chunks[2],
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,CCC",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,CCC"),
     )
 
     assert resumed_success.id == success_checkpoint.id
@@ -749,7 +750,7 @@ def test_write_token_usage_persists_llm_usage_log(pg_db: Session, monkeypatch) -
         sub_chunk=sub_chunk,
         system_prompt="sys",
         user_prompt="user",
-        video_data_url="data:video/mp4;base64,AAA",
+        frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
     )
     pg_db.commit()
 

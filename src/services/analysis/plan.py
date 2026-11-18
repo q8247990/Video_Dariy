@@ -101,21 +101,28 @@ def sub_chunk_fingerprint(
     *,
     system_prompt: str,
     user_prompt: str,
-    video_data_url: str,
+    frame_fingerprint: str,
     sub_chunk: SubChunkPlan,
 ) -> str:
     """Per-sub-chunk content fingerprint used as a write condition.
 
     Combines the two prompt halves, the sub-chunk's start offset and
-    duration, the exact list of files in the sub-chunk, and a sha256 of
-    the raw ``data:video/mp4`` payload. Any of these changing is a
-    signal the previous checkpoint was produced by an LLM call that no
-    longer matches the current input and must be invalidated.
+    duration, the exact list of files in the sub-chunk, and the
+    *namespaced* frame fingerprint supplied by the caller. The caller
+    picks the namespace: image mode passes ``"frames:" +
+    frame_set_fingerprint(...)`` (frame positions + per-frame JPEG
+    digests + the resolved policy + the source content signature) and
+    video mode passes ``"video:" + sha256(video_data_url)``. The
+    distinct ``video:`` / ``frames:`` prefixes make cross-mode values
+    provably distinct, so a payload-mode switch always invalidates a
+    stored checkpoint. Any of these changing is a signal the previous
+    checkpoint was produced by an LLM call that no longer matches the
+    current input and must be invalidated.
     """
     payload = {
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
-        "video_sha256": sha256(video_data_url.encode()).hexdigest(),
+        "frame_fingerprint": frame_fingerprint,
         "start_offset_seconds": sub_chunk.start_offset_seconds,
         "duration_seconds": sub_chunk.duration_seconds,
         "file_paths": list(sub_chunk.file_paths),

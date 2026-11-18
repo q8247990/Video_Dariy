@@ -7,6 +7,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -21,7 +22,9 @@ from src.models.task_log import TaskLog
 from src.services.analysis.contracts import RAW_MP4_NUM_FRAMES, LateWorkerFencingError
 from src.services.analysis.plan import SubChunkPlan, sub_chunk_fingerprint
 from src.services.dispatch import finalize_task_log, renew_task_lease
-from src.services.frame_sampling.types import FrameSample
+from src.services.frame_sampling.fingerprint import frame_set_fingerprint
+from src.services.frame_sampling.policy import FramePolicy
+from src.services.frame_sampling.types import FrameSample, FrameSet
 from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import record_token_usage
 from src.services.pipeline_state import transition_task_log
@@ -32,6 +35,48 @@ from src.services.provider_selector import (
 )
 from src.services.session_analysis_video import build_video_data_url
 from src.services.video_analysis.schemas import RecognitionResultDTO
+
+# --- checkpoint fingerprint namespaces ---
+# The two prefixes are deliberately distinct so a fingerprint computed
+# for one payload mode can never equal a fingerprint computed for the
+# other: a payload-mode switch (or any change behind the namespaced
+# value) always invalidates stored checkpoints.
+VIDEO_FINGERPRINT_PREFIX = "video:"
+FRAMES_FINGERPRINT_PREFIX = "frames:"
+
+
+def video_mode_frame_fingerprint(video_data_url: str) -> str:
+    """Namespaced checkpoint fingerprint for the raw_mp4 video payload.
+
+    This is today's invalidation value, namespaced:
+    ``"video:" + sha256(video_data_url)``. Any change of the video
+    payload — or a switch to image mode — changes the value, which
+    invalidates any stored checkpoint.
+    """
+    return f"{VIDEO_FINGERPRINT_PREFIX}{sha256(video_data_url.encode()).hexdigest()}"
+
+
+def frames_mode_frame_fingerprint(
+    frames: Sequence[FrameSample] | FrameSet,
+    policy: FramePolicy,
+    *,
+    content_signature: str,
+    extra: dict[str, object] | None = None,
+) -> str:
+    """Namespaced checkpoint fingerprint for the sampled-frame image payload.
+
+    ``"frames:" + frame_set_fingerprint(...)`` — covers the frame
+    positions, the per-frame JPEG digests, the resolved policy and the
+    source content signature. A policy change (or any other input
+    change) changes the value, which invalidates any stored checkpoint.
+    """
+    digest = frame_set_fingerprint(
+        frames,
+        policy,
+        content_signature=content_signature,
+        extra=extra,
+    )
+    return f"{FRAMES_FINGERPRINT_PREFIX}{digest}"
 
 
 # --- provider.py ---
@@ -70,6 +115,12 @@ class SubChunkRunResult:
     ``"image"`` when the caller supplied sampled frames (interleaved
     ``image_url`` parts, empty ``extra_body``) and ``"video"`` for the
     raw_mp4 path (``video_url`` part + the ``num_frames`` hint).
+
+    ``frame_fingerprint`` is the namespaced checkpoint fingerprint this
+    run used — the value the caller should pass to
+    :func:`get_or_create_checkpoint` so the stored checkpoint matches
+    this run's input (``"video:..."`` for the legacy video path,
+    ``"frames:..."`` for image mode).
     """
 
     recognition_result: RecognitionResultDTO
@@ -81,6 +132,7 @@ class SubChunkRunResult:
     video_data_url: str
     extra_body: dict[str, Any]
     payload_mode: str
+    frame_fingerprint: str
 
 
 # --- sub_chunk_runner.py ---
@@ -177,6 +229,7 @@ def execute_sub_chunk(
     extra_body: dict[str, Any] | None = None,
     response_parser: Any = None,
     frames: Sequence[FrameSample] | None = None,
+    frame_fingerprint: str | None = None,
 ) -> SubChunkRunResult:
     """Build the vision payload, call the gateway, parse the JSON.
 
@@ -206,10 +259,23 @@ def execute_sub_chunk(
     (no ``media_io_kwargs``); when ``frames`` is ``None`` or empty the
     raw_mp4 video payload is kept unchanged (``payload_mode == "video"``)
     with the ``num_frames`` hint in ``extra_body``.
+
+    ``frame_fingerprint`` is the namespaced checkpoint fingerprint to
+    use: image mode passes ``"frames:" + frame_set_fingerprint(...)``
+    (frames + policy + source content signature) and it is used
+    verbatim — the caller must already have namespaced it; when
+    ``None`` the legacy namespaced video value
+    ``"video:" + sha256(video_data_url)`` is computed so video-mode
+    checkpoints keep today's invalidation semantics with a
+    namespaced stored value. The effective value is returned in
+    :attr:`SubChunkRunResult.frame_fingerprint`.
     """
     max_output_tokens = resolve_max_output_tokens(provider, scene_default=8192)
     if video_data_url is None:
         video_data_url = build_sub_chunk_video_url(sub_chunk)
+
+    if frame_fingerprint is None:
+        frame_fingerprint = video_mode_frame_fingerprint(video_data_url)
 
     has_frames = frames is not None and len(frames) > 0
     if has_frames:
@@ -266,6 +332,7 @@ def execute_sub_chunk(
         video_data_url=video_data_url,
         extra_body=extra_body,
         payload_mode=payload_mode,
+        frame_fingerprint=frame_fingerprint,
     )
 
 
@@ -358,7 +425,8 @@ def get_or_create_checkpoint(
     sub_chunk: SubChunkPlan,
     system_prompt: str,
     user_prompt: str,
-    video_data_url: str,
+    video_data_url: str | None = None,
+    frame_fingerprint: str | None = None,
 ) -> SessionAnalysisCheckpoint:
     """Resolve / upsert the checkpoint row for one sub-chunk.
 
@@ -373,11 +441,25 @@ def get_or_create_checkpoint(
     ``input_fingerprint`` the previous fields are reset to
     ``pending`` so the new fingerprint is the one persisted in the
     eventual success write.
+
+    ``frame_fingerprint`` is the namespaced checkpoint fingerprint to
+    store (image mode: ``"frames:" + frame_set_fingerprint(...)``);
+    when ``None`` the legacy namespaced video value
+    ``"video:" + sha256(video_data_url)`` is derived instead, so
+    ``video_data_url`` must be supplied in that case.
     """
+    if frame_fingerprint is None:
+        if video_data_url is None:
+            raise ValueError(
+                "get_or_create_checkpoint requires video_data_url when frame_fingerprint "
+                "is not supplied"
+            )
+        frame_fingerprint = video_mode_frame_fingerprint(video_data_url)
+
     fingerprint = sub_chunk_fingerprint(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        video_data_url=video_data_url,
+        frame_fingerprint=frame_fingerprint,
         sub_chunk=sub_chunk,
     )
 
@@ -770,8 +852,10 @@ __all__ = [
     "CHECKPOINT_STATE_SUCCESS",
     "CheckpointWriteResult",
     "ClaimGuards",
+    "FRAMES_FINGERPRINT_PREFIX",
     "RESUMABLE_STATES",
     "SubChunkRunResult",
+    "VIDEO_FINGERPRINT_PREFIX",
     "_checkpoint_for_work",
     "build_image_content",
     "build_provider_client",
@@ -779,10 +863,12 @@ __all__ = [
     "build_sub_chunk_video_url",
     "enforce_fencing",
     "execute_sub_chunk",
+    "frames_mode_frame_fingerprint",
     "get_or_create_checkpoint",
     "mark_checkpoint_error",
     "mark_checkpoint_processing",
     "record_recovery_failure",
+    "video_mode_frame_fingerprint",
     "write_sub_chunk_checkpoint",
     "write_token_usage",
 ]
