@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -19,6 +21,7 @@ from src.models.task_log import TaskLog
 from src.services.analysis.contracts import RAW_MP4_NUM_FRAMES, LateWorkerFencingError
 from src.services.analysis.plan import SubChunkPlan, sub_chunk_fingerprint
 from src.services.dispatch import finalize_task_log, renew_task_lease
+from src.services.frame_sampling.types import FrameSample
 from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import record_token_usage
 from src.services.pipeline_state import transition_task_log
@@ -62,6 +65,11 @@ class SubChunkRunResult:
     success row: the parsed DTO, the token usage extracted from the
     last gateway call, and the raw response text (used as the
     ``last_raw_response_text`` snapshot in failure logs).
+
+    ``payload_mode`` records which vision payload this call sent:
+    ``"image"`` when the caller supplied sampled frames (interleaved
+    ``image_url`` parts, empty ``extra_body``) and ``"video"`` for the
+    raw_mp4 path (``video_url`` part + the ``num_frames`` hint).
     """
 
     recognition_result: RecognitionResultDTO
@@ -72,6 +80,36 @@ class SubChunkRunResult:
     raw_response_text: str | None
     video_data_url: str
     extra_body: dict[str, Any]
+    payload_mode: str
+
+
+# --- sub_chunk_runner.py ---
+def build_image_content(frames: Sequence[FrameSample], *, user_prompt: str) -> list[dict[str, Any]]:
+    """Build the interleaved image payload for one vision call.
+
+    For ``N`` frames the user content is exactly ``2*N + 1`` parts::
+
+        [text("帧 1/N — t=<s>s"), image, text("帧 2/N — t=<s>s"), image,
+         ..., text("帧 N/N — t=<s>s"), image, text(user_prompt)]
+
+    Each image is a ``data:image/jpeg;base64`` URL of the frame's JPEG
+    bytes; the label timestamp is the frame position formatted with one
+    decimal second. Frame order matches the input order/timestamps and the
+    trailing part is the user prompt verbatim.
+    """
+    content: list[dict[str, Any]] = []
+    total = len(frames)
+    for index, frame in enumerate(frames, start=1):
+        content.append({"type": "text", "text": f"帧 {index}/{total} — t={frame.t_seconds:.1f}s"})
+        jpeg_base64 = base64.b64encode(frame.jpeg_bytes).decode("utf-8")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{jpeg_base64}"},
+            }
+        )
+    content.append({"type": "text", "text": user_prompt})
+    return content
 
 
 # --- sub_chunk_runner.py ---
@@ -80,11 +118,15 @@ def _build_messages(
     system_prompt: str,
     user_prompt: str,
     video_data_url: str,
+    frames: Sequence[FrameSample] | None = None,
 ) -> list[dict[str, Any]]:
-    user_content: list[dict[str, Any]] = [
-        {"type": "video_url", "video_url": {"url": video_data_url}},
-        {"type": "text", "text": user_prompt},
-    ]
+    if frames:
+        user_content: list[dict[str, Any]] = build_image_content(frames, user_prompt=user_prompt)
+    else:
+        user_content = [
+            {"type": "video_url", "video_url": {"url": video_data_url}},
+            {"type": "text", "text": user_prompt},
+        ]
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
@@ -134,8 +176,9 @@ def execute_sub_chunk(
     video_data_url: str | None = None,
     extra_body: dict[str, Any] | None = None,
     response_parser: Any = None,
+    frames: Sequence[FrameSample] | None = None,
 ) -> SubChunkRunResult:
-    """Build the raw_mp4 payload, call the gateway, parse the JSON.
+    """Build the vision payload, call the gateway, parse the JSON.
 
     Holds the DB connection only indirectly: callers must have
     already committed/rolled back before invoking this function. The
@@ -156,18 +199,36 @@ def execute_sub_chunk(
     The caller is expected to pass values resolved through its own
     monkey-patchable names so the existing unit-test fixtures keep
     working unchanged.
+
+    ``frames`` selects the payload mode: when a non-empty sequence of
+    :class:`FrameSample` is supplied the call sends an interleaved image
+    payload (``payload_mode == "image"``) with an EMPTY ``extra_body``
+    (no ``media_io_kwargs``); when ``frames`` is ``None`` or empty the
+    raw_mp4 video payload is kept unchanged (``payload_mode == "video"``)
+    with the ``num_frames`` hint in ``extra_body``.
     """
     max_output_tokens = resolve_max_output_tokens(provider, scene_default=8192)
     if video_data_url is None:
         video_data_url = build_sub_chunk_video_url(sub_chunk)
-    if extra_body is None:
+
+    has_frames = frames is not None and len(frames) > 0
+    if has_frames:
+        # Image mode: frames are sent inline, so no video sampling hint.
+        extra_body = {}
+        payload_mode = "image"
+    elif extra_body is None:
         extra_body = build_sub_chunk_extra_body(
             resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
         )
+        payload_mode = "video"
+    else:
+        payload_mode = "video"
+
     messages = _build_messages(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         video_data_url=video_data_url,
+        frames=frames,
     )
 
     response_text = client.chat_completion(
@@ -204,6 +265,7 @@ def execute_sub_chunk(
         raw_response_text=raw_response_text,
         video_data_url=video_data_url,
         extra_body=extra_body,
+        payload_mode=payload_mode,
     )
 
 
@@ -711,6 +773,7 @@ __all__ = [
     "RESUMABLE_STATES",
     "SubChunkRunResult",
     "_checkpoint_for_work",
+    "build_image_content",
     "build_provider_client",
     "build_sub_chunk_extra_body",
     "build_sub_chunk_video_url",
