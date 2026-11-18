@@ -7,6 +7,7 @@ shape (never merging short files, never splitting a long file).
 from __future__ import annotations
 
 import base64
+import inspect
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
+from src.services.analysis.plan import build_analysis_plan
 from src.services.session_analysis_video import (
     build_file_sub_chunks,
     build_video_data_url,
@@ -89,6 +91,38 @@ def test_build_file_sub_chunks_never_merges_short_files(pg_db: Session) -> None:
     assert all(len(sub.file_paths) == 1 for sub in sub_chunks)
     assert [sub.duration_seconds for sub in sub_chunks] == [58, 2, 20]
     assert [sub.start_offset_seconds for sub in sub_chunks] == [0, 58, 60]
+
+
+def test_one_file_yields_exactly_one_sub_chunk_in_both_payload_modes(
+    pg_db: Session,
+) -> None:
+    """One file => exactly one sub-chunk carrying that file's path.
+
+    "No merge, no crop, no slicing" holds in image mode as well as
+    video mode: ``build_file_sub_chunks`` / ``build_analysis_plan``
+    take no provider or mode argument, so they cannot know the payload
+    mode — both payload modes consume the identical file-level plan.
+    """
+    session = _seed_session(pg_db, [60])
+    file_path = "/tmp/0000.mp4"
+
+    sub_chunks = build_file_sub_chunks(pg_db, session.id)
+
+    # No merge, no crop, no slicing: exactly one sub-chunk for the one
+    # file, carrying exactly that file's path.
+    assert len(sub_chunks) == 1
+    assert sub_chunks[0].file_paths == [file_path]
+
+    # The tuple form is what the analyzer consumes in both payload
+    # modes (``SubChunkPlan.file_paths``).
+    plan = build_analysis_plan(pg_db, session.id)
+    assert len(plan.sub_chunks) == 1
+    assert plan.sub_chunks[0].file_paths == (file_path,)
+
+    # The planning functions must not know about payload modes: no
+    # provider / mode surface in either signature.
+    assert set(inspect.signature(build_file_sub_chunks).parameters) == {"db", "session_id"}
+    assert set(inspect.signature(build_analysis_plan).parameters) == {"db", "session_id"}
 
 
 def test_build_video_data_url_wraps_single_file(tmp_path) -> None:

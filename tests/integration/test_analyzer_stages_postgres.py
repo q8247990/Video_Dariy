@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
@@ -45,12 +46,15 @@ from src.core.pipeline_constants import (
     TaskStatus,
     TaskType,
 )
+from src.infrastructure.frame_sampler import SamplerUnavailable
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
 from src.models.llm_usage_log import LLMUsageLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
+from src.models.video_file import VideoFile
 from src.models.video_session import VideoSession
+from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.analysis import (
     LateWorkerFencingError,
@@ -58,7 +62,7 @@ from src.services.analysis import (
     build_sub_chunk_video_url,
     write_sub_chunk_checkpoint,
 )
-from src.services.analysis.plan import SubChunkPlan
+from src.services.analysis.plan import SubChunkPlan, build_analysis_plan
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
@@ -690,9 +694,11 @@ def test_sub_chunk_runner_extra_body_constant_on_postgres(
     postgres_migrated_engine: Engine,
     tmp_path,
 ) -> None:
-    """The sub-chunk runner always reports
+    """Video mode: the sub-chunk runner reports
     ``media_io_kwargs.video.num_frames == 120`` — the product
-    decision keeps raw_mp4 at 120 frames; this is the PG-side pin.
+    decision keeps raw_mp4 at 120 frames; this is the PG-side pin for
+    the video payload contract (the image-mode counterpart is
+    :func:`test_image_mode_pins_image_payload_and_frame_plan_on_postgres`).
 
     The PG-side pin is the contract check: ``build_sub_chunk_extra_body``
     is a pure constant, ``build_sub_chunk_video_url`` is the only
@@ -717,3 +723,229 @@ def test_sub_chunk_runner_extra_body_constant_on_postgres(
 
     url = build_sub_chunk_video_url(plans[0])
     assert url.startswith("data:video/mp4;base64,")
+
+
+# ---------------------------------------------------------------------------
+# Image-mode payload contract on PostgreSQL (todo 14)
+# ---------------------------------------------------------------------------
+
+IMAGE_MODE_MAX_MODEL_LEN = 16384
+IMAGE_MODE_MAX_OUTPUT_TOKENS = 2048
+IMAGE_MODE_MAX_EDGE = 640
+
+
+def _seed_image_mode_provider(db: Session) -> LLMProvider:
+    """Seed a default-vision provider configured for image input mode.
+
+    ``extra_config_json`` carries the ``frame_sampling`` block (so
+    :func:`src.services.frame_sampling.resolve_input_mode` resolves to
+    ``"image"``) plus the budget keys the frame plan needs
+    (``max_model_len`` / ``max_output_tokens``).
+    """
+    provider = LLMProvider(
+        provider_name="analyzer-stages-pg-image",
+        provider_type="vision_provider",
+        api_base_url="http://example.invalid/v1",
+        api_key="",
+        model_name="vision-test",
+        timeout_seconds=30,
+        enabled=True,
+        supports_vision=True,
+        is_default_vision=True,
+        extra_config_json={
+            "frame_sampling": {
+                "preset": "event",
+                "min_frames": 2,
+                "max_frames": 12,
+                "probe_fps": 2.0,
+                "max_edge": IMAGE_MODE_MAX_EDGE,
+                "target_context_ratio": 0.9,
+            },
+            "max_model_len": IMAGE_MODE_MAX_MODEL_LEN,
+            "max_output_tokens": IMAGE_MODE_MAX_OUTPUT_TOKENS,
+        },
+    )
+    db.add(provider)
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+def _seed_video_file(
+    db: Session,
+    source: VideoSource,
+    video_session: VideoSession,
+    file_path: str,
+    duration_seconds: int,
+) -> None:
+    """Seed one ``VideoFile`` + its ``VideoSessionFileRel`` for the session."""
+    video_file = VideoFile(
+        source_id=source.id,
+        file_name=Path(file_path).name,
+        file_path=file_path,
+        storage_type="local_file",
+        file_format="mp4",
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+        duration_seconds=duration_seconds,
+        parse_status="parsed",
+    )
+    db.add(video_file)
+    db.flush()
+    db.add(
+        VideoSessionFileRel(
+            session_id=video_session.id,
+            video_file_id=video_file.id,
+            sort_index=0,
+        )
+    )
+    db.commit()
+
+
+def _install_image_mode_ports(*, frame_set_error: BaseException | None = None) -> FakeAnalysisPorts:
+    """Install the real file-level plan + the fake frame port bundle."""
+    ports = FakeAnalysisPorts(
+        chunks=1,
+        sub_chunks_per_chunk=1,
+        frame_set_error=frame_set_error,
+    )
+    # The real plan reads the seeded VideoFile rows so the one-file
+    # one-sub-chunk shape drives the run (same as video mode).
+    ports.plan_analysis = build_analysis_plan
+    _ports_holder.set_analysis_ports_for_tests(ports)
+    return ports
+
+
+@pytest.mark.postgres
+def test_image_mode_pins_image_payload_and_frame_plan_on_postgres(
+    postgres_migrated_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    """Image mode end-to-end on PostgreSQL: the fake frame port + scripted
+    gateway pin the interleaved image payload (no ``video_url``,
+    ``2*N + 1`` parts, ``data:image/jpeg;base64`` URLs, no
+    ``media_io_kwargs``) and the pre-sampler ``frame_plan`` persisted in
+    ``TaskLog.detail_json`` with the post-sampler fill.
+    """
+    video_file_path = tmp_path / "cam1.mp4"
+    # Image mode reads the file only for the content signature (the frame
+    # set comes from the fake port), so a tiny placeholder suffices.
+    video_file_path.write_bytes(b"\x00\x01\x02\x03")
+
+    with Session(postgres_migrated_engine) as db:
+        _seed_image_mode_provider(db)
+        source = _new_source(db)
+        video_session = _new_session(db, source)
+        session_id = video_session.id
+        _seed_video_file(db, source, video_session, str(video_file_path), 60)
+
+    ports = _install_image_mode_ports()
+    _set_responses(_recognition_result_json(0))
+
+    result = analyze_session_task.run(session_id=session_id)
+    assert result["events_created"] == 1
+
+    # The frame port (fake) was called exactly once, for the one file.
+    assert len(ports.frame_set_calls) == 1
+    assert ports.frame_set_calls[0][1] == str(video_file_path)
+
+    # The gateway received the interleaved image payload.
+    gateway = _latest_gateway()
+    assert len(gateway.calls) == 1
+    call = gateway.calls[0]
+    content = call["messages"][1]["content"]
+    assert all(item.get("type") != "video_url" for item in content)
+    # The default fake frame set is three frames: 2*N+1 == 7 parts.
+    assert len(content) == 2 * 3 + 1
+    assert [item["type"] for item in content] == ["text", "image_url"] * 3 + ["text"]
+    for item in content:
+        if item["type"] == "image_url":
+            assert item["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    # The video sampling hint must not leak into the image payload.
+    assert "media_io_kwargs" not in (call["extra_body"] or {})
+
+    with Session(postgres_migrated_engine) as verify:
+        task_log = (
+            verify.query(TaskLog)
+            .filter(TaskLog.task_target_id == session_id)
+            .order_by(TaskLog.id.desc())
+            .one()
+        )
+        frame_plan = task_log.detail_json["frame_plan"]
+        assert frame_plan["context_size"] == IMAGE_MODE_MAX_MODEL_LEN
+        assert frame_plan["max_model_len"] == IMAGE_MODE_MAX_MODEL_LEN
+        assert frame_plan["tokens_assumption"] == "square_worst_case"
+        assert isinstance(frame_plan["frames"], int)
+        assert frame_plan["frames"] >= 2
+        assert frame_plan["duration_seconds"] == 60
+        assert frame_plan["duration_source"] == "probe"
+        # Post-sampler fill (the default fake reports 12 ms).
+        assert frame_plan["sampler_ms"] == 12
+        assert frame_plan["frame_source"] == "sampler"
+
+        checkpoint = (
+            verify.query(SessionAnalysisCheckpoint)
+            .filter(SessionAnalysisCheckpoint.session_id == session_id)
+            .one()
+        )
+        assert checkpoint.state == "success"
+        video_session = verify.query(VideoSession).filter(VideoSession.id == session_id).one()
+        assert video_session.analysis_status == "success"
+
+
+@pytest.mark.postgres
+def test_image_mode_sampler_failure_pins_zero_events_on_postgres(
+    postgres_migrated_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    """Image-mode sampler failure (no degradation chain): the LLM is never
+    called, the checkpoint lands ``error`` fenced to the pre-sampler
+    claim, the session lands ``PARTIAL`` and zero ``EventRecord``s are
+    created; the pre-sampler ``frame_plan`` survives with ``sampler_ms``
+    still null.
+    """
+    video_file_path = tmp_path / "cam1.mp4"
+    video_file_path.write_bytes(b"\x00\x01\x02\x03")
+
+    with Session(postgres_migrated_engine) as db:
+        _seed_image_mode_provider(db)
+        source = _new_source(db)
+        video_session = _new_session(db, source)
+        session_id = video_session.id
+        _seed_video_file(db, source, video_session, str(video_file_path), 60)
+
+    ports = _install_image_mode_ports(frame_set_error=SamplerUnavailable("sampler service down"))
+    _set_responses(_recognition_result_json(0))
+
+    with pytest.raises(SamplerUnavailable):
+        analyze_session_task.run(session_id=session_id)
+
+    # The sampler was attempted once; the LLM was never called.
+    assert len(ports.frame_set_calls) == 1
+    assert _latest_gateway().calls == []
+
+    with Session(postgres_migrated_engine) as verify:
+        assert verify.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 0
+        checkpoint = (
+            verify.query(SessionAnalysisCheckpoint)
+            .filter(SessionAnalysisCheckpoint.session_id == session_id)
+            .one()
+        )
+        assert checkpoint.state == "error"
+        assert checkpoint.error_type == "SamplerUnavailable"
+        video_session = verify.query(VideoSession).filter(VideoSession.id == session_id).one()
+        assert video_session.analysis_status == "partial"
+        task_log = (
+            verify.query(TaskLog)
+            .filter(TaskLog.task_target_id == session_id)
+            .order_by(TaskLog.id.desc())
+            .one()
+        )
+        assert task_log.status == TaskStatus.FAILED
+        # The pre-sampler detail survives the failure path with
+        # sampler_ms still null.
+        frame_plan = task_log.detail_json["frame_plan"]
+        assert frame_plan["sampler_ms"] is None
+        assert "frame_source" not in frame_plan
+        assert frame_plan["tokens_assumption"] == "square_worst_case"
+        assert frame_plan["frames"] >= 2
