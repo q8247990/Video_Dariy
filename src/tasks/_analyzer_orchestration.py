@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from src.application.prompt.compiler import compile_video_recognition_prompt
@@ -33,7 +34,7 @@ from src.application.prompt.contracts import (
     VideoRecognitionPromptInput,
     VideoSourcePromptContext,
 )
-from src.core.pipeline_constants import SourceType
+from src.core.pipeline_constants import SessionAnalysisStatus, SourceType, TaskStatus
 from src.db.session import task_db_session
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
@@ -61,13 +62,17 @@ from src.services.analysis import (
 )
 from src.services.analysis.claim import handle_deadlock_retry_exhausted
 from src.services.analysis.contracts import DEADLOCK_MAX_RETRIES, AnalysisPorts, RawResponseCapture
-from src.services.analysis.execute import build_provider_client, execute_sub_chunk
+from src.services.analysis.execute import build_provider_client, enforce_fencing, execute_sub_chunk
 from src.services.analysis.finalize import (
+    completed_results_for_run,
+    merge_session_fields,
     record_failed_transition,
     record_partial_failure_transition,
+    replace_session_events,
 )
 from src.services.analysis.plan import SubChunkPlan
-from src.services.dispatch import ensure_task_not_cancelled
+from src.services.attention import attention_keys_for_db
+from src.services.dispatch import ensure_task_not_cancelled, finalize_task_log
 from src.services.dispatch.cancel import TaskCancellationRequested
 from src.services.dispatch.lease import renew_task_lease
 from src.services.frame_sampling import (
@@ -87,12 +92,14 @@ from src.services.frame_sampling.types import FrameSample
 from src.services.home_profile import build_home_context
 from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
+from src.services.pipeline_state import transition_session, transition_task_log
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
 from src.services.provider_generation_limits import (
     get_generation_limits,
     resolve_image_output_tokens,
     resolve_num_frames,
 )
+from src.services.system_config_registry import FRAME_SAMPLING_SESSION_FRAME_LIMIT, get_config
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.mapper import validate_recognition_offsets_within_sub_chunk
 from src.services.video_analysis.output_parser import parse_video_recognition_output
@@ -406,6 +413,18 @@ def _run_sub_chunk_loop(
     last_response_text: str | None = None
     last_raw_response_text: str | None = None
     input_mode = resolve_input_mode(provider)
+    # Session frame budget: only image mode acquires frames, so the limit
+    # (system config ``frame_sampling_session_frame_limit``, 0 = off) is
+    # read exactly once per run here and never queried again inside the
+    # loop. With 0 (default / absent) the pre-check below never fires and
+    # the run behaves exactly as before.
+    frame_budget_limit = (
+        int(get_config(db, FRAME_SAMPLING_SESSION_FRAME_LIMIT))
+        if input_mode == INPUT_MODE_IMAGE
+        else 0
+    )
+    frames_acquired = 0
+    files_analyzed = 0
     try:
         # Mirror the cancel-fence placement: checked once
         # after the claim succeeds (before any chunk work) so a cancel
@@ -437,6 +456,40 @@ def _run_sub_chunk_loop(
                 policy, frame_plan, frame_plan_detail = _build_frame_plan_for_file(
                     provider, plan_item, system_prompt, user_prompt
                 )
+                planned_total = frames_acquired + frame_plan.frames
+                if frame_budget_limit > 0 and planned_total > frame_budget_limit:
+                    # Budget pre-check: acquiring this file's planned frames
+                    # would exceed the session limit, so stop before sampling
+                    # or calling the LLM. This is a deliberate stop, not an
+                    # error: the session ends PARTIAL (never FAILED) with the
+                    # already-analysed files' events kept, and the run
+                    # finalizes as SUCCESS with a frame_budget_exhausted
+                    # detail. A single file planning more than the whole
+                    # budget lands here on the first iteration (provider
+                    # validation already rejects such configs at save time;
+                    # this is the analysis-time backstop).
+                    logger.info(
+                        "Session %s frame budget exhausted: limit=%d frames_acquired=%d "
+                        "files_analyzed=%d files_skipped=%d; skipping remaining file(s)",
+                        claim.session.id,
+                        frame_budget_limit,
+                        frames_acquired,
+                        files_analyzed,
+                        len(plan.sub_chunks) - files_analyzed,
+                    )
+                    return _finalize_session_frame_budget_exhausted(
+                        db=db,
+                        claim=claim,
+                        guards=guards,
+                        plan=plan,
+                        file_count=len(plan.sub_chunks),
+                        frame_budget_limit=frame_budget_limit,
+                        frames_acquired=frames_acquired,
+                        files_analyzed=files_analyzed,
+                        files_skipped=len(plan.sub_chunks) - files_analyzed,
+                        priority=priority,
+                        replace_session_events_fn=ports.replace_session_events,
+                    )
                 # Pre-sampler transaction: persist the frame plan (so a
                 # sampler failure still leaves it in detail_json) and own
                 # the checkpoint row so the failure is fenced to a real
@@ -462,6 +515,10 @@ def _run_sub_chunk_loop(
                 # Sampler call — no DB session held here (same invariant
                 # as the LLM call below).
                 frame_set = ports.frame_set(provider, file_path, frame_plan)
+                # The budget charges the frames ACTUALLY acquired (the
+                # sampler may return fewer than planned); the pre-check
+                # above used the plan to avoid an over-budget acquisition.
+                frames_acquired += len(frame_set.frames)
                 frame_fingerprint = frames_mode_frame_fingerprint(
                     frame_set.frames,
                     policy,
@@ -484,6 +541,7 @@ def _run_sub_chunk_loop(
                     sampler_elapsed_ms=frame_set.elapsed_ms,
                     frame_source=frame_set.source,
                 )
+                files_analyzed += 1
             else:
                 video_data_url = ports.video_data_url(plan_item.file_paths[0])
                 extra_body = build_sub_chunk_extra_body(
@@ -552,6 +610,114 @@ def _run_sub_chunk_loop(
             parse_modes=parse_modes,
         )
     return sub_chunk_count, parse_modes, False
+
+
+def _finalize_session_frame_budget_exhausted(
+    *,
+    db: Any,
+    claim: Any,
+    guards: ClaimGuards,
+    plan: Any,
+    file_count: int,
+    frame_budget_limit: int,
+    frames_acquired: int,
+    files_analyzed: int,
+    files_skipped: int,
+    priority: str,
+    replace_session_events_fn: Any = None,
+) -> dict[str, Any]:
+    """Finalize a run stopped by the session frame budget as PARTIAL.
+
+    The budget stop is deliberate, not a failure: already-committed
+    checkpoint results are materialized (events + session projection)
+    exactly like the success path, the session transitions
+    ANALYZING -> PARTIAL (even when zero files were analysed), and the
+    TaskLog finalizes as SUCCESS. ``frame_budget_exhausted`` is merged
+    into ``TaskLog.detail_json`` without clobbering existing keys —
+    the analysed files' ``frame_plan`` survives.
+    """
+    if replace_session_events_fn is None:
+        replace_session_events_fn = replace_session_events
+    enforce_fencing(db, claim=guards)
+    # Expire cached session fields so the CAS UPDATE in
+    # ``transition_session`` starts from current state (the
+    # ``synchronize_session=False`` flag leaves the in-memory copy
+    # stale otherwise) — same pattern as the success finalizer.
+    db.expire(claim.session)
+    structured_results, events_to_persist = completed_results_for_run(
+        db, claim.session, plan.analysis_run_id
+    )
+    merge_session_fields(
+        claim.session,
+        structured_results,
+        events_to_persist,
+        attention_keys=attention_keys_for_db(db),
+    )
+    replaced_deleted_count = replace_session_events_fn(db, claim.session.id, events_to_persist)
+
+    budget_detail = {
+        "limit": frame_budget_limit,
+        "frames_acquired": frames_acquired,
+        "files_analyzed": files_analyzed,
+        "files_skipped": files_skipped,
+    }
+    raw_detail = claim.task_log.detail_json
+    detail = dict(raw_detail) if isinstance(raw_detail, dict) else {}
+    detail["frame_budget_exhausted"] = budget_detail
+    claim.task_log.detail_json = detail
+
+    completed = transition_session(
+        db,
+        claim.session.id,
+        SessionAnalysisStatus.ANALYZING,
+        SessionAnalysisStatus.PARTIAL,
+        reason="frame_budget_exhausted",
+        source="analyze_session_task",
+        task_log=claim.task_log,
+    )
+    if not completed.applied:
+        # Lost race (e.g. concurrent cancel took the session): commit nothing,
+        # mirror the success-path skip response.
+        return {
+            "events_created": 0,
+            "skipped": True,
+            "reason": "completion_transition_conflict",
+            "session_id": claim.session.id,
+            "priority": priority,
+        }
+    claim.session.last_analyzed_at = datetime.now(timezone.utc)
+    transition_task_log(
+        db,
+        claim.task_log.id,
+        TaskStatus.RUNNING,
+        TaskStatus.SUCCESS,
+        reason="frame_budget_exhausted",
+        source="analyze_session_task",
+    )
+    finalize_task_log(
+        db,
+        claim.task_log,
+        TaskStatus.SUCCESS,
+        f"Analyzed session across {file_count} files; stopped at the frame budget "
+        f"(limit {frame_budget_limit}, {frames_acquired} frames acquired, "
+        f"{files_analyzed} files analyzed, {files_skipped} skipped).",
+        {
+            "session_id": claim.session.id,
+            "events_created": len(events_to_persist),
+            "events_replaced_deleted": replaced_deleted_count,
+            "file_count": file_count,
+            "recognized_sub_chunks": files_analyzed,
+            "priority": priority,
+        },
+    )
+    db.commit()
+    return {
+        "events_created": len(events_to_persist),
+        "file_count": file_count,
+        "recognized_sub_chunks": files_analyzed,
+        "frame_budget_exhausted": budget_detail,
+        "session_id": claim.session.id,
+    }
 
 
 def _handle_loop_exception(
