@@ -151,15 +151,6 @@ function SamplerCardForm({ initialDraft, pending, onSubmit, validate }: SamplerC
         <small className="text-muted">{t('providers.sampler_url_hint')}</small>
       </label>
 
-      <label>
-        {t('providers.sampler_model_path')}
-        <input
-          value={draft.frame_sampler_model_path}
-          onChange={(event) => setField('frame_sampler_model_path', event.target.value)}
-        />
-        <small className="text-muted">{t('providers.sampler_model_path_hint')}</small>
-      </label>
-
       <div className="inline-fields">
         <label>
           {t('providers.sampler_timeout')}
@@ -204,75 +195,6 @@ function SamplerCardForm({ initialDraft, pending, onSubmit, validate }: SamplerC
         </label>
 
         <label>
-          {t('providers.sampler_conf_threshold')}
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={draft.frame_sampler_conf_threshold}
-            onChange={(event) => setField('frame_sampler_conf_threshold', event.target.value)}
-          />
-          {errorText('frame_sampler_conf_threshold') ? (
-            <small className="field-error">
-              {errorText('frame_sampler_conf_threshold') as string}
-            </small>
-          ) : (
-            <small className="text-muted">
-              {t('providers.sampler_unit_float_hint', {
-                value: SAMPLER_DEFAULTS.frame_sampler_conf_threshold,
-              })}
-            </small>
-          )}
-        </label>
-
-        <label>
-          {t('providers.sampler_track_high_thresh')}
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={draft.frame_sampler_track_high_thresh}
-            onChange={(event) => setField('frame_sampler_track_high_thresh', event.target.value)}
-          />
-          {errorText('frame_sampler_track_high_thresh') ? (
-            <small className="field-error">
-              {errorText('frame_sampler_track_high_thresh') as string}
-            </small>
-          ) : (
-            <small className="text-muted">
-              {t('providers.sampler_unit_float_hint', {
-                value: SAMPLER_DEFAULTS.frame_sampler_track_high_thresh,
-              })}
-            </small>
-          )}
-        </label>
-
-        <label>
-          {t('providers.sampler_min_area_ratio')}
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.001}
-            value={draft.frame_sampler_min_area_ratio}
-            onChange={(event) => setField('frame_sampler_min_area_ratio', event.target.value)}
-          />
-          {errorText('frame_sampler_min_area_ratio') ? (
-            <small className="field-error">
-              {errorText('frame_sampler_min_area_ratio') as string}
-            </small>
-          ) : (
-            <small className="text-muted">
-              {t('providers.sampler_positive_ratio_hint', {
-                value: SAMPLER_DEFAULTS.frame_sampler_min_area_ratio,
-              })}
-            </small>
-          )}
-        </label>
-
-        <label>
           {t('providers.sampler_session_frame_limit')}
           <input
             type="number"
@@ -303,9 +225,6 @@ function SamplerCardForm({ initialDraft, pending, onSubmit, validate }: SamplerC
           {t('providers.sampler_impact_defaults', {
             timeout: SAMPLER_DEFAULTS.frame_sampler_timeout_seconds,
             queue: SAMPLER_DEFAULTS.frame_sampler_queue_limit,
-            conf: SAMPLER_DEFAULTS.frame_sampler_conf_threshold,
-            track: SAMPLER_DEFAULTS.frame_sampler_track_high_thresh,
-            area: SAMPLER_DEFAULTS.frame_sampler_min_area_ratio,
           })}
         </div>
         <div className="text-muted">{t('providers.sampler_impact_no_cap')}</div>

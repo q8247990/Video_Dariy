@@ -1,14 +1,10 @@
-// 帧采样器（frame sampler / YOLO）设置的纯逻辑层：表单草稿 <-> 校验后的更新载荷。
+// 帧采样器（frame sampler）设置的纯逻辑层：表单草稿 <-> 校验后的更新载荷。
 //
 // 校验规则与后端注册表 src/services/system_config_registry.py 保持一致：
 //   frame_sampler_enabled              bool
 //   frame_sampler_url                  可选字符串（空串 = 未配置）
 //   frame_sampler_timeout_seconds      正整数（默认 120）
 //   frame_sampler_queue_limit          正整数（默认 8）
-//   frame_sampler_model_path           可选字符串（空串 = 未配置）
-//   frame_sampler_conf_threshold       浮点 [0, 1]（默认 0.35）
-//   frame_sampler_track_high_thresh    浮点 [0, 1]（默认 0.45）
-//   frame_sampler_min_area_ratio       浮点 (0, 1]（默认 0.001）
 //   frame_sampling_session_frame_limit 非负整数（默认 0 = 不限制）
 //
 // 错误值为稳定的错误码（不是文案），由 SamplerCard 映射到 i18n 词条，
@@ -19,10 +15,6 @@ export const SAMPLER_DEFAULTS = {
   frame_sampler_url: '',
   frame_sampler_timeout_seconds: 120,
   frame_sampler_queue_limit: 8,
-  frame_sampler_model_path: '',
-  frame_sampler_conf_threshold: 0.35,
-  frame_sampler_track_high_thresh: 0.45,
-  frame_sampler_min_area_ratio: 0.001,
   frame_sampling_session_frame_limit: 0,
 } as const
 
@@ -31,10 +23,6 @@ export type FrameSamplerConfig = {
   frame_sampler_url?: string
   frame_sampler_timeout_seconds?: number
   frame_sampler_queue_limit?: number
-  frame_sampler_model_path?: string
-  frame_sampler_conf_threshold?: number
-  frame_sampler_track_high_thresh?: number
-  frame_sampler_min_area_ratio?: number
   frame_sampling_session_frame_limit?: number
 }
 
@@ -44,10 +32,6 @@ export type SamplerDraft = {
   frame_sampler_url: string
   frame_sampler_timeout_seconds: string
   frame_sampler_queue_limit: string
-  frame_sampler_model_path: string
-  frame_sampler_conf_threshold: string
-  frame_sampler_track_high_thresh: string
-  frame_sampler_min_area_ratio: string
   frame_sampling_session_frame_limit: string
 }
 
@@ -59,8 +43,6 @@ export type SamplerErrorCode =
   | 'not_an_integer'
   | 'positive_int'
   | 'non_negative_int'
-  | 'unit_float'
-  | 'positive_ratio_float'
 
 export type SamplerUpdateResult = {
   ok: boolean
@@ -76,18 +58,11 @@ export const SAMPLER_I18N_KEYS = [
   'providers.sampler_enabled',
   'providers.sampler_url',
   'providers.sampler_url_hint',
-  'providers.sampler_model_path',
-  'providers.sampler_model_path_hint',
   'providers.sampler_timeout',
   'providers.sampler_queue_limit',
   'providers.sampler_session_frame_limit',
-  'providers.sampler_conf_threshold',
-  'providers.sampler_track_high_thresh',
-  'providers.sampler_min_area_ratio',
   'providers.sampler_int_positive_hint',
   'providers.sampler_int_non_negative_hint',
-  'providers.sampler_unit_float_hint',
-  'providers.sampler_positive_ratio_hint',
   'providers.sampler_disabled_warning',
   'providers.sampler_impact_title',
   'providers.sampler_impact_defaults',
@@ -101,8 +76,6 @@ export const SAMPLER_I18N_KEYS = [
   'providers.sampler_error_not_an_integer',
   'providers.sampler_error_positive_int',
   'providers.sampler_error_non_negative_int',
-  'providers.sampler_error_unit_float',
-  'providers.sampler_error_positive_ratio_float',
 ] as const
 
 export const SAMPLER_ERROR_I18N_KEYS: Record<SamplerErrorCode, string> = {
@@ -110,8 +83,6 @@ export const SAMPLER_ERROR_I18N_KEYS: Record<SamplerErrorCode, string> = {
   not_an_integer: 'providers.sampler_error_not_an_integer',
   positive_int: 'providers.sampler_error_positive_int',
   non_negative_int: 'providers.sampler_error_non_negative_int',
-  unit_float: 'providers.sampler_error_unit_float',
-  positive_ratio_float: 'providers.sampler_error_positive_ratio_float',
 }
 
 type Parsed = { ok: true; value: number } | { ok: false; code: SamplerErrorCode }
@@ -143,30 +114,6 @@ function toInteger(text: string, min: 0 | 1): Parsed {
   return { ok: true, value: parsed.value }
 }
 
-/** [0, 1] 闭区间浮点（_unit_float）。 */
-function toUnitFloat(text: string): Parsed {
-  const parsed = toFiniteNumber(text)
-  if (!parsed.ok) {
-    return parsed
-  }
-  if (parsed.value < 0.0 || parsed.value > 1.0) {
-    return { ok: false, code: 'unit_float' }
-  }
-  return { ok: true, value: parsed.value }
-}
-
-/** (0, 1] 开区间浮点（_positive_ratio_float）。 */
-function toPositiveRatioFloat(text: string): Parsed {
-  const parsed = toFiniteNumber(text)
-  if (!parsed.ok) {
-    return parsed
-  }
-  if (parsed.value <= 0.0 || parsed.value > 1.0) {
-    return { ok: false, code: 'positive_ratio_float' }
-  }
-  return { ok: true, value: parsed.value }
-}
-
 function numberToString(value: unknown, fallback: number): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : String(fallback)
 }
@@ -188,19 +135,6 @@ export function toDraft(config: FrameSamplerConfig): SamplerDraft {
       config.frame_sampler_queue_limit,
       SAMPLER_DEFAULTS.frame_sampler_queue_limit,
     ),
-    frame_sampler_model_path: stringOrEmpty(config.frame_sampler_model_path),
-    frame_sampler_conf_threshold: numberToString(
-      config.frame_sampler_conf_threshold,
-      SAMPLER_DEFAULTS.frame_sampler_conf_threshold,
-    ),
-    frame_sampler_track_high_thresh: numberToString(
-      config.frame_sampler_track_high_thresh,
-      SAMPLER_DEFAULTS.frame_sampler_track_high_thresh,
-    ),
-    frame_sampler_min_area_ratio: numberToString(
-      config.frame_sampler_min_area_ratio,
-      SAMPLER_DEFAULTS.frame_sampler_min_area_ratio,
-    ),
     frame_sampling_session_frame_limit: numberToString(
       config.frame_sampling_session_frame_limit,
       SAMPLER_DEFAULTS.frame_sampling_session_frame_limit,
@@ -220,10 +154,6 @@ export function toUpdate(draft: SamplerDraft): SamplerUpdateResult {
     frame_sampler_url: draft.frame_sampler_url.trim(),
     frame_sampler_timeout_seconds: draft.frame_sampler_timeout_seconds,
     frame_sampler_queue_limit: draft.frame_sampler_queue_limit,
-    frame_sampler_model_path: draft.frame_sampler_model_path.trim(),
-    frame_sampler_conf_threshold: draft.frame_sampler_conf_threshold,
-    frame_sampler_track_high_thresh: draft.frame_sampler_track_high_thresh,
-    frame_sampler_min_area_ratio: draft.frame_sampler_min_area_ratio,
     frame_sampling_session_frame_limit: draft.frame_sampling_session_frame_limit,
   }
 
@@ -239,27 +169,6 @@ export function toUpdate(draft: SamplerDraft): SamplerUpdateResult {
     payload.frame_sampler_queue_limit = queue.value
   } else {
     errors.frame_sampler_queue_limit = queue.code
-  }
-
-  const conf = toUnitFloat(draft.frame_sampler_conf_threshold)
-  if (conf.ok) {
-    payload.frame_sampler_conf_threshold = conf.value
-  } else {
-    errors.frame_sampler_conf_threshold = conf.code
-  }
-
-  const track = toUnitFloat(draft.frame_sampler_track_high_thresh)
-  if (track.ok) {
-    payload.frame_sampler_track_high_thresh = track.value
-  } else {
-    errors.frame_sampler_track_high_thresh = track.code
-  }
-
-  const area = toPositiveRatioFloat(draft.frame_sampler_min_area_ratio)
-  if (area.ok) {
-    payload.frame_sampler_min_area_ratio = area.value
-  } else {
-    errors.frame_sampler_min_area_ratio = area.code
   }
 
   const sessionLimit = toInteger(draft.frame_sampling_session_frame_limit, 0)

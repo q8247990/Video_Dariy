@@ -27,7 +27,6 @@ class Settings:
     host: str
     port: int
     allowed_roots_raw: str
-    model_path_raw: str
     version: str
 
 
@@ -50,7 +49,6 @@ def get_settings() -> Settings:
         host=os.environ.get("SAMPLER_HOST", DEFAULT_HOST),
         port=port,
         allowed_roots_raw=os.environ.get("SAMPLER_ALLOWED_ROOTS", ""),
-        model_path_raw=os.environ.get("SAMPLER_MODEL_PATH", ""),
         version=os.environ.get("SAMPLER_VERSION", DEFAULT_VERSION),
     )
 
@@ -80,14 +78,3 @@ def allowed_roots() -> list[Path]:
             seen.add(root)
             unique.append(root)
     return unique
-
-
-def model_path() -> Path | None:
-    """Return the configured model file path, or ``None`` when unset or missing."""
-    raw = get_settings().model_path_raw
-    if not raw:
-        return None
-    path = Path(raw)
-    if not path.exists():
-        return None
-    return path

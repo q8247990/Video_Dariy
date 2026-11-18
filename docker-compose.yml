@@ -156,9 +156,6 @@ services:
       # In-container whitelist of roots the sampler may read (empty = nothing
       # allowed, so /videos must be set for the service to serve requests).
       SAMPLER_ALLOWED_ROOTS: /videos
-      # Optional ONNX detector model path; empty = service still starts with
-      # model_loaded: false (healthz stays 200).
-      SAMPLER_MODEL_PATH: ${SAMPLER_MODEL_PATH:-}
     # Published host-side for debugging only; the backend reaches the sampler
     # over app_bridge, no published port required for that.
     ports:

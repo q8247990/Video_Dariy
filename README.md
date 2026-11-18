@@ -147,23 +147,21 @@ bash scripts/package_release.sh --tag v1.0.0
 `event` 三种策略）→ 返回带时间戳的 JPEG 帧；后端把图文交错（每帧一个 `t=X.Xs` 时间戳标签）
 发给图像 LLM，输出仍解析为与视频模式同构的 `EventRecord`（offset 对齐到帧时刻，绝对时间
 公式与日报 / 问答 / MCP 契约不变）。文件粒度两条路径一致：一文件 = 一 sub-chunk =
-一次 LLM 调用。注意：`/sample` 的候选窗口当前来自 ffmpeg 场景检测；ONNX 人检测与跟踪
-已实现并有单测，但尚未接入 `/sample`。
+一次 LLM 调用。注意：`/sample` 的候选窗口来自 ffmpeg 场景检测；ONNX 人检测器已移除
+（无消费方，如需再引入）。
 
 配置分两层（零迁移）：
 
 - 每模型抽帧策略：`LLMProvider.extra_config_json.frame_sampling`（设置页 → 模型连接）
-- 采样器 / YOLO 运行时：系统配置 `frame_sampler_enabled` / `frame_sampler_url` /
+- 采样器运行时：系统配置 `frame_sampler_enabled` / `frame_sampler_url` /
   `frame_sampler_timeout_seconds`（默认 120）/ `frame_sampler_queue_limit`（默认 8）/
-  `frame_sampler_model_path` / `frame_sampler_conf_threshold` /
-  `frame_sampler_track_high_thresh` / `frame_sampler_min_area_ratio`（设置页 → 系统配置）
+  `frame_sampling_session_frame_limit`（默认 0 = 不限制）（设置页 → 系统配置）
 
 采样器服务环境变量：
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `SAMPLER_ALLOWED_ROOTS` | 空 | 冒号分隔的绝对路径白名单，服务只可读这些根目录内的文件；空 = 拒绝一切请求 |
-| `SAMPLER_MODEL_PATH` | 空 | ONNX 检测模型文件绝对路径；缺失时服务仍启动，`/healthz` 报 `model_loaded: false` |
 | `SAMPLER_PORT` | 18080 | 监听端口（另有 `SAMPLER_HOST`，默认 `0.0.0.0`） |
 
 构建与运行（compose 接线以 profile `sampler` 交付：`docker compose --profile sampler up -d`

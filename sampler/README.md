@@ -9,10 +9,9 @@ video file with ffmpeg at a fixed probe rate, derives event candidate
 windows from ffmpeg scene detection (todo 17), selects a bounded set of
 frames (todo 18) and returns them as base64 JPEGs.
 
-> **Honesty note — the ONNX person detector and tracker (todo 16) are
-> implemented and unit-tested but NOT yet used by `/sample`; candidate
-> windows currently come from ffmpeg scene detection (todo 17).** `/sample`
-> is *not* person-aware.
+> Candidate windows come from ffmpeg scene detection only; the ONNX person
+> detector was removed until a consumer path exists, so `/sample` is *not*
+> person-aware.
 
 The service is deliberately isolated from the main stack: it **never talks
 to Postgres or Redis**. It only needs **read access** to the video root(s)
@@ -25,14 +24,13 @@ whitelisted by `SAMPLER_ALLOWED_ROOTS`.
 | `SAMPLER_HOST` | `0.0.0.0` | Bind address |
 | `SAMPLER_PORT` | `18080` | Bind port |
 | `SAMPLER_ALLOWED_ROOTS` | *(empty)* | Colon-separated absolute paths the service may read; empty = nothing allowed |
-| `SAMPLER_MODEL_PATH` | *(empty)* | Absolute path to the detection model file; unset/missing → `model_loaded: false` (service still starts) |
 | `SAMPLER_VERSION` | `0.1.0` | Version reported by `/healthz` |
 
 ## HTTP contract
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/healthz` | `200 {"status": "ok", "model_loaded": <bool>, "version": "<str>"}` — always 200 even when the model file is missing |
+| GET | `/healthz` | `200 {"status": "ok", "version": "<str>"}` — always 200 |
 | POST | `/sample` | `200` with frames + candidates (see below); `400` path/validation; `422` undecodable video; `500` unexpected |
 
 ### `POST /sample` — request
@@ -96,7 +94,7 @@ the ffmpeg stderr tail.
   long edge `<= max_edge`, aspect ratio preserved.
 - `candidates`: scene-detection candidate windows (ffmpeg scene scores,
   todo 17) with `reasons` = `["scene"]` (single trigger) or `["merged"]`
-  (merged triggers). **Not person-aware — see the honesty note above.**
+  (merged triggers). **Not person-aware.**
 - `elapsed_ms`: both ffmpeg passes. `duration_seconds`: container duration
   (best-effort ffprobe, 0.0 when unknown, last-frame fallback).
 
@@ -123,11 +121,10 @@ docker run --rm -d --name fs-sampler \
   -p 18080:18080 \
   -v /path/to/videos:/videos:ro \
   -e SAMPLER_ALLOWED_ROOTS=/videos \
-  -e SAMPLER_MODEL_PATH=/models/yolov8n.onnx \
   video-dairy-sampler
 
 curl -s localhost:18080/healthz
-# {"status":"ok","model_loaded":true,"version":"0.1.0"}
+# {"status":"ok","version":"0.1.0"}
 ```
 
 The video root(s) must be mounted **read-only** into the container; the
@@ -145,7 +142,7 @@ From the repo root:
 ```bash
 docker compose --profile sampler up -d --build
 curl -s localhost:18080/healthz
-# {"status":"ok","model_loaded":false,"version":"0.1.0"}
+# {"status":"ok","version":"0.1.0"}
 ```
 
 Port `18080` is published host-side for debugging; the backend reaches the

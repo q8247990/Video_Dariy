@@ -339,11 +339,10 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 - **无降级链**：图像模式对采样器是硬依赖，没有本地 ffmpeg 兜底、均匀兜底或 `degraded` 标记；
   采样器失败 ⇒ 该文件调用失败 ⇒ Session 落 `PARTIAL` / `FAILED`。不对采样器故障做自动重试
   （现有自动重试只覆盖 PG 死锁与 lease 超时），由人工 `POST /api/v1/tasks/analyze/{session_id}` 重触发
-- **backend 进程内禁止第二份抽帧实现**：不 ffmpeg 解码、不引入 cv2 / numpy / onnxruntime；
-  解码、JPEG 编码与（未来的）ONNX 推理全部在采样器容器内完成
-- **如实边界**：`/sample` 的候选窗口当前来自 ffmpeg 场景检测；ONNX 人检测（`sampler/app/detector.py`）
-  与 IoU 跟踪（`sampler/app/tracker.py`）已实现并有单元测试，但尚未接入 `/sample`，
-  因此当前 `/sample` 不是 person-aware 的
+- **backend 进程内禁止第二份抽帧实现**：不 ffmpeg 解码、不引入 cv2 / numpy；
+  解码与 JPEG 编码全部在采样器容器内完成
+- **如实边界**：`/sample` 的候选窗口来自 ffmpeg 场景检测；ONNX 人检测器已移除
+  （无消费方，如需再引入），因此当前 `/sample` 不是 person-aware 的
 
 ### 5.3 家庭日报生成
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any, Callable, Final, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -33,10 +32,6 @@ FRAME_SAMPLER_ENABLED: Final = "frame_sampler_enabled"
 FRAME_SAMPLER_URL: Final = "frame_sampler_url"
 FRAME_SAMPLER_TIMEOUT_SECONDS: Final = "frame_sampler_timeout_seconds"
 FRAME_SAMPLER_QUEUE_LIMIT: Final = "frame_sampler_queue_limit"
-FRAME_SAMPLER_MODEL_PATH: Final = "frame_sampler_model_path"
-FRAME_SAMPLER_CONF_THRESHOLD: Final = "frame_sampler_conf_threshold"
-FRAME_SAMPLER_TRACK_HIGH_THRESH: Final = "frame_sampler_track_high_thresh"
-FRAME_SAMPLER_MIN_AREA_RATIO: Final = "frame_sampler_min_area_ratio"
 FRAME_SAMPLING_SESSION_FRAME_LIMIT: Final = "frame_sampling_session_frame_limit"
 
 
@@ -94,29 +89,6 @@ def _non_negative_int(value: Any) -> int:
     return int(value)
 
 
-def _float(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise SystemConfigValidationError("configuration value must be a number")
-    number = float(value)
-    if not math.isfinite(number):
-        raise SystemConfigValidationError("configuration value must be a finite number")
-    return number
-
-
-def _unit_float(value: Any) -> float:
-    number = _float(value)
-    if number < 0.0 or number > 1.0:
-        raise SystemConfigValidationError("configuration value must be between 0 and 1")
-    return number
-
-
-def _positive_ratio_float(value: Any) -> float:
-    number = _float(value)
-    if number <= 0.0 or number > 1.0:
-        raise SystemConfigValidationError("configuration value must be in range (0, 1]")
-    return number
-
-
 REGISTRY: Final[dict[str, ConfigDefinition]] = {
     DAILY_SUMMARY_SCHEDULE: ConfigDefinition("10:00", _string),
     SCAN_INTERVAL_SECONDS: ConfigDefinition(300, _positive_int),
@@ -136,10 +108,6 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     FRAME_SAMPLER_URL: ConfigDefinition("", _optional_string),
     FRAME_SAMPLER_TIMEOUT_SECONDS: ConfigDefinition(120, _positive_int),
     FRAME_SAMPLER_QUEUE_LIMIT: ConfigDefinition(8, _positive_int),
-    FRAME_SAMPLER_MODEL_PATH: ConfigDefinition("", _optional_string),
-    FRAME_SAMPLER_CONF_THRESHOLD: ConfigDefinition(0.35, _unit_float),
-    FRAME_SAMPLER_TRACK_HIGH_THRESH: ConfigDefinition(0.45, _unit_float),
-    FRAME_SAMPLER_MIN_AREA_RATIO: ConfigDefinition(0.001, _positive_ratio_float),
     FRAME_SAMPLING_SESSION_FRAME_LIMIT: ConfigDefinition(0, _non_negative_int),
 }
 
