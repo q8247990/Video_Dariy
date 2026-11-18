@@ -4,6 +4,15 @@ import { useTranslation } from 'react-i18next'
 import type { Provider, ProviderCreate, ProviderUpdate } from '../../types/api'
 import { testProvider } from './api'
 import type { TestProviderResult } from './api'
+import {
+  applyPreset,
+  buildFrameSamplingExtraConfig,
+  draftFromExtraConfig,
+  emptyFramePolicyDraft,
+  estimatePreview,
+  isFramePolicyEmpty,
+} from './framePolicy'
+import type { FramePreset, FramePolicyDraft, FramePreview } from './framePolicy'
 
 type ProviderFormProps = {
   initialValue?: Provider
@@ -22,6 +31,7 @@ type FormState = {
   max_model_len: string
   max_output_tokens: string
   num_frames: string
+  frame_policy: FramePolicyDraft
   enabled: boolean
   supports_vision: boolean
   supports_qa: boolean
@@ -32,6 +42,11 @@ function readExtraString(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
   if (typeof value === 'string' && value.trim()) return value.trim()
   return ''
+}
+
+function readPositiveInt(raw: string): number | null {
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 function buildExtraConfigJson(
@@ -52,11 +67,18 @@ function buildExtraConfigJson(
       delete extra[key]
     }
   }
+  const frameSampling = buildFrameSamplingExtraConfig(form.frame_policy)
+  if (frameSampling === null) {
+    delete extra.frame_sampling
+  } else {
+    extra.frame_sampling = frameSampling
+  }
   return extra
 }
 
 function getInitialState(initialValue?: Provider): FormState {
   const extra: Record<string, unknown> = initialValue?.extra_config_json ?? {}
+  const rawFrameSampling: unknown = extra.frame_sampling
   return {
     provider_name: initialValue?.provider_name ?? '',
     api_base_url: initialValue?.api_base_url ?? '',
@@ -67,6 +89,10 @@ function getInitialState(initialValue?: Provider): FormState {
     max_model_len: readExtraString(extra.max_model_len),
     max_output_tokens: readExtraString(extra.max_output_tokens),
     num_frames: readExtraString(extra.num_frames) || '120',
+    frame_policy:
+      typeof rawFrameSampling === 'object' && rawFrameSampling !== null
+        ? draftFromExtraConfig(rawFrameSampling as Record<string, unknown>)
+        : emptyFramePolicyDraft(),
     enabled: initialValue?.enabled ?? true,
     supports_vision: initialValue?.supports_vision ?? false,
     supports_qa: initialValue?.supports_qa ?? true,
@@ -74,9 +100,82 @@ function getInitialState(initialValue?: Provider): FormState {
   }
 }
 
+// 其他任务会在 types/api.ts 的测试结果中补充 frame_plan（共享类型文件由他人维护，
+// 此处不动它）：用本地结构类型 + as unknown 防御性读取。
+type TestResultFramePlan = {
+  frames: number
+  tokens_per_image: number
+  budget_tokens: number
+  clamp_reason: string
+}
+
+function readTestFramePlan(result: TestProviderResult | null): TestResultFramePlan | null {
+  if (!result) {
+    return null
+  }
+  const candidate: unknown = (result as unknown as { frame_plan?: unknown }).frame_plan
+  if (typeof candidate !== 'object' || candidate === null) {
+    return null
+  }
+  const plan = candidate as Partial<TestResultFramePlan>
+  if (
+    typeof plan.frames !== 'number' ||
+    !Number.isFinite(plan.frames) ||
+    plan.frames <= 0 ||
+    typeof plan.tokens_per_image !== 'number' ||
+    !Number.isFinite(plan.tokens_per_image) ||
+    plan.tokens_per_image <= 0
+  ) {
+    return null
+  }
+  return plan as TestResultFramePlan
+}
+
+const CLAMP_REASON_I18N_KEYS: Record<NonNullable<FramePreview['clampReason']>, string> = {
+  budget: 'providers.frame_policy_clamp_budget',
+  max: 'providers.frame_policy_clamp_max',
+  duration: 'providers.frame_policy_clamp_duration',
+}
+
+type PolicyNumberFieldProps = {
+  label: string
+  hint: string
+  value: string
+  min?: number
+  max?: number
+  step?: number
+  onChange: (value: string) => void
+}
+
+function PolicyNumberField({
+  label,
+  hint,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: PolicyNumberFieldProps) {
+  return (
+    <label>
+      {label}
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <small className="text-muted">{hint}</small>
+    </label>
+  )
+}
+
 export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: ProviderFormProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState<FormState>(() => getInitialState(initialValue))
+  const [framePolicyOpen] = useState(() => !isFramePolicyEmpty(form.frame_policy))
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestProviderResult | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
@@ -86,6 +185,32 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
   )
   const capabilityError = !form.supports_vision && !form.supports_qa
   const apiKeyRequiredError = !initialValue && !form.api_key.trim()
+
+  const framePolicyActive = !isFramePolicyEmpty(form.frame_policy)
+  const testFramePlan = readTestFramePlan(testResult)
+  const preview = useMemo(
+    () =>
+      estimatePreview(
+        form.frame_policy,
+        readPositiveInt(form.max_model_len),
+        60,
+        640,
+        480,
+        readPositiveInt(form.max_output_tokens),
+      ),
+    [form.frame_policy, form.max_model_len, form.max_output_tokens],
+  )
+  const previewFrames = testFramePlan ? testFramePlan.frames : preview.frames
+  const previewTokensPerImage = testFramePlan
+    ? testFramePlan.tokens_per_image
+    : preview.tokensPerImage
+  const previewClampReason: string | null = testFramePlan
+    ? CLAMP_REASON_I18N_KEYS[testFramePlan.clamp_reason as keyof typeof CLAMP_REASON_I18N_KEYS]
+      ? t(CLAMP_REASON_I18N_KEYS[testFramePlan.clamp_reason as keyof typeof CLAMP_REASON_I18N_KEYS])
+      : null
+    : preview.clampReason
+      ? t(CLAMP_REASON_I18N_KEYS[preview.clampReason])
+      : null
 
   const handleTest = async () => {
     if (!initialValue) return
@@ -300,6 +425,227 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
           placeholder={t('providers.form_num_frames_placeholder')}
         />
       </label>
+
+      <details className="policy-block" open={framePolicyOpen}>
+        <summary>
+          <strong>{t('providers.frame_policy_title')}</strong>
+        </summary>
+        <div className="dialog-form">
+          <div className="text-muted">{t('providers.frame_policy_explainer')}</div>
+
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={form.frame_policy.enabled}
+              onChange={(event) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, enabled: event.target.checked },
+                }))
+              }
+            />
+            {t('providers.frame_policy_enabled')}
+          </label>
+
+          <label>
+            {t('providers.frame_policy_preset')}
+            <select
+              value={form.frame_policy.preset}
+              onChange={(event) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: applyPreset(old.frame_policy, event.target.value as FramePreset),
+                }))
+              }
+            >
+              <option value="baseline">{t('providers.frame_policy_preset_baseline')}</option>
+              <option value="dedupe">{t('providers.frame_policy_preset_dedupe')}</option>
+              <option value="event">{t('providers.frame_policy_preset_event')}</option>
+            </select>
+          </label>
+
+          <div className="inline-fields">
+            <PolicyNumberField
+              label={t('providers.frame_policy_target_context_ratio')}
+              hint={t('providers.frame_policy_hint_ratio', { value: 0.9 })}
+              value={form.frame_policy.target_context_ratio}
+              min={0.5}
+              max={1}
+              step={0.05}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, target_context_ratio: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_max_edge')}
+              hint={t('providers.frame_policy_hint_max_edge', { value: 640 })}
+              value={form.frame_policy.max_edge}
+              min={320}
+              max={1920}
+              step={32}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, max_edge: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_probe_fps')}
+              hint={t('providers.frame_policy_hint_probe_fps', { value: 2 })}
+              value={form.frame_policy.probe_fps}
+              min={0.25}
+              max={10}
+              step={0.25}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, probe_fps: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_min_frames')}
+              hint={t('providers.frame_policy_hint_min_frames', { value: 4 })}
+              value={form.frame_policy.min_frames}
+              min={1}
+              max={60}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, min_frames: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_max_frames')}
+              hint={t('providers.frame_policy_hint_max_frames', { value: 120 })}
+              value={form.frame_policy.max_frames}
+              min={1}
+              max={600}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, max_frames: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_jpeg_quality')}
+              hint={t('providers.frame_policy_hint_jpeg_quality', { value: 85 })}
+              value={form.frame_policy.jpeg_quality}
+              min={60}
+              max={95}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, jpeg_quality: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_dedupe_phash_distance')}
+              hint={t('providers.frame_policy_hint_dedupe', { value: 6 })}
+              value={form.frame_policy.dedupe_phash_distance}
+              min={1}
+              max={32}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, dedupe_phash_distance: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_window_pre_seconds')}
+              hint={t('providers.frame_policy_hint_window_pre', { value: 5 })}
+              value={form.frame_policy.window_pre_seconds}
+              min={0}
+              max={60}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, window_pre_seconds: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_window_post_seconds')}
+              hint={t('providers.frame_policy_hint_window_post', { value: 10 })}
+              value={form.frame_policy.window_post_seconds}
+              min={0}
+              max={120}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, window_post_seconds: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_max_event_windows')}
+              hint={t('providers.frame_policy_hint_max_event_windows', { value: 4 })}
+              value={form.frame_policy.max_event_windows}
+              min={1}
+              max={10}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, max_event_windows: value },
+                }))
+              }
+            />
+            <PolicyNumberField
+              label={t('providers.frame_policy_max_output_tokens')}
+              hint={t('providers.frame_policy_hint_max_output_tokens', { value: 4096 })}
+              value={form.frame_policy.max_output_tokens}
+              min={1}
+              step={1}
+              onChange={(value) =>
+                setForm((old) => ({
+                  ...old,
+                  frame_policy: { ...old.frame_policy, max_output_tokens: value },
+                }))
+              }
+            />
+          </div>
+
+          {framePolicyActive ? (
+            <div>
+              <strong>{t('providers.frame_policy_preview_title')}</strong>
+              {preview.note ? (
+                <div className="text-muted">
+                  {preview.note === 'no_max_model_len'
+                    ? t('providers.frame_policy_preview_no_context')
+                    : t('providers.frame_policy_preview_impossible')}
+                </div>
+              ) : (
+                <div className="text-muted">
+                  {t('providers.frame_policy_preview', {
+                    frames: previewFrames,
+                    tokens: previewFrames * previewTokensPerImage,
+                    output: preview.outputTokens,
+                  })}
+                  {previewClampReason ? ` — ${previewClampReason}` : ''}
+                </div>
+              )}
+              {testFramePlan ? (
+                <div className="text-muted">{t('providers.frame_policy_test_plan_note')}</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </details>
 
       <label className="checkbox-field">
         <input
