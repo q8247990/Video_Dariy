@@ -54,7 +54,7 @@ def test_default_value_table() -> None:
     policy = _policy(None)
     assert policy.mode == "event"
     assert policy.target_context_ratio == 0.9
-    assert policy.max_edge == 640
+    assert policy.max_edge == 2560
     assert policy.probe_fps == 2.0
     assert policy.min_frames == 4
     assert policy.max_frames == 120
@@ -210,8 +210,11 @@ def test_explicit_null_falls_back_to_default_without_raising() -> None:
         ("max_edge", -1, 320),
         ("max_edge", 350, 320),
         ("max_edge", 650, 640),
-        ("max_edge", 4000, 1920),
-        ("max_edge", 1910, 1888),
+        # 2560 is the 1440p box upper bound: clamped, never raised beyond it
+        ("max_edge", 4000, 2560),
+        ("max_edge", 2570, 2560),
+        # snapped down to a multiple of 32 (2550 % 32 = 22 -> 2528)
+        ("max_edge", 2550, 2528),
         ("probe_fps", 0.01, 0.25),
         ("probe_fps", 99, 10.0),
         ("min_frames", 0, 1),
@@ -249,7 +252,7 @@ def test_min_frames_clamped_down_to_max_frames() -> None:
     [
         ("target_context_ratio", "abc", 0.9),
         ("target_context_ratio", float("nan"), 0.9),
-        ("max_edge", "wide", 640),
+        ("max_edge", "wide", 2560),
         ("max_edge", -1, 320),
         ("probe_fps", "fast", 2.0),
         ("min_frames", True, 4),

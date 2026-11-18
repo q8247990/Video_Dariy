@@ -161,11 +161,12 @@ def _build_frame_plan_for_file(
     the ``TaskLog.detail_json["frame_plan"]`` payload persisted before the
     sampler call (``sampler_ms`` pending until the sampler returns).
 
-    The per-image token cost is the aspect-agnostic square worst case
+    The per-image token cost is the 1440p 16:9 box upper bound
     (:func:`conservative_tokens_per_image` over ``policy.max_edge``) — no
-    source-resolution probe: the sampler fits the long edge, so no frame can
-    cost more, and cheaper frames only leave budget headroom. The same
-    ``max_edge``-square is fed to :func:`compute_frame_plan` as both frame
+    source-resolution probe: the sampler does not scale sources inside the
+    ``max_edge`` box, so no frame can cost more than the box, and cheaper
+    frames only leave budget headroom. The same 16:9 box (``max_edge`` x
+    ``max_edge * 9 // 16``) is fed to :func:`compute_frame_plan` as the frame
     dimensions, so the recorded ``tokens_per_image`` equals
     ``plan.tokens_per_image`` exactly.
     """
@@ -181,7 +182,7 @@ def _build_frame_plan_for_file(
         duration_seconds=plan_item.duration_seconds,
         prompt_tokens_est=prompt_tokens_est,
         frame_width=policy.max_edge,
-        frame_height=policy.max_edge,
+        frame_height=policy.max_edge * 9 // 16,
         max_output_tokens=max_output_tokens,
         duration_source=plan_item.duration_source,
     )
@@ -189,7 +190,7 @@ def _build_frame_plan_for_file(
         "context_size": max_model_len,
         "max_model_len": max_model_len,
         "tokens_per_image": conservative_tokens_per_image(max_edge=policy.max_edge),
-        "tokens_assumption": "square_worst_case",
+        "tokens_assumption": "1440p_box_16x9",
         "prompt_tokens_est": prompt_tokens_est,
         "max_output_tokens": max_output_tokens,
         "frames": plan.frames,

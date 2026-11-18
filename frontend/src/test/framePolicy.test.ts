@@ -107,6 +107,19 @@ describe('framePolicy 序列化', () => {
     expect(out?.custom_key).toBe('keep-me')
   })
 
+  describe('max_edge 范围 320–2560', () => {
+    it('2560 / 320 边界值原样写出', () => {
+      expect(buildFrameSamplingExtraConfig({ ...emptyFramePolicyDraft(), enabled: true, max_edge: '2560' })?.max_edge).toBe(2560)
+      expect(buildFrameSamplingExtraConfig({ ...emptyFramePolicyDraft(), enabled: true, max_edge: '320' })?.max_edge).toBe(320)
+    })
+
+    it('超出 320–2560 的值被省略（不写出）', () => {
+      expect(buildFrameSamplingExtraConfig({ ...emptyFramePolicyDraft(), enabled: true, max_edge: '2561' })).not.toHaveProperty('max_edge')
+      expect(buildFrameSamplingExtraConfig({ ...emptyFramePolicyDraft(), enabled: true, max_edge: '319' })).not.toHaveProperty('max_edge')
+      expect(buildFrameSamplingExtraConfig({ ...emptyFramePolicyDraft(), enabled: true, max_edge: '4000' })).not.toHaveProperty('max_edge')
+    })
+  })
+
   it('未知键在 draft -> config -> draft 往返中保留', () => {
     const original = draftFromExtraConfig({
       enabled: true,

@@ -389,7 +389,7 @@
     "frame_policy_max_event_windows": "Max event windows",
     "frame_policy_max_output_tokens": "Output budget",
     "frame_policy_hint_ratio": "Between 0.5 and 1.0, default {{value}}",
-    "frame_policy_hint_max_edge": "Between 320 and 1920 (multiple of 32), default {{value}}",
+    "frame_policy_hint_max_edge": "Between 320 and 2560 (multiple of 32): no downscale at or below 1440p; lowering it downscales; default {{value}}",
     "frame_policy_hint_probe_fps": "Between 0.25 and 10, default {{value}}",
     "frame_policy_hint_min_frames": "Between 1 and 60, default {{value}}",
     "frame_policy_hint_max_frames": "Between 1 and 600, default {{value}}",

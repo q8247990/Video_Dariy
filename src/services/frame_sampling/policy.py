@@ -18,6 +18,31 @@ a mode (``baseline`` -> ``uniform``) with a one-line warning; an explicit
 :mod:`src.services.provider_generation_limits`): malformed values are never
 fatal — they are logged as a warning and replaced by the next fallback layer.
 A clamped/ignored value is always logged via ``logging``.
+
+Numeric bounds (clamped; ``max_edge`` additionally snapped down to a
+multiple of 32) and their built-in defaults:
+
+- ``mode``: ``uniform`` / ``dedupe`` / ``event`` (default ``event``)
+- ``target_context_ratio``: ``[0.5, 1.0]`` (default ``0.9``)
+- ``max_edge``: ``[320, 2560]`` (default ``2560``)
+- ``probe_fps``: ``[0.25, 10.0]`` (default ``2.0``)
+- ``min_frames``: ``[1, 60]`` (default ``4``)
+- ``max_frames``: ``[1, 600]`` (default ``120``)
+- ``jpeg_quality``: ``[60, 95]`` (default ``85``)
+- ``dedupe_phash_distance``: ``[1, 32]``, ``None`` = no dedupe (default ``None``)
+- ``window_pre_seconds``: ``[0.0, 60.0]`` (default ``5.0``)
+- ``window_post_seconds``: ``[0.0, 120.0]`` (default ``10.0``)
+- ``max_event_windows``: ``[1, 10]`` (default ``4``)
+- ``max_output_tokens``: positive int (default ``2048``)
+- ``enabled``: strict bool (default ``True``)
+
+``max_edge`` semantics (ADR 0014): the sampler supports sources up to the
+``2560 x 1440`` box and does **not** scale inside it — a source at or below
+the box passes through unchanged, and a larger source is rejected by default
+(opt-in downscale only when ``max_edge`` is set below 2560). The built-in
+default of 2560 is therefore the box upper bound; the token budget charges
+the 16:9 box at that edge (3600 tokens at the default, see
+:func:`src.services.frame_sampling.budget.conservative_tokens_per_image`).
 """
 
 from __future__ import annotations
@@ -64,7 +89,7 @@ class FramePolicy:
 
     mode: SamplingMode = "event"
     target_context_ratio: float = 0.9
-    max_edge: int = 640
+    max_edge: int = 2560
     probe_fps: float = 2.0
     min_frames: int = 4
     max_frames: int = 120
@@ -209,9 +234,13 @@ def _resolve_mode(config: dict[str, Any]) -> SamplingMode:
 
 
 def _resolve_max_edge(pick: PickFn) -> int:
-    """``max_edge`` clamped to ``[320, 1920]`` and snapped down to a 32 multiple."""
+    """``max_edge`` clamped to ``[320, 2560]`` and snapped down to a 32 multiple.
+
+    2560 is the 1440p box upper bound (the sampler does not scale inside it;
+    see the module docstring / ADR 0014).
+    """
     max_edge = _bounded_int(
-        "max_edge", pick("max_edge"), low=320, high=1920, default=_BUILTIN.max_edge
+        "max_edge", pick("max_edge"), low=320, high=2560, default=_BUILTIN.max_edge
     )
     snapped = max_edge - (max_edge % MAX_EDGE_ALIGNMENT)
     if snapped != max_edge:

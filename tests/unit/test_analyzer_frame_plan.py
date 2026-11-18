@@ -14,7 +14,7 @@ Covers:
 
 * image mode — the frame port is called exactly once per file, the gateway
   receives ``2*N + 1`` interleaved parts, and ``frame_plan`` records every
-  budget key with ``tokens_assumption == "square_worst_case"`` and a filled
+  budget key with ``tokens_assumption == "1440p_box_16x9"`` and a filled
   ``sampler_ms``;
 * sampler failure — no LLM call, checkpoint ``error`` + session ``partial``,
   zero events, and the pre-sampler ``frame_plan`` survives (``sampler_ms``
@@ -337,11 +337,17 @@ def _write_video_file(path: Path, name: str, payload: bytes = b"\x00\x01fake-mp4
 # ---------------------------------------------------------------------------
 
 
-def test_conservative_tokens_per_image_is_square_worst_case() -> None:
-    assert conservative_tokens_per_image(max_edge=MAX_EDGE) == (MAX_EDGE // 32) ** 2
-    assert conservative_tokens_per_image(max_edge=320) == 100
-    # Never 0 even below one tile edge.
-    assert conservative_tokens_per_image(max_edge=31) == 1
+def test_conservative_tokens_per_image_is_1440p_box_upper_bound() -> None:
+    # 16:9 box bound: (max_edge // 32) * ((max_edge * 9 // 16) // 32)
+    assert conservative_tokens_per_image(max_edge=MAX_EDGE) == (MAX_EDGE // 32) * (
+        (MAX_EDGE * 9 // 16) // 32
+    )
+    assert conservative_tokens_per_image(max_edge=2560) == 3600
+    assert conservative_tokens_per_image(max_edge=320) == 50
+    # one tile wide, less than one 16:9 row -> still >= 1
+    assert conservative_tokens_per_image(max_edge=32) == 1
+    with pytest.raises(ValueError):
+        conservative_tokens_per_image(max_edge=31)  # below one tile edge
     with pytest.raises(ValueError):
         conservative_tokens_per_image(max_edge=0)
     with pytest.raises(ValueError):
@@ -414,7 +420,7 @@ def test_image_mode_records_frame_plan_and_sends_interleaved_frames(
         assert frame_plan["max_model_len"] == MAX_MODEL_LEN
         assert frame_plan["tokens_per_image"] == conservative_tokens_per_image(max_edge=MAX_EDGE)
         assert frame_plan["tokens_per_image"] == plan.tokens_per_image
-        assert frame_plan["tokens_assumption"] == "square_worst_case"
+        assert frame_plan["tokens_assumption"] == "1440p_box_16x9"
         assert isinstance(frame_plan["prompt_tokens_est"], int)
         assert frame_plan["prompt_tokens_est"] >= 800
         assert frame_plan["max_output_tokens"] == MAX_OUTPUT_TOKENS
@@ -491,7 +497,7 @@ def test_image_mode_sampler_failure_keeps_frame_plan_and_marks_partial(
         frame_plan = task_log.detail_json["frame_plan"]
         assert frame_plan["sampler_ms"] is None
         assert "frame_source" not in frame_plan
-        assert frame_plan["tokens_assumption"] == "square_worst_case"
+        assert frame_plan["tokens_assumption"] == "1440p_box_16x9"
         assert frame_plan["frames"] >= 2
     finally:
         verify_db.close()

@@ -227,7 +227,7 @@ export function buildFrameSamplingExtraConfig(
 
   const ratio = inFloatRange(draft.target_context_ratio, 0.5, 1.0)
   if (ratio !== null) out.target_context_ratio = ratio
-  const maxEdge = inIntRange(draft.max_edge, 320, 1920)
+  const maxEdge = inIntRange(draft.max_edge, 320, 2560)
   if (maxEdge !== null) out.max_edge = maxEdge
   const probeFps = inFloatRange(draft.probe_fps, 0.25, 10)
   if (probeFps !== null) out.probe_fps = probeFps

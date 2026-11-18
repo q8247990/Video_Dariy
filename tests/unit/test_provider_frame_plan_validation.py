@@ -101,11 +101,11 @@ def test_image_mode_rejects_impossible_plan_with_remedies() -> None:
     assert "raise max_model_len" in message
     assert "lower max_output_tokens" in message
     assert "lower min_frames" in message
-    # the computed numbers
+    # the computed numbers (1440p box bound: 3600 tokens/frame)
     assert "max_model_len=8192" in message
     assert "max_output_tokens=8192" in message
     assert "min_frames=8" in message
-    assert "tokens_per_image=300" in message
+    assert "tokens_per_image=3600" in message
     assert "budget_tokens=-1620" in message
 
 
@@ -115,9 +115,31 @@ def test_legal_image_provider_returns_frame_plan() -> None:
     )
     assert isinstance(plan, FramePlan)
     assert plan.frames > 0
-    assert plan.frames == 120  # max_frames ceiling (budget allows 180, duration allows 120)
-    assert plan.tokens_per_image == 300
+    # 65536 ctx, 1440p box (3600 tokens/frame): budget 54086 // 3600 = 15
+    # (>= min_frames 4 -> the representative plan still fits 65K)
+    assert plan.frames == 15
+    assert plan.tokens_per_image == 3600
+    assert plan.clamp_reason == "budget"
     assert len(plan.timestamps) == plan.frames
+
+
+def test_8k_context_provider_rejected_by_default_box() -> None:
+    # 8K ctx with the default 1440p box: usable 7372, budget 7372-800-4096 = 2476,
+    # 2476 // 3600 = 0 < min_frames 4 -> FramePlanImpossible -> business error
+    error = None
+    try:
+        validate_image_frame_plan(
+            {"extra_config_json": {"max_model_len": 8192, "frame_sampling": {}}}
+        )
+    except DomainError as exc:
+        error = exc
+    assert error is not None
+    message = str(error)
+    assert "tokens_per_image=3600" in message
+    assert "budget_tokens=2476" in message
+    assert "raise max_model_len" in message
+    assert "lower max_output_tokens" in message
+    assert "lower min_frames" in message
 
 
 # ---------------------------------------------------------------------------

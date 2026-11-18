@@ -874,7 +874,7 @@ def test_image_mode_pins_image_payload_and_frame_plan_on_postgres(
         frame_plan = task_log.detail_json["frame_plan"]
         assert frame_plan["context_size"] == IMAGE_MODE_MAX_MODEL_LEN
         assert frame_plan["max_model_len"] == IMAGE_MODE_MAX_MODEL_LEN
-        assert frame_plan["tokens_assumption"] == "square_worst_case"
+        assert frame_plan["tokens_assumption"] == "1440p_box_16x9"
         assert isinstance(frame_plan["frames"], int)
         assert frame_plan["frames"] >= 2
         assert frame_plan["duration_seconds"] == 60
@@ -947,5 +947,5 @@ def test_image_mode_sampler_failure_pins_zero_events_on_postgres(
         frame_plan = task_log.detail_json["frame_plan"]
         assert frame_plan["sampler_ms"] is None
         assert "frame_source" not in frame_plan
-        assert frame_plan["tokens_assumption"] == "square_worst_case"
+        assert frame_plan["tokens_assumption"] == "1440p_box_16x9"
         assert frame_plan["frames"] >= 2

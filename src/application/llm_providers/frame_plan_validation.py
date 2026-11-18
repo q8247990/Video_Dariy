@@ -54,8 +54,9 @@ def validate_image_frame_plan(provider_data: Any) -> FramePlan | None:
     * Image-mode providers must carry a configured ``max_model_len``; a
       missing / zero value is a business error (a default context is never
       assumed).
-    * The representative clip (60 s, 640x480, 800 prompt tokens) must fit the
-      budget; :class:`~src.services.frame_sampling.budget.FramePlanImpossible`
+    * The representative clip (60 s, a frame at the 1440p 16:9 box bound,
+      800 prompt tokens) must fit the budget;
+      :class:`~src.services.frame_sampling.budget.FramePlanImpossible`
       becomes a business error listing the computed numbers and exactly three
       remedies (raise ``max_model_len``, lower ``max_output_tokens``, lower
       ``min_frames``).

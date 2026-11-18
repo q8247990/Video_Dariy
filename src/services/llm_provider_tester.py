@@ -34,10 +34,10 @@ from src.services.frame_sampling.budget import (
     FramePlan,
     FramePlanImpossible,
     compute_frame_plan,
+    conservative_tokens_per_image,
 )
 from src.services.frame_sampling.mode import INPUT_MODE_IMAGE, resolve_input_mode
 from src.services.frame_sampling.policy import parse_frame_policy
-from src.services.frame_sampling.tokens import estimate_image_tokens, fit_long_edge
 from src.services.provider_generation_limits import (
     get_generation_limits,
     resolve_image_output_tokens,
@@ -46,14 +46,15 @@ from src.services.provider_generation_limits import (
 logger = logging.getLogger(__name__)
 
 # Representative worst-case clip used to validate the image frame plan at
-# provider create / update / test time. One typical surveillance file (60 s of
-# 640x480 source) with an 800-token analysis prompt is the largest realistic
-# single vision call in this pipeline (one file = one sub-chunk), so a plan
-# that cannot afford it will also fail on real files — reject it up front
-# instead of letting the first analysis run burn the context window.
+# provider create / update / test time. One typical surveillance file (60 s)
+# with an 800-token analysis prompt and a frame at the 1440p 16:9 box bound
+# (the sampler passes sources up to max_edge x max_edge*9//16 through
+# unscaled, so the box is the largest frame the plan can receive) is the
+# largest realistic single vision call in this pipeline (one file = one
+# sub-chunk), so a plan that cannot afford it will also fail on real files —
+# reject it up front instead of letting the first analysis run burn the
+# context window.
 REPRESENTATIVE_CLIP_SECONDS: float = 60.0
-REPRESENTATIVE_SOURCE_WIDTH: int = 640
-REPRESENTATIVE_SOURCE_HEIGHT: int = 480
 REPRESENTATIVE_PROMPT_TOKENS: int = 800
 
 
@@ -91,8 +92,8 @@ def check_image_frame_plan(provider: Any) -> FramePlan | None:
         policy=policy,
         duration_seconds=REPRESENTATIVE_CLIP_SECONDS,
         prompt_tokens_est=REPRESENTATIVE_PROMPT_TOKENS,
-        frame_width=REPRESENTATIVE_SOURCE_WIDTH,
-        frame_height=REPRESENTATIVE_SOURCE_HEIGHT,
+        frame_width=policy.max_edge,
+        frame_height=policy.max_edge * 9 // 16,
         max_output_tokens=max_output_tokens,
     )
 
@@ -108,10 +109,7 @@ def frame_plan_error_message(provider: Any, error: Exception) -> str:
         context_size = get_generation_limits(provider).max_model_len
         policy = parse_frame_policy(provider)
         max_output_tokens = resolve_image_output_tokens(provider)
-        fitted = fit_long_edge(
-            REPRESENTATIVE_SOURCE_WIDTH, REPRESENTATIVE_SOURCE_HEIGHT, policy.max_edge
-        )
-        tokens_per_image = estimate_image_tokens(fitted[0], fitted[1])
+        tokens_per_image = conservative_tokens_per_image(max_edge=policy.max_edge)
         usable = int(context_size * policy.target_context_ratio)
         budget_tokens = usable - REPRESENTATIVE_PROMPT_TOKENS - max_output_tokens
         return (

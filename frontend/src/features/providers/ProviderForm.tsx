@@ -430,10 +430,10 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
             />
             <PolicyNumberField
               label={t('providers.frame_policy_max_edge')}
-              hint={t('providers.frame_policy_hint_max_edge', { value: 640 })}
+              hint={t('providers.frame_policy_hint_max_edge', { value: 2560 })}
               value={form.frame_policy.max_edge}
               min={320}
-              max={1920}
+              max={2560}
               step={32}
               onChange={(value) =>
                 setForm((old) => ({

@@ -69,9 +69,9 @@ def test_image_provider_reachable_returns_frame_plan_preview() -> None:
         == result.frame_plan["frames"] * result.frame_plan["tokens_per_image"]
     )
     # matches the plan the create / update validation computes (65536 ctx,
-    # 60 s representative clip): max_frames ceiling bounds the budget
-    assert result.frame_plan["frames"] == 120
-    assert result.frame_plan["tokens_per_image"] == 300
+    # 60 s representative clip at the 1440p box): budget 54086 // 3600 = 15
+    assert result.frame_plan["frames"] == 15
+    assert result.frame_plan["tokens_per_image"] == 3600
     assert result.frame_plan["max_output_tokens"] == 4096
     assert result.frame_plan["clamp_reason"] in {"budget", "max", "duration"}
 

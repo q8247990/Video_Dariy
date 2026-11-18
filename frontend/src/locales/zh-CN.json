@@ -389,7 +389,7 @@
     "frame_policy_max_event_windows": "事件窗口数上限",
     "frame_policy_max_output_tokens": "输出预算",
     "frame_policy_hint_ratio": "取值 0.5–1.0，默认 {{value}}",
-    "frame_policy_hint_max_edge": "取值 320–1920（32 的倍数），默认 {{value}}",
+    "frame_policy_hint_max_edge": "取值 320–2560（32 的倍数）：≤1440p 不缩放；调低才会降采样；默认 {{value}}",
     "frame_policy_hint_probe_fps": "取值 0.25–10，默认 {{value}}",
     "frame_policy_hint_min_frames": "取值 1–60，默认 {{value}}",
     "frame_policy_hint_max_frames": "取值 1–600，默认 {{value}}",

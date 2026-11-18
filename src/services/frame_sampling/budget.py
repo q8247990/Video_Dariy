@@ -152,21 +152,31 @@ def compute_frame_plan(
 
 
 def conservative_tokens_per_image(*, max_edge: int) -> int:
-    """Aspect-agnostic worst-case token cost of one sampled frame.
+    """1440p 16:9 box upper-bound token cost of one sampled frame.
 
-    The sampler fits the long edge to ``policy.max_edge``
-    (:func:`src.services.frame_sampling.tokens.fit_long_edge`), so for any
-    aspect ratio both fitted edges are ``<= max_edge`` and the tile count is
-    ``<= (max_edge // TILE_EDGE) ** 2``. That square upper bound is what a
-    plan may safely charge per image **without probing the source
-    resolution** — cheaper frames only leave budget headroom, they never
-    overspend.
+    The sampler supports sources up to the ``max_edge x (max_edge * 9 // 16)``
+    box and does **not** scale inside it (sources above the box are rejected
+    by default; only an explicit ``max_edge < 2560`` opts into downscaling).
+    The largest frame any plan can therefore receive is the 16:9 box itself,
+    so the per-image token cost a plan may charge **without probing the
+    source resolution** is
+
+    ``tok/img = (max_edge // 32) * ((max_edge * 9 // 16) // 32)``
+
+    — 3600 at the default ``max_edge = 2560``. Cheaper frames (smaller
+    sources, or a 16:9-tilted box with a lower ``max_edge``) only leave
+    budget headroom, they never overspend.
+
+    Supersedes the earlier aspect-agnostic square worst case
+    (``(max_edge // 32) ** 2`` with a 640 default): the square bound
+    under-charged wide boxes and the 640 default was too small for sources
+    the sampler now passes through unscaled.
     """
     if isinstance(max_edge, bool) or not isinstance(max_edge, int):
         raise ValueError(f"max_edge must be an int, got {max_edge!r}")
-    if max_edge <= 0:
-        raise ValueError(f"max_edge must be > 0, got {max_edge}")
-    return max(1, (max_edge // TILE_EDGE) ** 2)
+    if max_edge < TILE_EDGE:
+        raise ValueError(f"max_edge must be >= {TILE_EDGE}, got {max_edge}")
+    return max(1, (max_edge // TILE_EDGE) * ((max_edge * 9 // 16) // TILE_EDGE))
 
 
 def estimate_prompt_tokens(*texts: str) -> int:
