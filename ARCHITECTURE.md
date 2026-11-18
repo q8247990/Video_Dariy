@@ -290,14 +290,16 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 - `src/services/session_analysis_video.py`
 - `src/services/video_analysis/output_parser.py`
 - `src/services/video_analysis/mapper.py`
+- `src/services/frame_sampling/`（图像输入模式：模式判定、策略解析、帧预算推导、帧集合指纹）
+- `sampler/`（进程外抽帧服务，FastAPI，独立容器）
 
 流程：
 
 1. 任务只允许从 `SEALED` 状态抢占为 `ANALYZING`
 2. 按文件切分：session 内每个视频文件恰好对应一个 sub-chunk，一次 LLM 调用；不合并、不切割（历史的两级切块 600s→60s 已删除）
-3. LLM 载荷固定为 `raw_mp4`：直接将单文件 mp4 base64 传给视觉模型，并通过 `media_io_kwargs.video.num_frames` 请求服务端均匀采样（默认 120，可由模型服务 `extra_config_json.num_frames` 配置，范围 1–600）。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径，也不再做跨文件 concat。
-4. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`）
-5. 调用兼容 OpenAI 的视觉模型（payload 通过 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`）
+3. 按 provider 输入模式构造 LLM 载荷：视频 provider 固定 `raw_mp4`（单文件 mp4 base64 + `media_io_kwargs.video.num_frames`，默认 120，可由模型服务 `extra_config_json.num_frames` 配置，范围 1–600，服务端均匀采样）；图像 provider 走帧抽帧路径（见下「视觉输入模式」）。客户端不再保留关键帧解码、MAD/pHash 或 JPEG 预处理路径，也不再做跨文件 concat。
+4. 为每个 sub-chunk 构造 LLM Prompt（保留 sub-chunk 偏移，`base_offset_seconds = sub_chunk.start_offset_seconds`；图像模式额外注入帧时间戳清单）
+5. 调用兼容 OpenAI 的视觉模型（视频模式经 `chat_completion(..., extra_body={...})` 注入 `media_io_kwargs`；图像模式为图文交错 payload，`extra_body` 为空）
 6. 解析返回 JSON，转换为多个 `EventRecord`（`offset` 相对 session 起始时间，非负）
 7. 覆盖替换该 Session 历史事件
 8. 汇总片段摘要并回写到 `VideoSession`
@@ -322,6 +324,26 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 - token quota 检查与 token usage 记录
 - 死锁重试与分析状态回滚
 - 失败时保留原始模型返回摘要片段，方便排查
+
+视觉输入模式（raw_mp4 / 图像抽帧，见 ADR `docs/adr/0014-image-input-and-frame-sampling.md`）：
+
+- **模式判定**：`resolve_input_mode` 读 `LLMProvider.extra_config_json.frame_sampling`；存在该键且 `enabled`
+  缺省或为 `true` 走图像模式，缺失或畸形配置一律回落视频模式（不抛错）
+- **图像数据流**：每模型抽帧策略（`extra_config_json.frame_sampling`，预设 `baseline` / `dedupe` /
+  `event` 只是默认值包）→ 帧预算推导（`compute_frame_plan`：上下文 × `target_context_ratio` 扣除
+  prompt 与输出预算后除以单图 token，四道闸门夹紧，时间戳全段等间隔）→ 进程外采样器
+  `POST /sample`（ffmpeg 按 `probe_fps` 解码、在预算内选帧、长边缩放到 `max_edge`、JPEG 编码）→
+  图文交错 payload（`text("帧 i/N — t=X.Xs")` 与 `data:image/jpeg;base64` 交替，共 `2N+1` 个 part）→
+  输出解析为与视频模式同构的 `EventRecord`（offset 对齐到帧时刻，绝对时间公式不变）
+- **文件粒度不变**：一文件 = 一 sub-chunk = 一次 LLM 调用；不合并、不裁剪、不切片
+- **无降级链**：图像模式对采样器是硬依赖，没有本地 ffmpeg 兜底、均匀兜底或 `degraded` 标记；
+  采样器失败 ⇒ 该文件调用失败 ⇒ Session 落 `PARTIAL` / `FAILED`。不对采样器故障做自动重试
+  （现有自动重试只覆盖 PG 死锁与 lease 超时），由人工 `POST /api/v1/tasks/analyze/{session_id}` 重触发
+- **backend 进程内禁止第二份抽帧实现**：不 ffmpeg 解码、不引入 cv2 / numpy / onnxruntime；
+  解码、JPEG 编码与（未来的）ONNX 推理全部在采样器容器内完成
+- **如实边界**：`/sample` 的候选窗口当前来自 ffmpeg 场景检测；ONNX 人检测（`sampler/app/detector.py`）
+  与 IoU 跟踪（`sampler/app/tracker.py`）已实现并有单元测试，但尚未接入 `/sample`，
+  因此当前 `/sample` 不是 person-aware 的
 
 ### 5.3 家庭日报生成
 
@@ -450,7 +472,7 @@ DailySummary 1 --- 1 summary_date
 
 ### 7.1 Docker Compose 服务
 
-`docker-compose.yml` 定义了以下服务（4 容器拓扑）：
+`docker-compose.yml` 定义了以下服务（5 容器拓扑，`sampler` 走 compose profile `sampler`）：
 
 - `postgres`
   - PostgreSQL 17
@@ -464,6 +486,14 @@ DailySummary 1 --- 1 summary_date
     - `beat`：定时派发心跳与日报任务（单实例）
 - `frontend`
   - Nginx 托管前端静态资源并代理后端接口
+- `sampler`（compose profile `sampler`，图像输入模式启用）
+  - 进程外抽帧服务：独立 FastAPI 容器，ffmpeg 解码 + ONNX 运行时
+  - `GET /healthz`（存活 / 模型加载状态 / 版本）与 `POST /sample`（白名单视频抽帧，
+    返回 base64 JPEG 帧与场景候选窗口）
+  - 只读挂载视频根目录，`SAMPLER_ALLOWED_ROOTS` 白名单限制可读路径；不接 Postgres / Redis
+  - 候选窗口当前来自 ffmpeg 场景检测；ONNX 人检测 / 跟踪已实现并有单测，但尚未接入 `/sample`
+  - 注：`docker-compose.yml` 的接线随部署任务（todo 32）落地，当前文件尚未包含该服务定义，
+    按上述拓扑以 `--profile sampler` 启用
 
 ### 7.2 容器启动要点
 

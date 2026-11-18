@@ -99,7 +99,8 @@ vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
 
 ### Docker Compose 全栈部署（推荐）
 
-`docker-compose.yml` 包含以下服务（4 容器拓扑）：
+`docker-compose.yml` 包含以下服务（5 容器拓扑，其中 `sampler` 属 compose profile `sampler`，
+随部署任务 todo 32 接入 compose；当前文件尚未包含该服务定义）：
 
 | 服务 | 说明 |
 |------|------|
@@ -107,6 +108,7 @@ vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
 | redis | Celery 消息队列 |
 | backend | FastAPI 后端，supervisord 托管 uvicorn、两个 celery worker 与 beat（见 `supervisord.conf`） |
 | frontend | React 前端 + Nginx 反代 |
+| sampler | 进程外抽帧服务（profile `sampler`，图像输入模式启用，见下方"图像输入与抽帧"） |
 
 ```bash
 docker compose up --build -d    # 启动
@@ -124,6 +126,66 @@ bash scripts/package_release.sh --tag v1.0.0
 ```
 
 输出位于 `output/<tag>/`，包含镜像包和精简版 `docker-compose.yml`，用户只需修改一处视频目录挂载即可运行。
+
+### 图像输入与抽帧（frame sampling）
+
+视觉分析支持两种输入模式，按模型（provider）配置决定，互不混用（决策见 ADR 0014
+`docs/adr/0014-image-input-and-frame-sampling.md`）：
+
+- **视频模式（raw_mp4，默认）**：未配置抽帧的 provider 保持现状，整段 mp4 交给视频能力模型。
+- **图像模式（frame sampling）**：面向只支持图像输入的后端（如 Strata）。在 provider 的
+  `extra_config_json.frame_sampling` 中配置抽帧策略（预设 `baseline` / `dedupe` / `event`
+  只是默认值包，键可单独覆盖：`target_context_ratio` / `max_edge` / `probe_fps` /
+  `min_frames` / `max_frames` / `jpeg_quality` / `dedupe_phash_distance` /
+  `window_pre_seconds` / `window_post_seconds` / `max_event_windows` /
+  `max_output_tokens` / `enabled`）。帧数不是固定档位，而是由上下文预算推导：
+  （上下文 × 比例 − prompt − 输出预算）÷ 单图 token，四道闸门夹紧（预算、`min_frames`、
+  `max_frames`、时长上限），时间戳全段等间隔；预算装不下 `min_frames` 时保存 / 测试即
+  拒绝（fail fast，不静默降质）。
+
+图像模式由进程外采样器服务完成抽帧：ffmpeg 解码 → 在帧预算内选帧（`uniform` / `dedupe` /
+`event` 三种策略）→ 返回带时间戳的 JPEG 帧；后端把图文交错（每帧一个 `t=X.Xs` 时间戳标签）
+发给图像 LLM，输出仍解析为与视频模式同构的 `EventRecord`（offset 对齐到帧时刻，绝对时间
+公式与日报 / 问答 / MCP 契约不变）。文件粒度两条路径一致：一文件 = 一 sub-chunk =
+一次 LLM 调用。注意：`/sample` 的候选窗口当前来自 ffmpeg 场景检测；ONNX 人检测与跟踪
+已实现并有单测，但尚未接入 `/sample`。
+
+配置分两层（零迁移）：
+
+- 每模型抽帧策略：`LLMProvider.extra_config_json.frame_sampling`（设置页 → 模型连接）
+- 采样器 / YOLO 运行时：系统配置 `frame_sampler_enabled` / `frame_sampler_url` /
+  `frame_sampler_timeout_seconds`（默认 120）/ `frame_sampler_queue_limit`（默认 8）/
+  `frame_sampler_model_path` / `frame_sampler_conf_threshold` /
+  `frame_sampler_track_high_thresh` / `frame_sampler_min_area_ratio`（设置页 → 系统配置）
+
+采样器服务环境变量：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `SAMPLER_ALLOWED_ROOTS` | 空 | 冒号分隔的绝对路径白名单，服务只可读这些根目录内的文件；空 = 拒绝一切请求 |
+| `SAMPLER_MODEL_PATH` | 空 | ONNX 检测模型文件绝对路径；缺失时服务仍启动，`/healthz` 报 `model_loaded: false` |
+| `SAMPLER_PORT` | 18080 | 监听端口（另有 `SAMPLER_HOST`，默认 `0.0.0.0`） |
+
+构建与运行（compose 接线以 profile `sampler` 交付：`docker compose --profile sampler up -d`
+启用；独立运行时）：
+
+```bash
+docker build -t video-dairy-sampler ./sampler
+docker run --rm -d --name fs-sampler \
+  -p 18080:18080 \
+  -v /path/to/videos:/videos:ro \
+  -e SAMPLER_ALLOWED_ROOTS=/videos \
+  video-dairy-sampler
+curl -s localhost:18080/healthz
+```
+
+视频根目录必须只读挂载；采样器不写盘、不接 Postgres / Redis，后端进程也不引入
+ffmpeg 解码 / cv2 / numpy / onnxruntime。
+
+失败语义（无降级链）：图像模式对采样器是硬依赖。没有本地 ffmpeg 兜底、没有均匀兜底、
+没有 `degraded` 标记；采样器不可用 ⇒ 该文件调用失败 ⇒ Session 落 `PARTIAL` / `FAILED`。
+系统不会自动重试采样器故障（自动重试只覆盖 PG 死锁与 lease 超时），需人工
+`POST /api/v1/tasks/analyze/{session_id}` 重触发。
 
 ### 配置参考
 
