@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Final, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -28,6 +29,16 @@ MEDIA_SEGMENT_TTL_SECONDS: Final = "media_segment_ttl_seconds"
 MEDIA_ENTITY_IMAGE_TTL_SECONDS: Final = "media_entity_image_ttl_seconds"
 HOME_TIMEZONE: Final = "home_timezone"
 
+FRAME_SAMPLER_ENABLED: Final = "frame_sampler_enabled"
+FRAME_SAMPLER_URL: Final = "frame_sampler_url"
+FRAME_SAMPLER_TIMEOUT_SECONDS: Final = "frame_sampler_timeout_seconds"
+FRAME_SAMPLER_QUEUE_LIMIT: Final = "frame_sampler_queue_limit"
+FRAME_SAMPLER_MODEL_PATH: Final = "frame_sampler_model_path"
+FRAME_SAMPLER_CONF_THRESHOLD: Final = "frame_sampler_conf_threshold"
+FRAME_SAMPLER_TRACK_HIGH_THRESH: Final = "frame_sampler_track_high_thresh"
+FRAME_SAMPLER_MIN_AREA_RATIO: Final = "frame_sampler_min_area_ratio"
+FRAME_SAMPLING_SESSION_FRAME_LIMIT: Final = "frame_sampling_session_frame_limit"
+
 
 class SystemConfigValidationError(ValueError):
     """Raised when an update is not part of the typed configuration contract."""
@@ -37,8 +48,8 @@ class SystemConfigValidationError(ValueError):
 class ConfigDefinition:
     """One validated configuration key with a typed default."""
 
-    default: str | int | bool
-    parser: Callable[[Any], str | int | bool]
+    default: str | int | float | bool
+    parser: Callable[[Any], str | int | float | bool]
 
 
 def _string(value: Any) -> str:
@@ -83,6 +94,29 @@ def _non_negative_int(value: Any) -> int:
     return int(value)
 
 
+def _float(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SystemConfigValidationError("configuration value must be a number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise SystemConfigValidationError("configuration value must be a finite number")
+    return number
+
+
+def _unit_float(value: Any) -> float:
+    number = _float(value)
+    if number < 0.0 or number > 1.0:
+        raise SystemConfigValidationError("configuration value must be between 0 and 1")
+    return number
+
+
+def _positive_ratio_float(value: Any) -> float:
+    number = _float(value)
+    if number <= 0.0 or number > 1.0:
+        raise SystemConfigValidationError("configuration value must be in range (0, 1]")
+    return number
+
+
 REGISTRY: Final[dict[str, ConfigDefinition]] = {
     DAILY_SUMMARY_SCHEDULE: ConfigDefinition("10:00", _string),
     SCAN_INTERVAL_SECONDS: ConfigDefinition(300, _positive_int),
@@ -98,16 +132,25 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     MEDIA_SEGMENT_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
     MEDIA_ENTITY_IMAGE_TTL_SECONDS: ConfigDefinition(1_800, _positive_int),
     HOME_TIMEZONE: ConfigDefinition("Asia/Shanghai", _iana_timezone),
+    FRAME_SAMPLER_ENABLED: ConfigDefinition(False, _bool),
+    FRAME_SAMPLER_URL: ConfigDefinition("", _optional_string),
+    FRAME_SAMPLER_TIMEOUT_SECONDS: ConfigDefinition(120, _positive_int),
+    FRAME_SAMPLER_QUEUE_LIMIT: ConfigDefinition(8, _positive_int),
+    FRAME_SAMPLER_MODEL_PATH: ConfigDefinition("", _optional_string),
+    FRAME_SAMPLER_CONF_THRESHOLD: ConfigDefinition(0.35, _unit_float),
+    FRAME_SAMPLER_TRACK_HIGH_THRESH: ConfigDefinition(0.45, _unit_float),
+    FRAME_SAMPLER_MIN_AREA_RATIO: ConfigDefinition(0.001, _positive_ratio_float),
+    FRAME_SAMPLING_SESSION_FRAME_LIMIT: ConfigDefinition(0, _non_negative_int),
 }
 
 
-def validate_updates(updates: dict[str, Any]) -> dict[str, str | int | bool]:
+def validate_updates(updates: dict[str, Any]) -> dict[str, str | int | float | bool]:
     """Normalize legacy aliases and parse every API update before persistence."""
     normalized = dict(updates)
     legacy_value = normalized.pop(DAILY_SUMMARY_TIME, None)
     if legacy_value is not None and DAILY_SUMMARY_SCHEDULE not in normalized:
         normalized[DAILY_SUMMARY_SCHEDULE] = legacy_value
-    parsed: dict[str, str | int | bool] = {}
+    parsed: dict[str, str | int | float | bool] = {}
     for key, value in normalized.items():
         definition = REGISTRY.get(key)
         if definition is None:
@@ -116,12 +159,12 @@ def validate_updates(updates: dict[str, Any]) -> dict[str, str | int | bool]:
     return parsed
 
 
-def get_config(db: Session, key: str) -> str | int | bool:
+def get_config(db: Session, key: str) -> str | int | float | bool:
     """Read a registered setting with legacy database values parsed at this boundary."""
     return get_configs(db, (key,))[key]
 
 
-def get_configs(db: Session, keys: Iterable[str]) -> dict[str, str | int | bool]:
+def get_configs(db: Session, keys: Iterable[str]) -> dict[str, str | int | float | bool]:
     """Read several registered settings in one query.
 
     Use this instead of calling :func:`get_config` repeatedly when a request
@@ -138,7 +181,7 @@ def get_configs(db: Session, keys: Iterable[str]) -> dict[str, str | int | bool]
     rows = db.query(SystemConfig).filter(SystemConfig.config_key.in_(requested)).all()
     stored = {row.config_key: row.config_value for row in rows}
 
-    result: dict[str, str | int | bool] = {}
+    result: dict[str, str | int | float | bool] = {}
     for key, definition in definitions.items():
         raw = stored.get(key)
         result[key] = definition.default if raw is None else definition.parser(raw)
