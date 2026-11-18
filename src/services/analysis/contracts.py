@@ -94,7 +94,10 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from src.models.event_record import EventRecord
+    from src.models.llm_provider import LLMProvider
     from src.services.analysis.plan import AnalysisPlan
+    from src.services.frame_sampling.budget import FramePlan
+    from src.services.frame_sampling.types import FrameSet
 
 
 # --- ports.py ---
@@ -110,6 +113,10 @@ ReplaceSessionEventsFn = Callable[["Session", int, "list[EventRecord]"], int]
 
 
 # --- ports.py ---
+FrameSetFn = Callable[["LLMProvider", str, "FramePlan"], "FrameSet"]
+
+
+# --- ports.py ---
 @dataclass(frozen=True)
 class AnalysisPorts:
     """Frozen bundle of the helpers the analyzer orchestration depends on.
@@ -121,14 +128,20 @@ class AnalysisPorts:
     plan_analysis: PlanAnalysisFn
     video_data_url: VideoDataUrlFn
     replace_session_events: ReplaceSessionEventsFn
+    frame_set: FrameSetFn
 
 
 # --- ports.py ---
-def build_analysis_ports() -> AnalysisPorts:
+def build_analysis_ports(*, frame_set: FrameSetFn) -> AnalysisPorts:
     """Return the production :class:`AnalysisPorts` bundle.
 
-    Imports are lazy so the analyzer task's module load-time graph does
-    not change.
+    ``frame_set`` is an explicit required keyword: services must not
+    import ``src.infrastructure``, so the frame-sampling adapter binding
+    is supplied by the composition root
+    (``src.application.bootstrap.build_analysis_ports_bundle``).
+
+    The remaining bindings are imported lazily so the analyzer task's
+    module load-time graph does not change.
     """
     from src.services.analysis.finalize import _replace_session_events
     from src.services.analysis.plan import build_analysis_plan
@@ -138,6 +151,7 @@ def build_analysis_ports() -> AnalysisPorts:
         plan_analysis=build_analysis_plan,
         video_data_url=build_video_data_url,
         replace_session_events=_replace_session_events,
+        frame_set=frame_set,
     )
 
 

@@ -20,13 +20,14 @@ There is no degradation chain: :class:`SamplerUnavailable` propagates
 unchanged (nothing is cached on failure), and a broken cache root
 surfaces as :class:`OSError` rather than a silent miss.
 
-Architecture note: this module is the frame-sampling port's production
-binding. ``tests/architecture/test_dependency_boundaries.py`` carves out
-exactly this file from the ``services -> infrastructure`` rule (the
-plan-mandated entry point must be callable with only
-``(provider, video_path, plan, db)`` — the sampler client binding is its
-core responsibility, the same shape as the composition-root binding
-carved out of the application rule for ``src/application/bootstrap.py``).
+Architecture note: this module lives in ``src.infrastructure`` — the
+layer that owns the sampler HTTP client binding (``client.py``). The
+``infrastructure -> services`` direction is established (``client.py``
+and ``celery_dispatcher.py`` import ``src.services.*`` value types /
+helpers). The composition root
+(``src.application.bootstrap.build_analysis_ports_bundle``) supplies
+``acquire_frame_set`` as the ``frame_set`` port of the analyzer, so
+``src.services`` never imports ``src.infrastructure``.
 """
 
 from __future__ import annotations

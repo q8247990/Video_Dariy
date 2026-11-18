@@ -28,10 +28,10 @@ from typing import Any
 
 import pytest
 
-import src.services.frame_sampling.acquire as acquire_module
+import src.infrastructure.frame_sampler.acquire as acquire_module
 from src.core.config import settings
+from src.infrastructure.frame_sampler.acquire import acquire_frame_set
 from src.infrastructure.frame_sampler.client import SamplerDisabled, SamplerUnavailable
-from src.services.frame_sampling.acquire import acquire_frame_set
 from src.services.frame_sampling.budget import FramePlan
 from src.services.frame_sampling.cache import FrameSetCache
 from src.services.frame_sampling.fingerprint import content_signature

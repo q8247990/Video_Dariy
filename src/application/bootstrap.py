@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from src.application.bootstrap_errors import ConfigurationError
@@ -59,6 +59,9 @@ from src.application.ports.clock import ClockPort, IdGeneratorPort
 from src.application.ports.llm_gateway import LLMGatewayFactoryPort
 from src.application.ports.task_control import HeartbeatReport, TaskControlPort
 from src.application.ports.task_dispatcher import TaskDispatcherPort
+
+if TYPE_CHECKING:
+    from src.services.analysis.contracts import AnalysisPorts
 
 # ---------------------------------------------------------------------------
 # Container
@@ -217,6 +220,30 @@ def bootstrap_production() -> Container:
 
 
 # ---------------------------------------------------------------------------
+# Analysis ports bundle (analyzer pipeline)
+# ---------------------------------------------------------------------------
+
+
+def build_analysis_ports_bundle() -> AnalysisPorts:
+    """Build the analyzer's :class:`AnalysisPorts` bundle with production bindings.
+
+    The composition root is the only layer allowed to import
+    ``src.infrastructure.*``; the frame-set adapter binding
+    (``src.infrastructure.frame_sampler.acquire.acquire_frame_set``) is
+    supplied here as the explicit ``frame_set`` keyword of
+    :func:`src.services.analysis.contracts.build_analysis_ports`, which
+    keeps ``src.services`` free of any infrastructure import.
+
+    Both imports are lazy so the composition root's module load-time
+    graph does not gain the sampler client or the analysis stages.
+    """
+    from src.infrastructure.frame_sampler.acquire import acquire_frame_set
+    from src.services.analysis.contracts import build_analysis_ports
+
+    return build_analysis_ports(frame_set=acquire_frame_set)
+
+
+# ---------------------------------------------------------------------------
 # Public factory: bootstrap_for_tests
 # ---------------------------------------------------------------------------
 
@@ -360,6 +387,7 @@ __all__ = [
     "Container",
     "bootstrap_for_tests",
     "bootstrap_production",
+    "build_analysis_ports_bundle",
     "get_production_container",
     "install_test_locale_provider",
 ]
