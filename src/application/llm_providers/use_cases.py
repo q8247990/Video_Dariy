@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.application.bootstrap import Container
+from src.application.llm_providers.frame_plan_validation import validate_image_frame_plan
 from src.core.exceptions import DomainError
 from src.core.i18n import t
 from src.core.provider_key_crypto import encrypt_provider_api_key
@@ -146,6 +147,7 @@ def create_provider_use_case(db: Session, dump: dict, locale: str) -> ProviderMu
 
     try:
         _ensure_provider_capabilities(dump, locale)
+        validate_image_frame_plan(dump)
     except ValueError as exc:
         return _err(4001, str(exc))
 
@@ -198,6 +200,13 @@ def update_provider_use_case(
     )
     if constraint_error is not None:
         return constraint_error
+
+    try:
+        validate_image_frame_plan(
+            {"extra_config_json": dump.get("extra_config_json", provider.extra_config_json)}
+        )
+    except ValueError as exc:
+        return _err(4001, str(exc))
 
     _set_provider_type_flag(dump, provider)
     for key, value in dump.items():

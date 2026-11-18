@@ -24,13 +24,37 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from src.application.ports.llm_gateway import LLMGatewayFactoryPort
 from src.core.i18n import DEFAULT_LOCALE, t
 from src.core.provider_key_crypto import decrypt_provider_api_key
 from src.models.llm_provider import LLMProvider
+from src.services.frame_sampling.budget import (
+    FramePlan,
+    FramePlanImpossible,
+    compute_frame_plan,
+)
+from src.services.frame_sampling.mode import INPUT_MODE_IMAGE, resolve_input_mode
+from src.services.frame_sampling.policy import parse_frame_policy
+from src.services.frame_sampling.tokens import estimate_image_tokens, fit_long_edge
+from src.services.provider_generation_limits import (
+    get_generation_limits,
+    resolve_image_output_tokens,
+)
 
 logger = logging.getLogger(__name__)
+
+# Representative worst-case clip used to validate the image frame plan at
+# provider create / update / test time. One typical surveillance file (60 s of
+# 640x480 source) with an 800-token analysis prompt is the largest realistic
+# single vision call in this pipeline (one file = one sub-chunk), so a plan
+# that cannot afford it will also fail on real files — reject it up front
+# instead of letting the first analysis run burn the context window.
+REPRESENTATIVE_CLIP_SECONDS: float = 60.0
+REPRESENTATIVE_SOURCE_WIDTH: int = 640
+REPRESENTATIVE_SOURCE_HEIGHT: int = 480
+REPRESENTATIVE_PROMPT_TOKENS: int = 800
 
 
 @dataclass
@@ -39,6 +63,82 @@ class ProviderTestResult:
     message: str
     supports_vision: bool
     supports_tool_calling: bool
+
+
+def check_image_frame_plan(provider: Any) -> FramePlan | None:
+    """Compute the representative image-mode frame plan for ``provider``.
+
+    Video-mode providers (no ``frame_sampling`` config) return ``None`` without
+    touching the plan. Image-mode providers must carry a configured
+    ``max_model_len`` — a default context is never assumed. Raises
+    :class:`FramePlanImpossible` when the token budget cannot afford
+    ``min_frames`` images and ``ValueError`` for malformed parameters.
+    """
+    if resolve_input_mode(provider) != INPUT_MODE_IMAGE:
+        return None
+    limits = get_generation_limits(provider)
+    if limits.max_model_len is None:
+        raise ValueError(
+            "image frame sampling requires max_model_len: fill "
+            "extra_config_json.max_model_len with the model's total context "
+            "window (input + output) in tokens; a default is never assumed"
+        )
+    policy = parse_frame_policy(provider)
+    max_output_tokens = resolve_image_output_tokens(provider)
+    return compute_frame_plan(
+        context_size=limits.max_model_len,
+        policy=policy,
+        duration_seconds=REPRESENTATIVE_CLIP_SECONDS,
+        prompt_tokens_est=REPRESENTATIVE_PROMPT_TOKENS,
+        frame_width=REPRESENTATIVE_SOURCE_WIDTH,
+        frame_height=REPRESENTATIVE_SOURCE_HEIGHT,
+        max_output_tokens=max_output_tokens,
+    )
+
+
+def frame_plan_error_message(provider: Any, error: Exception) -> str:
+    """Operator-facing message for a failed image frame-plan check.
+
+    ``FramePlanImpossible`` lists the computed numbers and exactly three
+    remedies (raise ``max_model_len``, lower ``max_output_tokens``, lower
+    ``min_frames``); any other ``ValueError`` carries its original message.
+    """
+    if isinstance(error, FramePlanImpossible):
+        context_size = get_generation_limits(provider).max_model_len
+        policy = parse_frame_policy(provider)
+        max_output_tokens = resolve_image_output_tokens(provider)
+        fitted = fit_long_edge(
+            REPRESENTATIVE_SOURCE_WIDTH, REPRESENTATIVE_SOURCE_HEIGHT, policy.max_edge
+        )
+        tokens_per_image = estimate_image_tokens(fitted[0], fitted[1])
+        usable = int(context_size * policy.target_context_ratio)
+        budget_tokens = usable - REPRESENTATIVE_PROMPT_TOKENS - max_output_tokens
+        return (
+            "image frame plan cannot fit the model context: "
+            f"budget_tokens={budget_tokens} < min_frames*tokens_per_image="
+            f"{policy.min_frames * tokens_per_image} "
+            f"(max_model_len={context_size}, target_context_ratio={policy.target_context_ratio}, "
+            f"prompt_tokens_est={REPRESENTATIVE_PROMPT_TOKENS}, "
+            f"max_output_tokens={max_output_tokens}, min_frames={policy.min_frames}, "
+            f"tokens_per_image={tokens_per_image}); "
+            "remedies: raise max_model_len (context), lower max_output_tokens, "
+            "or lower min_frames"
+        )
+    return str(error)
+
+
+def _image_frame_plan_failure_message(provider: Any) -> str | None:
+    """``None`` when the provider is video-mode or its representative plan fits."""
+    try:
+        check_image_frame_plan(provider)
+    except ValueError as exc:  # includes FramePlanImpossible
+        logger.warning(
+            "image frame plan check failed for provider %s: %s",
+            getattr(provider, "id", None),
+            exc,
+        )
+        return frame_plan_error_message(provider, exc)
+    return None
 
 
 def check_provider_connectivity(
@@ -69,6 +169,18 @@ def check_provider_connectivity(
     test_message = ""
     vision_result = False
     tool_calling_result = False
+
+    # Fail fast before any network round-trip: an image-mode provider whose
+    # representative plan (N frames x tokens_per_image + prompt + output)
+    # cannot fit max_model_len would fail on every real analysis call.
+    plan_error = _image_frame_plan_failure_message(provider)
+    if plan_error is not None:
+        return ProviderTestResult(
+            success=False,
+            message=plan_error,
+            supports_vision=False,
+            supports_tool_calling=False,
+        )
 
     if llm_factory is None:
         # Defensive: rather than silently reaching for the production
