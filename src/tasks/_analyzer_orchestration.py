@@ -73,6 +73,7 @@ from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
 from src.services.provider_generation_limits import get_generation_limits, resolve_num_frames
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
+from src.services.video_analysis.mapper import validate_recognition_offsets_within_sub_chunk
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 
 logger = logging.getLogger(__name__)
@@ -582,6 +583,14 @@ def _run_one_sub_chunk(
             video_data_url=video_data_url,
             extra_body=extra_body,
             response_parser=parse_video_recognition_output,
+        )
+        # Sub-chunk boundary guard (both payload modes): an event offset
+        # beyond the sub-chunk duration would map the event outside the
+        # material the model saw, silently corrupting absolute session
+        # time. Rejection re-uses the standard PARTIAL/FAILED handling.
+        validate_recognition_offsets_within_sub_chunk(
+            result.recognition_result,
+            sub_chunk_duration_seconds=plan_item.duration_seconds,
         )
     except Exception as exc:
         # If the LLM call or the parser raised, capture the raw
