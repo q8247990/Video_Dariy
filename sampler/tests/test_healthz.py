@@ -1,4 +1,4 @@
-"""Tests for the /healthz endpoint (todo 15 scaffold)."""
+"""Tests for the /healthz endpoint (todo 15 scaffold, detector semantics todo 16)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 from app import main
 from app.config import get_settings
 from fastapi.testclient import TestClient
+from helpers import build_constant_onnx, make_yolo_output
 
 _SAMPLER_ENV_VARS = (
     "SAMPLER_HOST",
@@ -43,17 +44,30 @@ def test_healthz_reports_unloaded_model_and_default_version() -> None:
     assert response.json() == {"status": "ok", "model_loaded": False, "version": "0.1.0"}
 
 
-def test_healthz_model_loaded_true_when_model_file_exists(
+def test_healthz_model_loaded_true_with_valid_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    model_file = tmp_path / "yolov8n.onnx"
-    model_file.write_bytes(b"not-a-real-model")
+    model_file = build_constant_onnx(tmp_path / "yolov8n.onnx", make_yolo_output())
     monkeypatch.setenv("SAMPLER_MODEL_PATH", str(model_file))
 
     with TestClient(main.app) as client:
         response = client.get("/healthz")
 
     assert response.json()["model_loaded"] is True
+
+
+def test_healthz_invalid_model_file_reports_not_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_file = tmp_path / "junk.onnx"
+    model_file.write_bytes(b"not-a-real-model")
+    monkeypatch.setenv("SAMPLER_MODEL_PATH", str(model_file))
+
+    with TestClient(main.app) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json()["model_loaded"] is False
 
 
 def test_healthz_missing_model_reports_not_loaded(monkeypatch: pytest.MonkeyPatch) -> None:

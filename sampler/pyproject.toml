@@ -1,19 +1,23 @@
 [project]
 name = "video-dairy-sampler"
 version = "0.1.0"
-description = "Out-of-process frame sampling service for Video Diary (scaffold: health endpoint only)"
+description = "Out-of-process frame sampling service for Video Diary"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.6.4",
+    "numpy>=1.26",
+    "onnxruntime>=1.18",
 ]
 
 [project.optional-dependencies]
 dev = [
     "httpx>=0.27.0",
     "pytest>=8.1.1",
+    # Needed only to synthesise the tiny constant-output ONNX test model.
+    "onnx>=1.16",
 ]
 
 [build-system]
