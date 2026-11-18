@@ -41,6 +41,11 @@ class VideoRecognitionPromptInput:
     input_mode: str = "video"
     frame_timestamps: list[float] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # 与编译器校验保持一致：image 模式必须有非空帧时间戳，防止绕过编译器静默渲染空区段。
+        if self.input_mode == "image" and not self.frame_timestamps:
+            raise ValueError("image input mode requires at least one frame timestamp")
+
 
 @dataclass
 class DailySummaryPromptInput:

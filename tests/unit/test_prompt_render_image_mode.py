@@ -8,6 +8,8 @@ video 模式必须与改动前模板逐字节一致（下方快照取自改动�
 import base64
 from datetime import datetime
 
+import pytest
+
 from src.application.prompt.compiler import compile_video_recognition_prompt
 from src.application.prompt.contracts import (
     SessionPromptContext,
@@ -140,6 +142,8 @@ IMAGE_RULE_6 = (
 )
 EVENT_CAP_SENTENCE = "每个文件最多输出 8 个事件"
 FRAME_LIST_HEADER = "本批帧时间戳："
+VIDEO_OFFSET_CLAUSE = "offset 以当前输入视频片段起点为 0 秒"
+IMAGE_OFFSET_CLAUSE = "offset 以本批第 0 帧为 0 秒"
 
 
 def _base_input() -> dict:
@@ -205,6 +209,20 @@ def test_video_mode_keeps_original_rule5_rule6_and_has_no_frame_header() -> None
     assert ORIGINAL_RULE_5 in system_prompt
     assert ORIGINAL_RULE_6 in system_prompt
     assert FRAME_LIST_HEADER not in user_prompt
+    # 最终约束中的 offset 子句保持 video 版，不出现 image 版。
+    assert VIDEO_OFFSET_CLAUSE in user_prompt
+    assert IMAGE_OFFSET_CLAUSE not in user_prompt
+
+
+def test_video_mode_empty_timestamps_is_valid_and_matches_snapshot() -> None:
+    # video 模式 + 空 frame_timestamps 必须合法：不抛错，且不渲染帧区段，
+    # 渲染结果与改动前快照逐字节一致。
+    system_prompt, user_prompt = build_video_recognition_prompt(
+        {**_base_input(), "frame_timestamps": []}
+    )
+
+    assert system_prompt == VIDEO_MODE_SNAPSHOT
+    assert user_prompt == USER_MODE_SNAPSHOT
 
 
 def test_image_mode_renders_three_frame_lines_in_order() -> None:
@@ -227,6 +245,9 @@ def test_image_mode_renders_three_frame_lines_in_order() -> None:
     assert ORIGINAL_RULE_5 not in system_prompt
     assert ORIGINAL_RULE_6 not in system_prompt
     assert EVENT_CAP_SENTENCE in system_prompt
+    # 最终约束中的 offset 子句换成 image 版，与系统提示规则 6 不再冲突。
+    assert IMAGE_OFFSET_CLAUSE in user_prompt
+    assert VIDEO_OFFSET_CLAUSE not in user_prompt
 
     # 16 个事件类型名必须全部保留。
     for event_type in sorted(VIDEO_EVENT_TYPES):
@@ -246,19 +267,30 @@ def test_image_mode_single_frame() -> None:
     assert _frame_lines(user_prompt) == ["帧 1/1 — t=12.5s"]
 
 
-def test_image_mode_empty_timestamps_renders_header_only() -> None:
-    # 空帧列表允许渲染（只有表头、无帧行）；“image 模式空 frame_timestamps 属于
-    # 调用方错误”的校验留给 todo 23，本测试只锁定当前渲染行为。
-    _, user_prompt = build_video_recognition_prompt(
-        {
-            **_base_input(),
-            "input_mode": "image",
-            "frame_timestamps": [],
-        }
-    )
+def test_image_mode_empty_timestamps_raises() -> None:
+    # image 模式空 frame_timestamps 属于调用方错误，必须在渲染前响亮失败，
+    # 而不是静默渲染出一个只有表头的空区段；错误信息必须点名缺失的输入。
+    with pytest.raises(ValueError, match="frame timestamp"):
+        build_video_recognition_prompt(
+            {
+                **_base_input(),
+                "input_mode": "image",
+                "frame_timestamps": [],
+            }
+        )
 
-    assert user_prompt.count(FRAME_LIST_HEADER) == 1
-    assert _frame_lines(user_prompt) == []
+
+def test_image_mode_non_monotonic_timestamps_raise() -> None:
+    # 时间戳乱序属于调用方错误，必须抛出 ValueError 并指明出错的下标。
+    with pytest.raises(ValueError) as excinfo:
+        build_video_recognition_prompt(
+            {
+                **_base_input(),
+                "input_mode": "image",
+                "frame_timestamps": [1.0, 0.5],
+            }
+        )
+    assert "index 1" in str(excinfo.value)
 
 
 def _compiler_input(**overrides: object) -> VideoRecognitionPromptInput:
@@ -304,3 +336,10 @@ def test_compiler_image_mode_passes_frame_list() -> None:
     assert IMAGE_RULE_5 in system_prompt
     assert EVENT_CAP_SENTENCE in system_prompt
     assert _frame_lines(user_prompt) == ["帧 1/3 — t=0.0s", "帧 2/3 — t=3.5s", "帧 3/3 — t=7.0s"]
+
+
+def test_compiler_image_mode_empty_timestamps_raises() -> None:
+    # 编译器路径（dataclass 构造 + compiler）在 image 模式空列表时同样必须响亮失败，
+    # 保证编译器校验无法被绕过。
+    with pytest.raises(ValueError, match="frame timestamp"):
+        compile_video_recognition_prompt(_compiler_input(input_mode="image", frame_timestamps=[]))

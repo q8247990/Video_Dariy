@@ -17,4 +17,4 @@ analysis_note_type 枚举={{ note_type_list | compact_list }}; merge_similar_act
 帧 {{ loop.index }}/{{ frame_total }} — t={{ "%.1f" | format(ts) }}s
 {% endfor %}
 {% endif %}
-最终约束: 只能输出 JSON 对象; 所有 offset 必须为非负数且 end>=start; offset 以当前输入视频片段起点为 0 秒; event_type 必须来自上面定义; detail 需详细描述可观察事实; 所有自然语言字段使用简体中文.
+最终约束: 只能输出 JSON 对象; 所有 offset 必须为非负数且 end>=start; {% if input_mode == "image" %}offset 以本批第 0 帧为 0 秒且必须对齐到给定帧时间戳;{% else %}offset 以当前输入视频片段起点为 0 秒;{% endif %} event_type 必须来自上面定义; detail 需详细描述可观察事实; 所有自然语言字段使用简体中文.
