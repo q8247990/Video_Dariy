@@ -2,7 +2,7 @@
 
 A repeated analysis of the same video file must never re-invoke the
 sampler: the complete :class:`~src.services.frame_sampling.types.FrameSet`
-(JPEG payloads + timestamps + candidates) is persisted under
+(JPEG payloads + timestamps) is persisted under
 
     <root>/frames/<path_hash>/<content_signature>/<policy_key>/
         frames.json
@@ -50,7 +50,7 @@ from typing import Any
 from src.services.frame_sampling.budget import FramePlan
 from src.services.frame_sampling.fingerprint import content_signature
 from src.services.frame_sampling.policy import FramePolicy
-from src.services.frame_sampling.types import EventCandidate, FrameSample, FrameSet
+from src.services.frame_sampling.types import FrameSample, FrameSet
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +136,11 @@ class FrameSetCache:
         if manifest is None:
             return None
 
+        # Contract: manifests written before the slim frame set may still
+        # carry ``candidates`` / ``duration_seconds`` keys; they are
+        # ignored, and only the keys below are ever read.
         frames_raw = self._parse_manifest_frames(manifest)
-        candidates = self._parse_manifest_candidates(manifest)
-        if frames_raw is None or candidates is None:
+        if frames_raw is None:
             logger.warning(
                 "frame cache entry %s has a malformed manifest shape; treating as miss",
                 entry_dir,
@@ -173,7 +175,6 @@ class FrameSetCache:
             )
         return FrameSet(
             frames=tuple(frames),
-            candidates=candidates,
             source="cache",
             elapsed_ms=elapsed,
         )
@@ -208,7 +209,6 @@ class FrameSetCache:
             "version": CACHE_VERSION,
             "source": "sampler",
             "elapsed_ms": frame_set.elapsed_ms,
-            "duration_seconds": None,
             "frames": [
                 {
                     "t_seconds": sample.t_seconds,
@@ -216,10 +216,6 @@ class FrameSetCache:
                     "file": FRAME_FILE_TEMPLATE % (index + 1),
                 }
                 for index, sample in enumerate(frame_set.frames)
-            ],
-            "candidates": [
-                {"t_start": c.t_start, "t_end": c.t_end, "reasons": list(c.reasons)}
-                for c in frame_set.candidates
             ],
         }
         self._atomic_write(
@@ -314,33 +310,6 @@ class FrameSetCache:
             ):
                 return None
         return frames_raw
-
-    @staticmethod
-    def _parse_manifest_candidates(data: dict[str, Any]) -> tuple[EventCandidate, ...] | None:
-        """The ``candidates`` list; ``None`` when any entry is malformed."""
-        candidates_raw = data.get("candidates", [])
-        if not isinstance(candidates_raw, list):
-            return None
-        candidates: list[EventCandidate] = []
-        for item in candidates_raw:
-            if not isinstance(item, dict):
-                return None
-            reasons = item.get("reasons")
-            if (
-                not _is_finite_number(item.get("t_start"))
-                or not _is_finite_number(item.get("t_end"))
-                or not isinstance(reasons, list)
-                or not all(isinstance(r, str) for r in reasons)
-            ):
-                return None
-            candidates.append(
-                EventCandidate(
-                    t_start=float(item["t_start"]),
-                    t_end=float(item["t_end"]),
-                    reasons=tuple(reasons),
-                )
-            )
-        return tuple(candidates)
 
     @staticmethod
     def _atomic_write(target: Path, data: bytes) -> None:

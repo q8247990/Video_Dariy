@@ -614,7 +614,7 @@ class FakeAnalysisPorts:
         of :mod:`src.application.bootstrap_fakes` stays free of the
         frame-sampling value types (and of ``src.infrastructure``).
         """
-        from src.services.frame_sampling.types import EventCandidate, FrameSample, FrameSet
+        from src.services.frame_sampling.types import FrameSample, FrameSet
 
         frames = tuple(
             FrameSample(
@@ -626,7 +626,6 @@ class FakeAnalysisPorts:
         )
         return FrameSet(
             frames=frames,
-            candidates=(EventCandidate(0.0, 2.0, ("scene",)),),
             source="sampler",
             elapsed_ms=12,
         )

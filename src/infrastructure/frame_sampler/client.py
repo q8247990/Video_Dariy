@@ -2,35 +2,30 @@
 
 The client POSTs a sampling request to ``{frame_sampler_url}/sample`` and
 parses the 200 response into :class:`src.services.frame_sampling.FrameSet`
-value types. The sampler is a single container, so the client applies three
+value types. The sampler is a single container, so the client applies two
 protective behaviours:
 
-1. **Bounded concurrency.** Each :meth:`FrameSamplerClient.sample` call
-   acquires a ``threading.BoundedSemaphore`` sized by
-   ``settings.queue_limit`` before touching the network. The client is
-   called from synchronous Celery worker threads (one per in-flight
-   analysis sub-chunk) — not from an asyncio event loop — so a
-   thread-safe ``BoundedSemaphore`` is the right primitive (an
-   ``asyncio.Semaphore`` would require a running loop and is not
-   thread-safe anyway). ``BoundedSemaphore`` additionally fails loudly on
-   over-release. The bound caps the number of concurrent sampler requests
-   (including in-flight retries of the same request) so a burst of
-   parallel sub-chunks cannot overwhelm the sampler's decode/compute pool;
-   excess callers block instead of piling up.
+1. **Retries with deterministic backoff.** 5xx responses, connection
+    errors and timeouts are retried at most twice (3 attempts total) with
+    fixed 0.2s / 0.4s backoff — no jitter, so behaviour is reproducible in
+    tests and in the (offline) deployment. 4xx responses (400 input/param
+    error, 422 undecodable video) are *never* retried: they are
+    configuration/input errors that will not self-heal, and the sampler's
+    ``detail`` text is surfaced verbatim (truncated to 300 chars).
 
-2. **Retries with deterministic backoff.** 5xx responses, connection
-   errors and timeouts are retried at most twice (3 attempts total) with
-   fixed 0.2s / 0.4s backoff — no jitter, so behaviour is reproducible in
-   tests and in the (offline) deployment. 4xx responses (400 input/param
-   error, 422 undecodable video) are *never* retried: they are
-   configuration/input errors that will not self-heal, and the sampler's
-   ``detail`` text is surfaced verbatim (truncated to 300 chars).
+2. **Strict response parsing.** A malformed 200 payload (missing keys,
+    non-list shapes, invalid base64, non-ascending timestamps) raises
+    :class:`SamplerUnavailable` rather than silently dropping frames: a
+    partially sampled session is worse than a failed sub-chunk, which the
+    checkpoint machinery can re-run. Extra keys the sampler may still send
+    (``candidates``, ``duration_seconds``) are ignored.
 
-3. **Strict response parsing.** A malformed 200 payload (missing keys,
-   non-list shapes, invalid base64, non-ascending timestamps) raises
-   :class:`SamplerUnavailable` rather than silently dropping frames: a
-   partially sampled session is worse than a failed sub-chunk, which the
-   checkpoint machinery can re-run.
+**No client-side concurrency bound.** There is deliberately no semaphore
+in this client: :func:`build_frame_set` constructs a fresh
+:class:`FrameSamplerClient` per call, so any per-instance bound would never
+see more than one in-flight request. Real parallelism is already bounded
+by the Celery worker concurrency (one analysis sub-chunk per worker
+thread).
 
 **Lease invariant.** A sampler call is followed by the LLM vision call
 inside one leased analysis sub-chunk; together they must fit inside
@@ -46,7 +41,6 @@ import base64
 import binascii
 import logging
 import math
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -59,10 +53,9 @@ from src.db.session import task_db_session
 from src.services.frame_sampling.budget import FramePlan
 from src.services.frame_sampling.mode import INPUT_MODE_VIDEO, resolve_input_mode
 from src.services.frame_sampling.policy import FramePolicy, parse_frame_policy
-from src.services.frame_sampling.types import EventCandidate, FrameSample, FrameSet
+from src.services.frame_sampling.types import FrameSample, FrameSet
 from src.services.system_config_registry import (
     FRAME_SAMPLER_ENABLED,
-    FRAME_SAMPLER_QUEUE_LIMIT,
     FRAME_SAMPLER_TIMEOUT_SECONDS,
     FRAME_SAMPLER_URL,
     get_configs,
@@ -82,13 +75,6 @@ _RETRY_BACKOFF_SECONDS: Final[tuple[float, ...]] = (0.2, 0.4)
 
 #: Sampler sampling modes accepted in the request body (frozen contract).
 _VALID_MODES: Final[tuple[str, ...]] = ("uniform", "dedupe", "event")
-
-#: ``policy.preset`` -> sampler request ``mode`` (unknown preset -> event).
-_MODE_BY_PRESET: Final[dict[str, str]] = {
-    "baseline": "uniform",
-    "dedupe": "dedupe",
-    "event": "event",
-}
 
 #: Sampler 4xx detail text is surfaced truncated to this many characters.
 _DETAIL_MAX_CHARS: Final[int] = 300
@@ -129,14 +115,13 @@ class FrameSamplerSettings:
     enabled: bool
     url: str
     timeout_seconds: float
-    queue_limit: int
 
 
 def load_frame_sampler_settings(db: Session) -> FrameSamplerSettings:
     """Read the frame sampler settings from the system-config registry.
 
     Defaults (when no row is stored): ``enabled=False``, ``url=""``,
-    ``timeout_seconds=120``, ``queue_limit=8``.
+    ``timeout_seconds=120``.
     """
     values = get_configs(
         db,
@@ -144,14 +129,12 @@ def load_frame_sampler_settings(db: Session) -> FrameSamplerSettings:
             FRAME_SAMPLER_ENABLED,
             FRAME_SAMPLER_URL,
             FRAME_SAMPLER_TIMEOUT_SECONDS,
-            FRAME_SAMPLER_QUEUE_LIMIT,
         ),
     )
     return FrameSamplerSettings(
         enabled=bool(values[FRAME_SAMPLER_ENABLED]),
         url=str(values[FRAME_SAMPLER_URL]),
         timeout_seconds=float(values[FRAME_SAMPLER_TIMEOUT_SECONDS]),
-        queue_limit=int(values[FRAME_SAMPLER_QUEUE_LIMIT]),
     )
 
 
@@ -188,36 +171,10 @@ def _parse_frames(frames_raw: list[Any], fail: FailFn) -> tuple[FrameSample, ...
     return tuple(frames)
 
 
-def _parse_candidates(candidates_raw: list[Any], fail: FailFn) -> tuple[EventCandidate, ...]:
-    """Parse the optional ``candidates`` list; reject non-numeric windows / bad reasons."""
-    candidates: list[EventCandidate] = []
-    for i, item in enumerate(candidates_raw):
-        if not isinstance(item, dict):
-            raise fail(f"candidates[{i}] is not an object")
-        t_start = item.get("t_start")
-        t_end = item.get("t_end")
-        if (
-            isinstance(t_start, bool)
-            or isinstance(t_end, bool)
-            or not isinstance(t_start, (int, float))
-            or not isinstance(t_end, (int, float))
-        ):
-            raise fail(f"candidates[{i}] must carry numeric 't_start' and 't_end'")
-        reasons = item.get("reasons", [])
-        if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
-            raise fail(f"candidates[{i}].reasons must be a list of strings")
-        candidates.append(
-            EventCandidate(t_start=float(t_start), t_end=float(t_end), reasons=tuple(reasons))
-        )
-    return tuple(candidates)
-
-
 class FrameSamplerClient:
     """httpx-based client for the frame sampler service.
 
-    Thread-safe: a single instance may be shared by worker threads; each
-    :meth:`sample` call is bounded by a ``BoundedSemaphore`` sized by
-    ``concurrency`` (explicit override) or ``settings.queue_limit``.
+    Thread-safe: a single instance may be shared by worker threads.
 
     ``transport`` is an injection point for tests (``httpx.MockTransport``);
     in production the default network transport is used.
@@ -227,14 +184,9 @@ class FrameSamplerClient:
         self,
         settings: FrameSamplerSettings,
         transport: httpx.BaseTransport | None = None,
-        concurrency: int | None = None,
     ) -> None:
         self._settings = settings
         self._transport = transport
-        limit = concurrency if concurrency is not None else settings.queue_limit
-        if limit < 1:
-            raise ValueError(f"concurrency/queue_limit must be >= 1, got {limit}")
-        self._semaphore = threading.BoundedSemaphore(limit)
         #: Number of attempts made by the most recent :meth:`sample` call
         #: (updated on success; failures expose the same count on the
         #: raised :class:`SamplerUnavailable`).
@@ -273,64 +225,60 @@ class FrameSamplerClient:
         endpoint = url.rstrip("/") + "/sample"
         body = self._build_request_body(video_path=video_path, policy=policy, plan=plan, mode=mode)
 
-        with self._semaphore:
-            last_status: int | None = None
-            for attempt in range(1, _MAX_ATTEMPTS + 1):
-                try:
-                    response = self._post(endpoint, body)
-                except (httpx.ConnectError, httpx.TimeoutException) as exc:
-                    last_status = None
-                    if attempt < _MAX_ATTEMPTS:
-                        logger.warning(
-                            "frame sampler request failed (%s: %s), attempt %d/%d; retry in %.1fs",
-                            type(exc).__name__,
-                            exc,
-                            attempt,
-                            _MAX_ATTEMPTS,
-                            _RETRY_BACKOFF_SECONDS[attempt - 1],
-                        )
-                        time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
-                        continue
-                    raise SamplerUnavailable(
-                        f"frame sampler unreachable after {attempt} attempts "
-                        f"({type(exc).__name__}: {exc})",
-                        last_status=None,
-                        attempts=attempt,
-                    ) from exc
-
-                if response.status_code == 200:
-                    self.last_attempts = attempt
-                    return self._parse_response(
-                        response, status=response.status_code, attempt=attempt
+        last_status: int | None = None
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = self._post(endpoint, body)
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                last_status = None
+                if attempt < _MAX_ATTEMPTS:
+                    logger.warning(
+                        "frame sampler request failed (%s: %s), attempt %d/%d; retry in %.1fs",
+                        type(exc).__name__,
+                        exc,
+                        attempt,
+                        _MAX_ATTEMPTS,
+                        _RETRY_BACKOFF_SECONDS[attempt - 1],
                     )
-
-                last_status = response.status_code
-                if 500 <= response.status_code < 600:
-                    if attempt < _MAX_ATTEMPTS:
-                        logger.warning(
-                            "frame sampler returned HTTP %d, attempt %d/%d; retrying in %.1fs",
-                            response.status_code,
-                            attempt,
-                            _MAX_ATTEMPTS,
-                            _RETRY_BACKOFF_SECONDS[attempt - 1],
-                        )
-                        time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
-                        continue
-                    raise SamplerUnavailable(
-                        f"frame sampler unavailable after {attempt} attempts "
-                        f"(last HTTP {last_status})",
-                        last_status=last_status,
-                        attempts=attempt,
-                    )
-
-                # 4xx (and any other non-200): configuration/input error,
-                # never retried — surface the sampler's detail verbatim.
-                detail = self._extract_detail(response)
+                    time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+                    continue
                 raise SamplerUnavailable(
-                    f"frame sampler rejected the request (HTTP {last_status}): {detail}",
+                    f"frame sampler unreachable after {attempt} attempts "
+                    f"({type(exc).__name__}: {exc})",
+                    last_status=None,
+                    attempts=attempt,
+                ) from exc
+
+            if response.status_code == 200:
+                self.last_attempts = attempt
+                return self._parse_response(response, status=response.status_code, attempt=attempt)
+
+            last_status = response.status_code
+            if 500 <= response.status_code < 600:
+                if attempt < _MAX_ATTEMPTS:
+                    logger.warning(
+                        "frame sampler returned HTTP %d, attempt %d/%d; retrying in %.1fs",
+                        response.status_code,
+                        attempt,
+                        _MAX_ATTEMPTS,
+                        _RETRY_BACKOFF_SECONDS[attempt - 1],
+                    )
+                    time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+                    continue
+                raise SamplerUnavailable(
+                    f"frame sampler unavailable after {attempt} attempts (last HTTP {last_status})",
                     last_status=last_status,
                     attempts=attempt,
                 )
+
+            # 4xx (and any other non-200): configuration/input error,
+            # never retried — surface the sampler's detail verbatim.
+            detail = self._extract_detail(response)
+            raise SamplerUnavailable(
+                f"frame sampler rejected the request (HTTP {last_status}): {detail}",
+                last_status=last_status,
+                attempts=attempt,
+            )
 
         # Unreachable: the loop above always returns or raises.
         raise SamplerUnavailable(  # pragma: no cover
@@ -411,18 +359,14 @@ class FrameSamplerClient:
             raise malformed("'frames' is missing or not a list")
         frames = _parse_frames(frames_raw, malformed)
 
-        candidates_raw = payload.get("candidates", [])
-        if not isinstance(candidates_raw, list):
-            raise malformed("'candidates' is not a list")
-        candidates = _parse_candidates(candidates_raw, malformed)
-
+        # Wire contract: ``candidates`` / ``duration_seconds`` may still be
+        # present in the sampler response and are intentionally ignored.
         elapsed = payload.get("elapsed_ms")
         if isinstance(elapsed, bool) or not isinstance(elapsed, int):
             raise malformed(f"'elapsed_ms' must be an int, got {elapsed!r}")
 
         return FrameSet(
             frames=tuple(frames),
-            candidates=tuple(candidates),
             source="sampler",
             elapsed_ms=int(elapsed),
         )
@@ -437,9 +381,9 @@ def build_frame_set(
 
     1. resolve the provider's vision input mode — video-mode providers
        (no ``frame_sampling`` config) raise :class:`SamplerDisabled`;
-    2. resolve the sampling policy and derive the sampler mode from the
-       preset (``baseline`` -> ``uniform``, ``dedupe`` -> ``dedupe``,
-       anything else -> ``event``);
+    2. resolve the sampling policy — its ``mode`` field is sent to the
+       sampler as-is (legacy ``preset`` configs are mapped to a mode by
+       :func:`parse_frame_policy` with a warning);
     3. load the sampler settings from the system-config registry (using
        ``db`` when provided, otherwise a fresh :func:`task_db_session`,
        the same pattern the Celery task wrappers use);
@@ -448,7 +392,7 @@ def build_frame_set(
     policy = parse_frame_policy(provider)
     if resolve_input_mode(provider) == INPUT_MODE_VIDEO:
         raise SamplerDisabled("provider is in video input mode")
-    sample_mode = _MODE_BY_PRESET.get(policy.preset, "event")
+    sample_mode = policy.mode
 
     if db is not None:
         settings = load_frame_sampler_settings(db)

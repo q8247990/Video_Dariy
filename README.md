@@ -134,8 +134,10 @@ bash scripts/package_release.sh --tag v1.0.0
 
 - **视频模式（raw_mp4，默认）**：未配置抽帧的 provider 保持现状，整段 mp4 交给视频能力模型。
 - **图像模式（frame sampling）**：面向只支持图像输入的后端（如 Strata）。在 provider 的
-  `extra_config_json.frame_sampling` 中配置抽帧策略（预设 `baseline` / `dedupe` / `event`
-  只是默认值包，键可单独覆盖：`target_context_ratio` / `max_edge` / `probe_fps` /
+  `extra_config_json.frame_sampling` 中配置抽帧策略：`mode` 键选择采样模式
+  （`uniform` / `dedupe` / `event`，各自的数值只是默认值包；旧 `preset` 键
+  `baseline` / `dedupe` / `event` 仍被接受并映射到对应模式），键可单独覆盖：
+  `target_context_ratio` / `max_edge` / `probe_fps` /
   `min_frames` / `max_frames` / `jpeg_quality` / `dedupe_phash_distance` /
   `window_pre_seconds` / `window_post_seconds` / `max_event_windows` /
   `max_output_tokens` / `enabled`）。帧数不是固定档位，而是由上下文预算推导：
@@ -154,7 +156,7 @@ bash scripts/package_release.sh --tag v1.0.0
 
 - 每模型抽帧策略：`LLMProvider.extra_config_json.frame_sampling`（设置页 → 模型连接）
 - 采样器运行时：系统配置 `frame_sampler_enabled` / `frame_sampler_url` /
-  `frame_sampler_timeout_seconds`（默认 120）/ `frame_sampler_queue_limit`（默认 8）/
+  `frame_sampler_timeout_seconds`（默认 120）/
   `frame_sampling_session_frame_limit`（默认 0 = 不限制）（设置页 → 系统配置）
 
 采样器服务环境变量：

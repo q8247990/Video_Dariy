@@ -31,7 +31,7 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 # One valid alternative per FramePolicy field; every alternative differs from
 # the built-in default so the parametrized sensitivity test is meaningful.
 POLICY_ALTERNATIVES: dict[str, object] = {
-    "preset": "baseline",
+    "mode": "uniform",
     "target_context_ratio": 0.8,
     "max_edge": 960,
     "probe_fps": 1.0,

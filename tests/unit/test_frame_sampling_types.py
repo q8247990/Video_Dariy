@@ -8,7 +8,6 @@ import pytest
 
 from src.services.frame_sampling import (
     FRAME_SET_SOURCES,
-    EventCandidate,
     FrameSample,
     FrameSampler,
     FrameSet,
@@ -59,51 +58,15 @@ def test_frame_sample_inequality_when_a_field_differs(field: str) -> None:
     assert base != variants[field]
 
 
-def test_event_candidate_construction_stores_field_values() -> None:
-    candidate = EventCandidate(t_start=10.0, t_end=12.0, reasons=("person", "motion"))
-
-    assert candidate.t_start == 10.0
-    assert candidate.t_end == 12.0
-    assert candidate.reasons == ("person", "motion")
-
-
-def test_event_candidate_applies_default_reasons() -> None:
-    candidate = EventCandidate(t_start=10.0, t_end=12.0)
-
-    assert candidate.reasons == ()
-
-
-def test_event_candidate_is_frozen() -> None:
-    candidate = EventCandidate(t_start=10.0, t_end=12.0)
-
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        candidate.t_start = 0.0
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        candidate.t_end = 0.0
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        candidate.reasons = ("other",)
-
-
-def test_event_candidate_equality_and_inequality() -> None:
-    assert EventCandidate(t_start=10.0, t_end=12.0) == EventCandidate(t_start=10.0, t_end=12.0)
-    assert EventCandidate(t_start=10.0, t_end=12.0) != EventCandidate(t_start=10.0, t_end=13.0)
-    assert EventCandidate(t_start=10.0, t_end=12.0) != EventCandidate(
-        t_start=10.0, t_end=12.0, reasons=("person",)
-    )
-
-
 def test_frame_set_construction_stores_field_values() -> None:
     frame = FrameSample(t_seconds=0.0, jpeg_bytes=b"one")
-    candidate = EventCandidate(t_start=1.0, t_end=2.0, reasons=("person",))
     frame_set = FrameSet(
         frames=(frame,),
-        candidates=(candidate,),
         source="cache",
         elapsed_ms=42,
     )
 
     assert frame_set.frames == (frame,)
-    assert frame_set.candidates == (candidate,)
     assert frame_set.source == "cache"
     assert frame_set.elapsed_ms == 42
 
@@ -111,7 +74,6 @@ def test_frame_set_construction_stores_field_values() -> None:
 def test_frame_set_applies_default_values() -> None:
     frame_set = FrameSet(frames=(FrameSample(t_seconds=0.0, jpeg_bytes=b"x"),))
 
-    assert frame_set.candidates == ()
     assert frame_set.source == "sampler"
     assert frame_set.elapsed_ms == 0
 

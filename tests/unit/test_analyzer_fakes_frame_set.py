@@ -4,8 +4,7 @@ Covers:
 
 - the default fake returns a deterministic ``FrameSet`` of three uniform
   frames (``t_seconds`` 0.0 / 1.0 / 2.0) whose ``jpeg_bytes`` carry the
-  JPEG SOI/EOI markers, plus one ``EventCandidate(0.0, 2.0, ("scene",))``,
-  ``source="sampler"`` and ``elapsed_ms=12``;
+  JPEG SOI/EOI markers, ``source="sampler"`` and ``elapsed_ms=12``;
 - every invocation records exactly one ``(provider, video_path, plan)``
   entry on ``frame_set_calls`` with the exact positional arguments;
 - a configured ``frame_set_error`` (e.g. ``SamplerUnavailable``) is
@@ -34,7 +33,7 @@ from src.application.bootstrap_fakes import FakeAnalysisPorts
 from src.infrastructure.frame_sampler.client import SamplerUnavailable
 from src.services.analysis import AnalysisPorts
 from src.services.frame_sampling.budget import FramePlan
-from src.services.frame_sampling.types import EventCandidate, FrameSet
+from src.services.frame_sampling.types import FrameSet
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -68,7 +67,6 @@ def test_default_frame_set_returns_three_uniform_frames() -> None:
         assert frame.jpeg_bytes.startswith(b"\xff\xd8")
         assert frame.jpeg_bytes.endswith(b"\xff\xd9")
         assert len(frame.jpeg_bytes) > 4
-    assert result.candidates == (EventCandidate(0.0, 2.0, ("scene",)),)
     assert result.source == "sampler"
     assert result.elapsed_ms == 12
 

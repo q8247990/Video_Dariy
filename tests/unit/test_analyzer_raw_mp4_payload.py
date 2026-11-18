@@ -154,7 +154,7 @@ def _seed_provider_and_session(db: Session, *, image_mode: bool = False) -> tupl
     if image_mode:
         extra_config_json: dict[str, Any] = {
             "frame_sampling": {
-                "preset": "event",
+                "mode": "event",
                 "min_frames": 2,
                 "max_frames": 12,
                 "probe_fps": 2.0,

@@ -1,8 +1,8 @@
 """Frame-sampling stage: value types, policy, frame plan and fingerprints.
 
 ``types``
-    Frozen value objects (:class:`FrameSample`, :class:`EventCandidate`,
-    :class:`FrameSet`, :class:`SampleRequest`), the valid ``source``
+    Frozen value objects (:class:`FrameSample`, :class:`FrameSet`,
+    :class:`SampleRequest`), the valid ``source``
     values and the :class:`FrameSampler` protocol.
 ``policy``
     :class:`FramePolicy` — the resolved per-model sampling policy.
@@ -32,7 +32,6 @@ from src.services.frame_sampling.mode import INPUT_MODE_IMAGE, INPUT_MODE_VIDEO,
 from src.services.frame_sampling.policy import FramePolicy
 from src.services.frame_sampling.types import (
     FRAME_SET_SOURCES,
-    EventCandidate,
     FrameSample,
     FrameSampler,
     FrameSet,
@@ -40,7 +39,6 @@ from src.services.frame_sampling.types import (
 )
 
 __all__ = [
-    "EventCandidate",
     "FRAME_SET_SOURCES",
     "FramePlan",
     "FramePlanImpossible",

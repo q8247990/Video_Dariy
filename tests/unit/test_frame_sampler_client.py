@@ -10,10 +10,11 @@ Covers the frozen sampler contract end-to-end against an in-process
 - disabled / unconfigured fast-fail with zero requests;
 - malformed 200 payloads (missing keys, bad base64, non-ascending
   timestamps) are rejected, never silently dropped;
+- legacy 200 payload keys (``candidates`` / ``duration_seconds``) are
+  tolerated and ignored;
 - ``build_frame_set`` port: video-mode provider raises ``SamplerDisabled``
   before any I/O, image-mode provider delegates to the client with the
-  preset-derived sampling mode;
-- the thread-safe ``queue_limit`` bound on concurrent in-flight requests;
+  policy's sampling mode (legacy ``preset`` configs resolve to a mode);
 - the timeout/lease invariant: default timeout + margin < ANALYSIS_LEASE_SECONDS.
 """
 
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 import base64
 import json
-import threading
 import time
 from typing import Any
 
@@ -41,10 +41,9 @@ from src.infrastructure.frame_sampler.client import (
 )
 from src.services.frame_sampling.budget import FramePlan
 from src.services.frame_sampling.policy import FramePolicy
-from src.services.frame_sampling.types import EventCandidate, FrameSample, FrameSet
+from src.services.frame_sampling.types import FrameSample, FrameSet
 from src.services.system_config_registry import (
     FRAME_SAMPLER_ENABLED,
-    FRAME_SAMPLER_QUEUE_LIMIT,
     FRAME_SAMPLER_TIMEOUT_SECONDS,
     FRAME_SAMPLER_URL,
     set_config,
@@ -65,7 +64,7 @@ class _Provider:
 
 def _policy(**overrides: Any) -> FramePolicy:
     base: dict[str, Any] = {
-        "preset": "dedupe",
+        "mode": "dedupe",
         "target_context_ratio": 0.9,
         "max_edge": 640,
         "probe_fps": 2.0,
@@ -100,13 +99,14 @@ def _settings(**overrides: Any) -> FrameSamplerSettings:
         "enabled": True,
         "url": URL,
         "timeout_seconds": 120.0,
-        "queue_limit": 8,
     }
     base.update(overrides)
     return FrameSamplerSettings(**base)
 
 
 def _ok_payload() -> dict[str, Any]:
+    # ``candidates`` / ``duration_seconds`` are deliberately kept: the
+    # sampler still sends them and the client must ignore them.
     return {
         "frames": [
             {"t_seconds": 0.0, "jpeg_base64": SAMPLE_B64[0]},
@@ -200,7 +200,7 @@ def test_success_body_omits_dedupe_distance_as_null() -> None:
     client, recorder = _client(handler)
     client.sample(
         video_path="/abs/path.mp4",
-        policy=_policy(preset="event", dedupe_phash_distance=None),
+        policy=_policy(mode="event", dedupe_phash_distance=None),
         plan=_plan(frames=8),
         mode="event",
     )
@@ -229,13 +229,36 @@ def test_success_response_parsed_into_frameset() -> None:
             FrameSample(t_seconds=20.0, jpeg_bytes=SAMPLE_BYTES[1]),
             FrameSample(t_seconds=40.0, jpeg_bytes=SAMPLE_BYTES[2]),
         ),
-        candidates=(EventCandidate(t_start=5.0, t_end=20.0, reasons=("scene",)),),
         source="sampler",
         elapsed_ms=123,
     )
     assert [frame.t_seconds for frame in result.frames] == [0.0, 20.0, 40.0]
     assert result.frames[0].jpeg_bytes == SAMPLE_BYTES[0]
     assert client.last_attempts == 1
+
+
+def test_legacy_payload_keys_candidates_and_duration_are_ignored() -> None:
+    """The sampler still sends ``candidates`` / ``duration_seconds``.
+
+    The client must parse the payload fine and simply not surface those keys
+    (the slim ``FrameSet`` has no field for them).
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_payload())
+
+    client, _ = _client(handler)
+    result = client.sample(
+        video_path="/abs/path.mp4",
+        policy=_policy(),
+        plan=_plan(),
+        mode="dedupe",
+    )
+
+    assert len(result.frames) == 3
+    assert result.elapsed_ms == 123
+    assert not hasattr(result, "candidates")
+    assert not hasattr(result, "duration_seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -420,14 +443,6 @@ def test_blank_url_raises_without_requests() -> None:
             {"frames": [{"t_seconds": "soon", "jpeg_base64": SAMPLE_B64[0]}], "elapsed_ms": 5},
             "t_seconds",
         ),
-        (
-            {
-                "frames": [{"t_seconds": 0.0, "jpeg_base64": SAMPLE_B64[0]}],
-                "candidates": [{"t_start": 5.0, "t_end": 20.0, "reasons": "scene"}],
-                "elapsed_ms": 5,
-            },
-            "reasons",
-        ),
         ({"frames": [], "elapsed_ms": "fast"}, "elapsed_ms"),
     ],
 )
@@ -470,9 +485,7 @@ class _FakeClient:
 
     instances: list[_FakeClient] = []
 
-    def __init__(
-        self, settings: FrameSamplerSettings, transport: Any = None, concurrency: int | None = None
-    ) -> None:
+    def __init__(self, settings: FrameSamplerSettings, transport: Any = None) -> None:
         self.settings = settings
         self.call: dict[str, Any] | None = None
         _FakeClient.instances.append(self)
@@ -488,13 +501,18 @@ class _FakeClient:
     ("extra_config_json", "expected_mode"),
     [
         ({"frame_sampling": {}}, "event"),
+        ({"frame_sampling": {"mode": "uniform"}}, "uniform"),
+        ({"frame_sampling": {"mode": "dedupe"}}, "dedupe"),
+        ({"frame_sampling": {"mode": "event"}}, "event"),
+        ({"frame_sampling": {"mode": "nope"}}, "event"),
+        # legacy ``preset`` key: mapped to a mode by ``parse_frame_policy``
         ({"frame_sampling": {"preset": "baseline"}}, "uniform"),
         ({"frame_sampling": {"preset": "dedupe"}}, "dedupe"),
         ({"frame_sampling": {"preset": "event"}}, "event"),
         ({"frame_sampling": {"preset": "nope"}}, "event"),
     ],
 )
-def test_build_frame_set_delegates_to_client_with_preset_mode(
+def test_build_frame_set_delegates_to_client_with_policy_mode(
     pg_db: Any, monkeypatch: pytest.MonkeyPatch, extra_config_json: Any, expected_mode: str
 ) -> None:
     _FakeClient.instances = []
@@ -510,71 +528,26 @@ def test_build_frame_set_delegates_to_client_with_preset_mode(
     assert fake.call["video_path"] == "/abs/video.mp4"
     assert fake.call["plan"] is plan
     assert fake.call["mode"] == expected_mode
-    # settings come from the registry (defaults: disabled, blank URL, 120s, 8)
+    # settings come from the registry (defaults: disabled, blank URL, 120s)
     assert fake.settings.enabled is False
     assert fake.settings.url == ""
     assert fake.settings.timeout_seconds == 120.0
-    assert fake.settings.queue_limit == 8
     assert result.source == "sampler"
 
 
 def test_load_frame_sampler_settings_reads_registry(pg_db: Any) -> None:
     defaults = load_frame_sampler_settings(pg_db)
-    assert defaults == FrameSamplerSettings(
-        enabled=False, url="", timeout_seconds=120.0, queue_limit=8
-    )
+    assert defaults == FrameSamplerSettings(enabled=False, url="", timeout_seconds=120.0)
 
     set_config(pg_db, FRAME_SAMPLER_ENABLED, True)
     set_config(pg_db, FRAME_SAMPLER_URL, "http://sampler:8000/")
     set_config(pg_db, FRAME_SAMPLER_TIMEOUT_SECONDS, 90)
-    set_config(pg_db, FRAME_SAMPLER_QUEUE_LIMIT, 4)
     loaded = load_frame_sampler_settings(pg_db)
     assert loaded == FrameSamplerSettings(
         enabled=True,
         url="http://sampler:8000/",
         timeout_seconds=90.0,
-        queue_limit=4,
     )
-
-
-# ---------------------------------------------------------------------------
-# Concurrency bound
-# ---------------------------------------------------------------------------
-
-
-def test_concurrent_requests_bounded_by_queue_limit() -> None:
-    """With queue_limit=1, at most one in-flight sampler request at a time."""
-
-    gate = threading.Event()
-    state = {"in_flight": 0, "max_in_flight": 0}
-    lock = threading.Lock()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        with lock:
-            state["in_flight"] += 1
-            state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
-        gate.wait(timeout=0.5)
-        with lock:
-            state["in_flight"] -= 1
-        return httpx.Response(200, json={"frames": [], "elapsed_ms": 1})
-
-    client, _ = _client(handler, settings=_settings(queue_limit=1, timeout_seconds=10.0))
-    errors: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            client.sample(video_path="/abs/v.mp4", policy=_policy(), plan=_plan(), mode="dedupe")
-        except BaseException as exc:  # noqa: B036 - record any failure for diagnosis
-            errors.append(exc)
-
-    threads = [threading.Thread(target=worker) for _ in range(5)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
-
-    assert not errors
-    assert state["max_in_flight"] == 1
 
 
 # ---------------------------------------------------------------------------

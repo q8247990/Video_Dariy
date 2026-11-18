@@ -22,7 +22,6 @@ class SystemConfigUpdate(BaseModel):
     frame_sampler_enabled: bool | None = None
     frame_sampler_url: str | None = None
     frame_sampler_timeout_seconds: int | None = None
-    frame_sampler_queue_limit: int | None = None
     frame_sampling_session_frame_limit: int | None = None
 
     model_config = ConfigDict(extra="forbid")

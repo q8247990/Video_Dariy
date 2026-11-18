@@ -1,7 +1,7 @@
 """PUT /system-config 请求模型（SystemConfigUpdate）对帧采样配置键的契约测试。
 
 端点契约：``validate_updates(data.model_dump(exclude_unset=True))`` 必须可被
-帧采样相关的 5 个配置键满足，且未知字段仍被 pydantic 的 extra="forbid" 拒绝。
+帧采样相关的 4 个配置键满足，且未知字段仍被 pydantic 的 extra="forbid" 拒绝。
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ def test_system_config_update_dump_covers_all_frame_sampling_keys() -> None:
         frame_sampler_enabled=True,
         frame_sampler_url="http://127.0.0.1:18080",
         frame_sampler_timeout_seconds=300,
-        frame_sampler_queue_limit=16,
         frame_sampling_session_frame_limit=24,
     )
     updates = validate_updates(payload.model_dump(exclude_unset=True))
@@ -40,7 +39,6 @@ def test_system_config_update_dump_covers_all_frame_sampling_keys() -> None:
         "frame_sampler_enabled": True,
         "frame_sampler_url": "http://127.0.0.1:18080",
         "frame_sampler_timeout_seconds": 300,
-        "frame_sampler_queue_limit": 16,
         "frame_sampling_session_frame_limit": 24,
     }
 

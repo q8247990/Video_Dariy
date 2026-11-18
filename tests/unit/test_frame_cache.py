@@ -2,8 +2,8 @@
 
 Covers:
 
-- put/get round-trip: identical frames (bytes + timestamps + reasons),
-  candidates and elapsed_ms, ``source == "cache"``;
+- put/get round-trip: identical frames (bytes + timestamps + reasons) and
+  elapsed_ms, ``source == "cache"``;
 - cache-first semantics: a second ``acquire_frame_set`` of the same file
   does not re-invoke the sampler (call count stays at 1);
 - invalidation: a changed policy field / changed ``plan.frames`` produces
@@ -36,7 +36,7 @@ from src.services.frame_sampling.budget import FramePlan
 from src.services.frame_sampling.cache import FrameSetCache
 from src.services.frame_sampling.fingerprint import content_signature
 from src.services.frame_sampling.policy import FramePolicy, parse_frame_policy
-from src.services.frame_sampling.types import EventCandidate, FrameSample, FrameSet
+from src.services.frame_sampling.types import FrameSample, FrameSet
 
 FRAME_BYTES: tuple[bytes, ...] = tuple(b"jpeg-payload-%03d" % i for i in range(3))
 
@@ -49,7 +49,7 @@ class _Provider:
 
 
 def _image_provider(max_edge: int = 640) -> _Provider:
-    return _Provider({"frame_sampling": {"preset": "dedupe", "max_edge": max_edge}})
+    return _Provider({"frame_sampling": {"mode": "dedupe", "max_edge": max_edge}})
 
 
 def _plan(frames: int = 12) -> FramePlan:
@@ -71,7 +71,6 @@ def _frame_set(elapsed_ms: int = 123) -> FrameSet:
             FrameSample(t_seconds=20.0, jpeg_bytes=FRAME_BYTES[1], reason="uniform"),
             FrameSample(t_seconds=40.0, jpeg_bytes=FRAME_BYTES[2], reason="scene"),
         ),
-        candidates=(EventCandidate(t_start=5.0, t_end=20.0, reasons=("scene", "motion")),),
         source="sampler",
         elapsed_ms=elapsed_ms,
     )
@@ -160,21 +159,39 @@ def test_put_then_get_returns_identical_frameset_from_cache(
     assert [f.t_seconds for f in got.frames] == [0.0, 20.0, 40.0]
     assert [f.jpeg_bytes for f in got.frames] == list(FRAME_BYTES)
     assert [f.reason for f in got.frames] == ["uniform", "uniform", "scene"]
-    assert got.candidates == original.candidates
 
 
-def test_put_then_get_roundtrips_empty_candidates(cache: FrameSetCache, video_file: Path) -> None:
+def test_old_manifest_with_legacy_keys_is_tolerated(
+    cache: FrameSetCache, cache_dir: Path, video_file: Path
+) -> None:
+    """A manifest written before the slim contract still reads as a hit.
+
+    The old layout carried ``candidates`` and ``duration_seconds`` keys; the
+    reader must ignore them (frames + elapsed_ms are what the contract keeps).
+    """
     policy = parse_frame_policy(_image_provider())
     plan = _plan()
-    original = FrameSet(frames=_frame_set().frames, candidates=(), source="sampler", elapsed_ms=7)
+    entry_dir = _entry_dir(cache_dir, video_file, policy, plan)
+    entry_dir.mkdir(parents=True)
+    (entry_dir / "frame-000001.jpg").write_bytes(FRAME_BYTES[0])
+    legacy_manifest = {
+        "version": 1,
+        "source": "sampler",
+        "elapsed_ms": 7,
+        "duration_seconds": 60.0,
+        "frames": [{"t_seconds": 0.0, "reason": "uniform", "file": "frame-000001.jpg"}],
+        "candidates": [{"t_start": 5.0, "t_end": 20.0, "reasons": ["scene", "motion"]}],
+    }
+    (entry_dir / "frames.json").write_text(
+        json.dumps(legacy_manifest, sort_keys=True), encoding="utf-8"
+    )
 
-    cache.put(video_path=str(video_file), policy=policy, plan=plan, frame_set=original)
     got = cache.get(video_path=str(video_file), policy=policy, plan=plan)
 
     assert got is not None
-    assert got.candidates == ()
-    assert got.frames == original.frames
+    assert got.source == "cache"
     assert got.elapsed_ms == 7
+    assert [f.jpeg_bytes for f in got.frames] == [FRAME_BYTES[0]]
 
 
 def test_get_on_fresh_root_is_a_clean_miss(cache: FrameSetCache, video_file: Path) -> None:
@@ -232,14 +249,12 @@ def test_cache_layout_uses_path_hash_and_content_signature_dirs(
     assert manifest["version"] == 1
     assert manifest["source"] == "sampler"
     assert manifest["elapsed_ms"] == 123
-    assert manifest["duration_seconds"] is None
+    assert "duration_seconds" not in manifest
+    assert "candidates" not in manifest
     assert [f["file"] for f in manifest["frames"]] == [
         "frame-000001.jpg",
         "frame-000002.jpg",
         "frame-000003.jpg",
-    ]
-    assert manifest["candidates"] == [
-        {"t_start": 5.0, "t_end": 20.0, "reasons": ["scene", "motion"]}
     ]
 
 
@@ -328,7 +343,6 @@ def test_second_acquire_hits_cache_and_skips_sampler(
     assert first.source == "sampler"
     assert second.source == "cache"
     assert second.frames == first.frames
-    assert second.candidates == first.candidates
     assert second.elapsed_ms == first.elapsed_ms
 
 
@@ -427,7 +441,6 @@ def test_truncated_frames_json_refetches_and_rewrites(
     got = cache.get(video_path=str(video_file), policy=policy, plan=plan)
     assert got is not None
     assert got.frames == again.frames
-    assert got.candidates == again.candidates
 
 
 @pytest.mark.parametrize(

@@ -31,7 +31,6 @@ HOME_TIMEZONE: Final = "home_timezone"
 FRAME_SAMPLER_ENABLED: Final = "frame_sampler_enabled"
 FRAME_SAMPLER_URL: Final = "frame_sampler_url"
 FRAME_SAMPLER_TIMEOUT_SECONDS: Final = "frame_sampler_timeout_seconds"
-FRAME_SAMPLER_QUEUE_LIMIT: Final = "frame_sampler_queue_limit"
 FRAME_SAMPLING_SESSION_FRAME_LIMIT: Final = "frame_sampling_session_frame_limit"
 
 
@@ -107,7 +106,6 @@ REGISTRY: Final[dict[str, ConfigDefinition]] = {
     FRAME_SAMPLER_ENABLED: ConfigDefinition(False, _bool),
     FRAME_SAMPLER_URL: ConfigDefinition("", _optional_string),
     FRAME_SAMPLER_TIMEOUT_SECONDS: ConfigDefinition(120, _positive_int),
-    FRAME_SAMPLER_QUEUE_LIMIT: ConfigDefinition(8, _positive_int),
     FRAME_SAMPLING_SESSION_FRAME_LIMIT: ConfigDefinition(0, _non_negative_int),
 }
 

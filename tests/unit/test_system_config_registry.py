@@ -2,7 +2,6 @@ import pytest
 
 from src.services.system_config_registry import (
     FRAME_SAMPLER_ENABLED,
-    FRAME_SAMPLER_QUEUE_LIMIT,
     FRAME_SAMPLER_TIMEOUT_SECONDS,
     FRAME_SAMPLER_URL,
     FRAME_SAMPLING_SESSION_FRAME_LIMIT,
@@ -46,7 +45,6 @@ def test_frame_sampling_defaults_present_in_registry() -> None:
     assert REGISTRY[FRAME_SAMPLER_ENABLED].default is False
     assert REGISTRY[FRAME_SAMPLER_URL].default == ""
     assert REGISTRY[FRAME_SAMPLER_TIMEOUT_SECONDS].default == 120
-    assert REGISTRY[FRAME_SAMPLER_QUEUE_LIMIT].default == 8
     assert REGISTRY[FRAME_SAMPLING_SESSION_FRAME_LIMIT].default == 0
 
 
@@ -56,14 +54,12 @@ def test_validate_updates_accepts_frame_sampling_values() -> None:
             FRAME_SAMPLER_ENABLED: True,
             FRAME_SAMPLER_URL: "http://127.0.0.1:8081",
             FRAME_SAMPLER_TIMEOUT_SECONDS: 300,
-            FRAME_SAMPLER_QUEUE_LIMIT: 16,
             FRAME_SAMPLING_SESSION_FRAME_LIMIT: 24,
         }
     ) == {
         "frame_sampler_enabled": True,
         "frame_sampler_url": "http://127.0.0.1:8081",
         "frame_sampler_timeout_seconds": 300,
-        "frame_sampler_queue_limit": 16,
         "frame_sampling_session_frame_limit": 24,
     }
 

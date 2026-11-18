@@ -1,8 +1,8 @@
 """Unit tests for per-model frame-sampling policy parsing (plan todo 2).
 
-Covers the default value table, preset-default merging, per-key override,
-boundary clamping, and malformed inputs (which must clamp/ignore without
-raising).
+Covers the default value table, mode-bundle merging, legacy ``preset`` key
+mapping, per-key override, boundary clamping, and malformed inputs (which
+must clamp/ignore without raising).
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def test_provider_without_extra_config_attribute() -> None:
 
 def test_default_value_table() -> None:
     policy = _policy(None)
-    assert policy.preset == "event"
+    assert policy.mode == "event"
     assert policy.target_context_ratio == 0.9
     assert policy.max_edge == 640
     assert policy.probe_fps == 2.0
@@ -71,37 +71,87 @@ def test_empty_frame_sampling_subdict_is_all_defaults() -> None:
     assert _policy({"frame_sampling": {}}) == FramePolicy()
 
 
-# ------------------------------------------------------------------ presets
+# --------------------------------------------------------------------- modes
 
 
-@pytest.mark.parametrize("name", ["baseline", "dedupe", "event"])
-def test_known_presets_are_registered(name: str) -> None:
+@pytest.mark.parametrize("name", ["uniform", "dedupe", "event"])
+def test_known_modes_are_registered(name: str) -> None:
     assert name in PRESETS
     assert isinstance(PRESETS[name], dict)
 
 
-def test_preset_supplies_defaults_for_missing_keys() -> None:
-    policy = _policy(_fs(("preset", "dedupe")))
-    assert policy.preset == "dedupe"
+def test_uniform_and_event_share_numeric_defaults() -> None:
+    # The built-in values *are* the event defaults; uniform is the same
+    # reference point (the legacy raw-mp4 sampling behavior).
+    assert PRESETS["uniform"] == PRESETS["event"]
+
+
+def test_mode_supplies_defaults_for_missing_keys() -> None:
+    policy = _policy(_fs(("mode", "dedupe")))
+    assert policy.mode == "dedupe"
     for key, value in PRESETS["dedupe"].items():
         assert getattr(policy, key) == value
 
 
-def test_explicit_key_overrides_preset_default() -> None:
-    policy = _policy(_fs(("preset", "dedupe"), ("dedupe_phash_distance", 10)))
+def test_explicit_key_overrides_mode_default() -> None:
+    policy = _policy(_fs(("mode", "dedupe"), ("dedupe_phash_distance", 10)))
     assert policy.dedupe_phash_distance == 10
 
 
-def test_explicit_null_disables_preset_default() -> None:
+def test_explicit_null_disables_mode_default() -> None:
     # ``dedupe_phash_distance: null`` is a meaningful "off" and must beat the
-    # preset's value of 6.
-    policy = _policy(_fs(("preset", "dedupe"), ("dedupe_phash_distance", None)))
+    # mode bundle's value of 6.
+    policy = _policy(_fs(("mode", "dedupe"), ("dedupe_phash_distance", None)))
+    assert policy.dedupe_phash_distance is None
+
+
+@pytest.mark.parametrize("mode", ["nope", 3, None, ["dedupe"]])
+def test_unknown_or_malformed_mode_falls_back_to_event(mode: Any) -> None:
+    assert _policy(_fs(("mode", mode))) == FramePolicy()
+
+
+# -------------------------------------------------------- legacy preset key
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected_mode"),
+    [("baseline", "uniform"), ("dedupe", "dedupe"), ("event", "event")],
+)
+def test_legacy_preset_key_maps_to_mode(preset: str, expected_mode: str) -> None:
+    policy = _policy(_fs(("preset", preset)))
+    assert policy.mode == expected_mode
+
+
+def test_legacy_preset_supplies_bundle_defaults_for_missing_keys() -> None:
+    policy = _policy(_fs(("preset", "dedupe")))
+    for key, value in PRESETS["dedupe"].items():
+        assert getattr(policy, key) == value
+
+
+def test_explicit_mode_wins_over_legacy_preset() -> None:
+    policy = _policy(_fs(("mode", "uniform"), ("preset", "dedupe")))
+    assert policy.mode == "uniform"
+    # and the uniform bundle (no phash default) is applied, not dedupe's
     assert policy.dedupe_phash_distance is None
 
 
 @pytest.mark.parametrize("preset", ["nope", 3, None, ["dedupe"]])
-def test_unknown_or_malformed_preset_falls_back_to_event(preset: Any) -> None:
+def test_unknown_or_malformed_legacy_preset_falls_back_to_event(preset: Any) -> None:
     assert _policy(_fs(("preset", preset))) == FramePolicy()
+
+
+def test_legacy_preset_emits_one_line_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="src.services.frame_sampling.policy"):
+        _policy(_fs(("preset", "dedupe")))
+    assert len(caplog.records) == 1
+    assert "preset" in caplog.records[0].message
+
+
+def test_invalid_mode_emits_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="src.services.frame_sampling.policy"):
+        _policy(_fs(("mode", "nope")))
+    assert len(caplog.records) == 1
+    assert "mode" in caplog.records[0].message
 
 
 # ------------------------------------------------------------ per-key override
@@ -110,7 +160,7 @@ def test_unknown_or_malformed_preset_falls_back_to_event(preset: Any) -> None:
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("preset", "baseline"),
+        ("mode", "uniform"),
         ("target_context_ratio", 0.75),
         ("max_edge", 1280),
         ("probe_fps", 4.0),

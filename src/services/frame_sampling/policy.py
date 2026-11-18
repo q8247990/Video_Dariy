@@ -6,11 +6,15 @@ without a schema migration:
 
 .. code-block:: json
 
-    {"frame_sampling": {"preset": "dedupe", "max_edge": 960, "min_frames": 8}}
+    {"frame_sampling": {"mode": "dedupe", "max_edge": 960, "min_frames": 8}}
 
-Presets (``baseline`` / ``dedupe`` / ``event``) only supply *defaults*; an
-explicit key always wins, and a key missing from both falls back to the
-built-in default. Parsing is fully tolerant (same style as
+The ``mode`` key selects the sampling strategy (``uniform`` / ``dedupe`` /
+``event``); the per-mode numeric bundles (:data:`PRESETS`) only supply
+*defaults* for the numeric keys — an explicit key always wins, and a key
+missing from both falls back to the built-in default. The legacy ``preset``
+key (``baseline`` / ``dedupe`` / ``event``) is still accepted and mapped to
+a mode (``baseline`` -> ``uniform``) with a one-line warning; an explicit
+``mode`` wins over it. Parsing is fully tolerant (same style as
 :mod:`src.services.provider_generation_limits`): malformed values are never
 fatal — they are logged as a warning and replaced by the next fallback layer.
 A clamped/ignored value is always logged via ``logging``.
@@ -21,20 +25,32 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Final, Literal
 
 logger = logging.getLogger(__name__)
 
 FRAME_SAMPLING_KEY = "frame_sampling"
-DEFAULT_PRESET = "event"
 
-PRESETS: dict[str, dict[str, object]] = {
-    # Reference point matching the legacy raw-mp4 sampling behavior.
-    "baseline": {},
+SamplingMode = Literal["uniform", "dedupe", "event"]
+
+DEFAULT_MODE: Final[SamplingMode] = "event"
+
+#: Numeric default bundles keyed by sampling mode. ``uniform`` and ``event``
+#: legitimately share the same numeric defaults (the built-in values *are*
+#: the event defaults; ``uniform`` is the reference point matching the legacy
+#: raw-mp4 sampling behavior).
+PRESETS: Final[dict[str, dict[str, object]]] = {
+    "uniform": {},
     # pHash dedupe enabled, lower probe rate and smaller frame budget.
     "dedupe": {"dedupe_phash_distance": 6, "probe_fps": 1.0, "max_frames": 60},
-    # Event-aware sampling; the built-in defaults *are* the event preset.
     "event": {},
+}
+
+#: Legacy ``preset`` key values mapped to their sampling mode.
+_LEGACY_PRESET_TO_MODE: Final[dict[str, SamplingMode]] = {
+    "baseline": "uniform",
+    "dedupe": "dedupe",
+    "event": "event",
 }
 
 MAX_EDGE_ALIGNMENT = 32
@@ -46,7 +62,7 @@ PickFn = Callable[..., Any]
 class FramePolicy:
     """Resolved per-model frame-sampling policy (all values within safe ranges)."""
 
-    preset: str = "event"
+    mode: SamplingMode = "event"
     target_context_ratio: float = 0.9
     max_edge: int = 640
     probe_fps: float = 2.0
@@ -156,17 +172,40 @@ def _bounded_float(key: str, raw: Any, *, low: float, high: float, default: floa
     return float(clamped)
 
 
-def _resolve_preset(config: dict[str, Any]) -> str:
-    """Resolved preset name (unknown / malformed → ``event`` + warning)."""
-    preset_name = config.get("preset", DEFAULT_PRESET)
-    if not isinstance(preset_name, str) or preset_name not in PRESETS:
+def _resolve_mode(config: dict[str, Any]) -> SamplingMode:
+    """Resolved sampling mode (unknown / malformed → :data:`DEFAULT_MODE` + warning).
+
+    An explicit ``mode`` key wins. The legacy ``preset`` key is still
+    accepted (``baseline`` -> ``uniform``, ``dedupe`` -> ``dedupe``,
+    ``event`` -> ``event``) with a one-line deprecation warning.
+    """
+    raw_mode = config.get("mode")
+    if raw_mode is not None:
+        if isinstance(raw_mode, str) and raw_mode in PRESETS:
+            return raw_mode  # type: ignore[return-value]
         logger.warning(
-            "frame_sampling.preset=%r is unknown or not a string; using preset %r",
-            preset_name,
-            DEFAULT_PRESET,
+            "frame_sampling.mode=%r is unknown or not a string; using mode %r",
+            raw_mode,
+            DEFAULT_MODE,
         )
-        return DEFAULT_PRESET
-    return preset_name
+        return DEFAULT_MODE
+    raw_preset = config.get("preset")
+    if raw_preset is not None:
+        if isinstance(raw_preset, str) and raw_preset in _LEGACY_PRESET_TO_MODE:
+            mode = _LEGACY_PRESET_TO_MODE[raw_preset]
+            logger.warning(
+                "frame_sampling.preset=%r is a legacy key; mapped to mode %r",
+                raw_preset,
+                mode,
+            )
+            return mode
+        logger.warning(
+            "frame_sampling.preset=%r is unknown or not a string; using mode %r",
+            raw_preset,
+            DEFAULT_MODE,
+        )
+        return DEFAULT_MODE
+    return DEFAULT_MODE
 
 
 def _resolve_max_edge(pick: PickFn) -> int:
@@ -265,7 +304,9 @@ def parse_frame_policy(provider: Any) -> FramePolicy:
 
     Reads ``getattr(provider, "extra_config_json", None)``; tolerates
     ``None``/non-dict JSON (full built-in defaults). Never raises on input
-    values — clamped/ignored values are logged as warnings.
+    values — clamped/ignored values are logged as warnings. The sampling
+    mode comes from the ``mode`` key (the legacy ``preset`` key is mapped
+    to a mode with a warning; an explicit ``mode`` wins).
     """
     extra = getattr(provider, "extra_config_json", None)
     if not isinstance(extra, dict):
@@ -280,23 +321,23 @@ def parse_frame_policy(provider: Any) -> FramePolicy:
         logger.warning("frame_sampling config %r is not a dict; using full defaults", raw_config)
         config = {}
 
-    preset_name = _resolve_preset(config)
-    preset = PRESETS[preset_name]
+    mode = _resolve_mode(config)
+    mode_bundle = PRESETS[mode]
 
     def pick(key: str, *, none_allowed: bool = False) -> Any:
-        """Explicit config value > preset default > built-in default."""
+        """Explicit config value > mode bundle default > built-in default."""
         if key in config:
             raw = config[key]
             if raw is not None or none_allowed:
                 return raw
-        if key in preset:
-            return preset[key]
+        if key in mode_bundle:
+            return mode_bundle[key]
         return getattr(_BUILTIN, key)
 
     min_frames, max_frames = _resolve_frame_bounds(pick)
 
     return FramePolicy(
-        preset=preset_name,
+        mode=mode,
         target_context_ratio=_bounded_float(
             "target_context_ratio",
             pick("target_context_ratio"),
@@ -349,7 +390,7 @@ def parse_frame_policy(provider: Any) -> FramePolicy:
 
 
 __all__ = [
-    "DEFAULT_PRESET",
+    "DEFAULT_MODE",
     "FRAME_SAMPLING_KEY",
     "FramePolicy",
     "PRESETS",

@@ -754,7 +754,7 @@ def _seed_image_mode_provider(db: Session) -> LLMProvider:
         is_default_vision=True,
         extra_config_json={
             "frame_sampling": {
-                "preset": "event",
+                "mode": "event",
                 "min_frames": 2,
                 "max_frames": 12,
                 "probe_fps": 2.0,

@@ -24,20 +24,10 @@ class FrameSample:
 
 
 @dataclass(frozen=True)
-class EventCandidate:
-    """A time window the sampler proposes as a candidate event region."""
-
-    t_start: float
-    t_end: float
-    reasons: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class FrameSet:
     """The complete output of one sampling request."""
 
     frames: tuple[FrameSample, ...]
-    candidates: tuple[EventCandidate, ...] = ()
     source: str = "sampler"
     elapsed_ms: int = 0
 

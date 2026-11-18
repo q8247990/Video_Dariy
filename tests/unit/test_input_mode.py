@@ -83,7 +83,7 @@ def test_image_when_frame_sampling_dict_and_enabled_absent(caplog) -> None:
 
 
 def test_image_when_frame_sampling_dict_with_other_keys_only() -> None:
-    assert _mode({"frame_sampling": {"preset": "dedupe", "max_frames": 60}}) == INPUT_MODE_IMAGE
+    assert _mode({"frame_sampling": {"mode": "dedupe", "max_frames": 60}}) == INPUT_MODE_IMAGE
 
 
 def test_image_when_enabled_is_true() -> None:
