@@ -8,7 +8,8 @@ so they can be edited from the provider form without a schema migration:
 
 Both are optional and backward-compatible: when unset the caller keeps its own
 scene default (the analyzer / summarizer pass ``8192``; QA stays uncapped; the
-entity-appearance vision call keeps ``300``).
+entity-appearance vision call keeps ``300``; the image frame-sampling plan
+defaults to ``4096`` via :func:`resolve_image_output_tokens`).
 """
 
 from __future__ import annotations
@@ -91,6 +92,33 @@ def resolve_max_output_tokens(provider: Any, *, scene_default: int | None) -> in
     return get_generation_limits(provider).output_tokens(scene_default=scene_default)
 
 
+def resolve_image_output_tokens(provider: Any, *, scene_default: int = 4096) -> int:
+    """The output cap for the image frame-sampling plan (single source of truth).
+
+    Reads ``frame_sampling.max_output_tokens`` first, then the top-level
+    ``max_output_tokens`` (positive int only; bools / garbage are ignored),
+    and falls back to ``scene_default``. Clamped to ``max_model_len`` when
+    set. Both the budget derivation (``frame_sampling.budget``) and the
+    execute path must call this — the plan formula must never contain a
+    literal output budget.
+    """
+    limits = get_generation_limits(provider)
+    configured: int | None = None
+    extra = getattr(provider, "extra_config_json", None)
+    if isinstance(extra, dict):
+        # canonical key: frame_sampling.policy.FRAME_SAMPLING_KEY
+        frame_sampling = extra.get("frame_sampling")
+        if isinstance(frame_sampling, dict):
+            configured = _positive_int(frame_sampling.get(KEY_MAX_OUTPUT_TOKENS))
+    if configured is None:
+        configured = limits.max_output_tokens
+    if configured is None:
+        configured = scene_default
+    if limits.max_model_len is not None:
+        configured = min(configured, limits.max_model_len)
+    return configured
+
+
 def resolve_num_frames(provider: Any, *, scene_default: int) -> int:
     """The video ``num_frames`` to sample for ``provider``.
 
@@ -109,6 +137,7 @@ __all__ = [
     "NUM_FRAMES_MAX",
     "NUM_FRAMES_MIN",
     "get_generation_limits",
+    "resolve_image_output_tokens",
     "resolve_max_output_tokens",
     "resolve_num_frames",
 ]
