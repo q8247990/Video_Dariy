@@ -16,6 +16,12 @@
 ``fingerprint``
     :func:`content_signature` (light size+head+tail file digest) and
     :func:`frame_set_fingerprint` (frame-set + policy + source fingerprint).
+``counters``
+    Per-provider frame-sampling acquisition counters persisted on the
+    ``/metrics`` surface (todo 12): :func:`record_frame_sampling_success`
+    / :func:`record_frame_sampling_failure` (transactional increments on
+    the ``AppRuntimeState`` snapshot) and
+    :func:`is_frame_acquisition_failure` (sampler-failure classification).
 """
 
 from __future__ import annotations
@@ -26,6 +32,11 @@ from src.services.frame_sampling.budget import (
     compute_frame_plan,
     conservative_tokens_per_image,
     estimate_prompt_tokens,
+)
+from src.services.frame_sampling.counters import (
+    is_frame_acquisition_failure,
+    record_frame_sampling_failure,
+    record_frame_sampling_success,
 )
 from src.services.frame_sampling.fingerprint import content_signature, frame_set_fingerprint
 from src.services.frame_sampling.mode import INPUT_MODE_IMAGE, INPUT_MODE_VIDEO, resolve_input_mode
@@ -54,5 +65,8 @@ __all__ = [
     "content_signature",
     "estimate_prompt_tokens",
     "frame_set_fingerprint",
+    "is_frame_acquisition_failure",
+    "record_frame_sampling_failure",
+    "record_frame_sampling_success",
     "resolve_input_mode",
 ]

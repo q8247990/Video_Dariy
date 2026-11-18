@@ -77,6 +77,9 @@ from src.services.frame_sampling import (
     conservative_tokens_per_image,
     content_signature,
     estimate_prompt_tokens,
+    is_frame_acquisition_failure,
+    record_frame_sampling_failure,
+    record_frame_sampling_success,
     resolve_input_mode,
 )
 from src.services.frame_sampling.policy import FramePolicy, parse_frame_policy
@@ -539,6 +542,7 @@ def _run_sub_chunk_loop(
             self=self,
             claim=claim,
             guards=guards,
+            provider=provider,
             priority=priority,
             last_prompt_text=last_prompt_text,
             last_response_text=last_response_text,
@@ -556,6 +560,7 @@ def _handle_loop_exception(
     self: Any,
     claim: Any,
     guards: ClaimGuards,
+    provider: Any,
     priority: str,
     last_prompt_text: str | None,
     last_response_text: str | None,
@@ -617,6 +622,12 @@ def _handle_loop_exception(
         record_partial_failure_transition(db, session=claim.session, task_log=claim.task_log)
     else:
         record_failed_transition(db, session=claim.session, task_log=claim.task_log)
+    if is_frame_acquisition_failure(exc):
+        # Frame-sampling failure counter: one per logical acquisition
+        # attempt (internal sampler HTTP retries not counted). Same
+        # transaction as the checkpoint error / TaskLog FAILED writes
+        # above.
+        record_frame_sampling_failure(db, provider_id=provider.id)
     db.commit()
     logger.exception(
         "Failed to analyze session %s, prompt=%r, raw_response=%r",
@@ -804,6 +815,17 @@ def _run_one_sub_chunk(
             usage=result.usage,
             record_token_usage_fn=record_token_usage,
         )
+        if has_frames:
+            # Frame-sampling counter: one logical acquisition per
+            # successful sub-chunk (the sampler client's internal HTTP
+            # retries are not counted — see src.services.frame_sampling.counters).
+            # Same transaction as the checkpoint success write above.
+            record_frame_sampling_success(
+                post_db,
+                provider_id=provider.id,
+                frame_count=len(frames),
+                frame_source=frame_source,
+            )
         renew_task_lease(post_db, claim.task_log.id, claim.task_log.lease_owner or "")
         post_db.commit()
     return prepared, result

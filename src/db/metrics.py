@@ -16,6 +16,14 @@ straight from the live database:
 * **analysis checkpoint progress** — for each currently running
   ``session_analysis`` task, how many sub-chunks completed successfully
   out of the total allocated for the current ``analysis_run``.
+* **frame sampling counters** — per-provider cumulative counters for the
+  image-input path's frame acquisitions (calls / failures / frames /
+  cache hits). The analyzer orchestration persists them under the
+  ``AppRuntimeState`` key :data:`FRAME_SAMPLING_COUNTERS_KEY` (the same
+  app-runtime snapshot mechanism as the heartbeat counters — no
+  dedicated table, no migration), incremented transactionally in the
+  same transaction as each sub-chunk's checkpoint success / failure
+  write (see :mod:`src.services.frame_sampling.counters`).
 
 All queries are read-only gauges computed against a caller-supplied
 engine; nothing here mutates state. The endpoint is deliberately simple
@@ -38,6 +46,21 @@ from src.models.task_log import TaskLog
 
 #: AppRuntimeState key under which the heartbeat persists its counters.
 HEARTBEAT_COUNTERS_KEY = "heartbeat_last_counters"
+
+#: AppRuntimeState key under which the analyzer persists the per-provider
+#: frame-sampling acquisition counters (storage shape:
+#: ``{"by_provider": {"<provider_id>": {"calls_total": int,
+#: "failures_total": int, "frames_total": int,
+#: "cache_hits_total": int}}}``).
+FRAME_SAMPLING_COUNTERS_KEY = "frame_sampling_counters"
+
+#: Frame-sampling counter field names (the per-provider entry keys).
+FRAME_SAMPLING_COUNTER_FIELDS = (
+    "calls_total",
+    "failures_total",
+    "frames_total",
+    "cache_hits_total",
+)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -145,18 +168,72 @@ def checkpoint_progress(engine: Engine) -> list[dict[str, Any]]:
     return results
 
 
+def frame_sampling_metrics(engine: Engine) -> list[dict[str, Any]]:
+    """Return the per-provider frame-sampling acquisition counters.
+
+    Reads the cumulative counters the analyzer orchestration persists
+    under :data:`FRAME_SAMPLING_COUNTERS_KEY` (see the module docstring
+    and :mod:`src.services.frame_sampling.counters` for the write side).
+    Returns an empty list when no image-mode analysis has run yet.
+
+    Each entry is one provider:
+
+    * ``provider_id`` — the ``LLMProvider.id`` (int when parseable);
+    * ``calls_total`` — successful frame acquisitions (one per logical
+      acquisition attempt; the sampler client's internal HTTP retries —
+      up to 3 attempts — are NOT counted separately, and a sampler-side
+      ``ExtractionFailed`` 422 surfaces as ``SamplerUnavailable`` and
+      counts as exactly one failure);
+    * ``failures_total`` — failed acquisitions (``SamplerUnavailable`` /
+      ``SamplerDisabled``);
+    * ``frames_total`` — sum of frames actually acquired;
+    * ``cache_hits_total`` — subset of successful acquisitions served
+      from the on-disk frame-set cache (``source="cache"``).
+    """
+    with engine.connect() as conn:
+        value = conn.execute(
+            select(AppRuntimeState.state_value).where(
+                AppRuntimeState.state_key == FRAME_SAMPLING_COUNTERS_KEY
+            )
+        ).scalar_one_or_none()
+    by_provider: dict[str, Any] = {}
+    if isinstance(value, dict):
+        raw = value.get("by_provider")
+        if isinstance(raw, dict):
+            by_provider = raw
+    entries: list[dict[str, Any]] = []
+    for provider_id, counters in sorted(by_provider.items()):
+        if not isinstance(counters, dict):
+            continue
+        try:
+            entry_provider_id: int | str = int(provider_id)
+        except ValueError:
+            entry_provider_id = provider_id
+        entries.append(
+            {
+                "provider_id": entry_provider_id,
+                **{field: int(counters.get(field, 0)) for field in FRAME_SAMPLING_COUNTER_FIELDS},
+            }
+        )
+    return entries
+
+
 def metrics_snapshot(engine: Engine) -> dict[str, Any]:
     """Compose the full /metrics payload."""
     return {
         "delivery": delivery_metrics(engine),
         "task_recovery": task_recovery_metrics(engine),
         "analysis_checkpoint": checkpoint_progress(engine),
+        "frame_sampling": frame_sampling_metrics(engine),
     }
 
 
 __all__ = [
+    "FRAME_SAMPLING_COUNTER_FIELDS",
+    "FRAME_SAMPLING_COUNTERS_KEY",
     "HEARTBEAT_COUNTERS_KEY",
     "checkpoint_progress",
+    "frame_sampling_metrics",
     "metrics_snapshot",
     "delivery_metrics",
     "task_recovery_metrics",

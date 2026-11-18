@@ -162,7 +162,17 @@ def _require_metrics_token(x_metrics_token: str | None = Header(default=None)) -
 
 @app.get("/metrics", dependencies=[Depends(_require_metrics_token)])
 def metrics_check() -> JSONResponse:
-    """Operational metrics: outbox lag, task recovery, checkpoint progress."""
+    """Operational metrics: outbox lag, task recovery, checkpoint progress,
+    and per-provider frame-sampling acquisition counters.
+
+    The frame-sampling counters are persisted under the
+    ``AppRuntimeState`` JSON snapshot key ``frame_sampling_counters``
+    (the same app-runtime mechanism as the heartbeat counters — no
+    dedicated table, no migration), incremented transactionally with
+    each sub-chunk's checkpoint success / failure write. See
+    :func:`src.db.metrics.frame_sampling_metrics` and
+    :mod:`src.services.frame_sampling.counters`.
+    """
     return JSONResponse(content=metrics_snapshot(engine))
 
 
