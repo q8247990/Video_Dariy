@@ -155,7 +155,7 @@ def big1080(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def small320(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """2s 320x240 testsrc @10fps (long edge already a multiple of 32)."""
+    """2s 320x240 testsrc @10fps."""
     path = tmp_path_factory.mktemp("small320") / "small320.mp4"
     _run_ffmpeg(
         "-f",
@@ -168,6 +168,73 @@ def small320(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "libx264",
         "-pix_fmt",
         "yuv420p",
+        "-y",
+        str(path),
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
+def clip1440(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """2s 2560x1440 (16:9) testsrc @10fps — exactly the supported box size."""
+    path = tmp_path_factory.mktemp("clip1440") / "clip1440.mp4"
+    _run_ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=2560x1440:rate=10",
+        "-t",
+        "2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
+        "-y",
+        str(path),
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
+def clip4k(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """2s 3840x2160 (4K) testsrc @10fps — outside the supported box."""
+    path = tmp_path_factory.mktemp("clip4k") / "clip4k.mp4"
+    _run_ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=3840x2160:rate=10",
+        "-t",
+        "2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
+        "-y",
+        str(path),
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
+def odd721(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """2s 1281x721 testsrc @10fps (odd dimensions; mjpeg tolerates odd sizes)."""
+    path = tmp_path_factory.mktemp("odd721") / "odd721.mp4"
+    _run_ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=1281x721:rate=10",
+        "-t",
+        "2",
+        "-c:v",
+        "mjpeg",
+        "-pix_fmt",
+        "yuvj420p",
         "-y",
         str(path),
     )
@@ -399,29 +466,25 @@ class TestJpegQualityMapping:
 
 
 # ---------------------------------------------------------------------------
-# In-ffmpeg scaling (todo 38): max_edge cap, multiple-of-32 long edge, no upscale
+# In-ffmpeg scaling (todo 38/40): fit-box scale, even dims, no upscale
 # ---------------------------------------------------------------------------
 
 
 class TestScaleFilter:
-    def test_1080p_long_edge_capped_and_multiple_of_32(self, big1080: Path) -> None:
+    def test_1080p_long_edge_capped_at_max_edge(self, big1080: Path) -> None:
         result = _extract(big1080, max_edge=640)
         assert result.frames
         for frame in result.frames:
             width, height = _jpeg_size(frame.jpeg_bytes)
-            long_edge = max(width, height)
-            assert long_edge == 640
-            assert long_edge % 32 == 0
+            assert max(width, height) == 640
             assert (width, height) == (640, 360)
 
-    def test_320x240_long_edge_capped_and_multiple_of_32(self, small320: Path) -> None:
+    def test_320x240_long_edge_capped_at_max_edge(self, small320: Path) -> None:
         result = _extract(small320, max_edge=160)
         assert result.frames
         for frame in result.frames:
             width, height = _jpeg_size(frame.jpeg_bytes)
-            long_edge = max(width, height)
-            assert long_edge == 160
-            assert long_edge % 32 == 0
+            assert max(width, height) == 160
             assert (width, height) == (160, 120)
 
     def test_no_upscale_when_source_smaller_than_max_edge(self, small320: Path) -> None:
@@ -438,8 +501,8 @@ class TestScaleFilter:
 
     def test_single_ffmpeg_process_for_single_pass(self, small320: Path, monkeypatch) -> None:
         # The decode must happen exactly once (todo 38). We spy on the ffmpeg
-        # helper ``_run`` (not ``subprocess.run``) so the ffprobe duration probe
-        # in ``_probe_duration`` is not counted as a decode pass.
+        # helper ``_run`` (not ``subprocess.run``) so the ffprobe probe in
+        # ``_probe_video_info`` is not counted as a decode pass.
         import app.extract as extract_mod
 
         calls: list[list[str]] = []
@@ -454,3 +517,80 @@ class TestScaleFilter:
 
         assert len(calls) == 1
         assert calls[0][0] == "ffmpeg"
+
+
+# ---------------------------------------------------------------------------
+# Resolution box (todo 40): 1440p pass-through, reject-by-default, opt-in
+# ---------------------------------------------------------------------------
+
+
+class TestResolutionBox:
+    def test_1440p_source_passes_through_at_source_size(self, clip1440: Path) -> None:
+        result = _extract(clip1440)  # max_edge=None: no scaling requested
+
+        assert (result.source_width, result.source_height) == (2560, 1440)
+        assert result.frames
+        for frame in result.frames:
+            assert _jpeg_size(frame.jpeg_bytes) == (2560, 1440)
+
+    def test_1080p_source_passes_through_at_source_size(self, big1080: Path) -> None:
+        result = _extract(big1080)  # max_edge=None: no scaling requested
+
+        assert (result.source_width, result.source_height) == (1920, 1080)
+        assert result.frames
+        for frame in result.frames:
+            assert _jpeg_size(frame.jpeg_bytes) == (1920, 1080)
+
+    def test_out_of_box_without_max_edge_fails_fast(self, clip4k: Path) -> None:
+        with pytest.raises(ExtractionFailed) as excinfo:
+            _extract(clip4k)  # max_edge=None
+
+        message = str(excinfo.value)
+        assert "3840x2160" in message
+        assert "2560x1440" in message
+        assert "max_edge" in message
+        assert "opt into downscaling" in message
+
+    def test_out_of_box_with_large_max_edge_still_rejected(self, clip4k: Path) -> None:
+        # max_edge >= the box long edge is not a downscale opt-in.
+        for max_edge in (2560, 4096):
+            with pytest.raises(ExtractionFailed, match="max_edge"):
+                _extract(clip4k, max_edge=max_edge)
+
+    def test_out_of_box_with_small_max_edge_opts_into_downscale(self, clip4k: Path) -> None:
+        result = _extract(clip4k, max_edge=1920)
+
+        assert (result.source_width, result.source_height) == (3840, 2160)
+        assert result.frames
+        for frame in result.frames:
+            width, height = _jpeg_size(frame.jpeg_bytes)
+            assert (width, height) == (1920, 1080)
+            assert width % 2 == 0 and height % 2 == 0
+
+    def test_odd_source_dimensions_are_aligned_to_even(self, odd721: Path) -> None:
+        result = _extract(odd721)  # fits the box, max_edge=None
+
+        assert (result.source_width, result.source_height) == (1281, 721)
+        assert result.frames
+        for frame in result.frames:
+            width, height = _jpeg_size(frame.jpeg_bytes)
+            assert width % 2 == 0
+            assert height % 2 == 0
+            assert (width, height) == (1280, 720)
+
+    def test_out_of_box_rejection_happens_before_decoding(self, clip4k: Path, monkeypatch) -> None:
+        # Fail fast: the rejection must not start the (expensive) decode pass.
+        import app.extract as extract_mod
+
+        calls: list[list[str]] = []
+        real_run = extract_mod._run
+
+        def spy_run(cmd: list[str], timeout_seconds: float):
+            calls.append(list(cmd))
+            return real_run(cmd, timeout_seconds)
+
+        monkeypatch.setattr(extract_mod, "_run", spy_run)
+        with pytest.raises(ExtractionFailed, match="max_edge"):
+            _extract(clip4k)
+
+        assert calls == []

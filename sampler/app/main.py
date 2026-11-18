@@ -55,7 +55,7 @@ class SampleRequest(BaseModel):
     probe_fps: float = Field(default=2.0, gt=0)
     min_frames: int = Field(default=4, ge=1)
     max_frames: int = Field(default=120, ge=1)
-    max_edge: int = Field(default=640, ge=1)
+    max_edge: int | None = Field(default=640, ge=1)
     jpeg_quality: int = Field(default=85, ge=1, le=100)
     mode: Literal["uniform", "dedupe", "event"] = "uniform"
     dedupe_phash_distance: int | None = Field(default=None, ge=0)
@@ -117,8 +117,11 @@ def sample(request: SampleRequest) -> SampleResponse:
         - 400: path outside ``SAMPLER_ALLOWED_ROOTS`` / relative / ``..`` /
           symlink escape / non-file, or any schema/validation error, or
           ``FrameSelectionError`` (budget below the minimum).
-        - 422: the video cannot be decoded (``ExtractionFailed``); the detail
-          carries the ffmpeg stderr tail.
+        - 422: ``ExtractionFailed`` — the video cannot be decoded (corrupt
+          file, decode error, ffmpeg timeout; the detail carries the ffmpeg
+          stderr tail) **or** the source resolution is outside the supported
+          2560x1440 box without an explicit ``max_edge`` downscale opt-in
+          (the detail names the source size, the box and the remedy).
         - 500: unexpected errors; a generic message, traceback logged.
     """
     try:

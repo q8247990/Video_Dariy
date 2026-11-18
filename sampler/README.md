@@ -62,7 +62,7 @@ else is rejected with `400` before any bytes are read.
 | `probe_fps` | number | `2.0` | `> 0` | frames per second sampled by the two ffmpeg passes |
 | `min_frames` | int | `4` | `>= 1` | floor for the budget check; `max_frames < min_frames` → `400` |
 | `max_frames` | int | `120` | `>= 1` | frame **budget** passed to `select_frames(budget=...)` |
-| `max_edge` | int | `640` | `>= 1` | selected frames are downscaled so the long edge `<= max_edge` (never upscaled) |
+| `max_edge` | int \| null | `640` | `>= 1` (or `null`) | explicit downscale opt-in: when `< 2560`, frames are scaled in ffmpeg so the long edge `<= max_edge` (never upscaled, even dimensions); `null` / `>= 2560` keeps in-box sources at source resolution |
 | `jpeg_quality` | int | `85` | `1..100` | JPEG quality of the returned frames (re-encode when resized) |
 | `mode` | string | `"uniform"` | `uniform` \| `dedupe` \| `event` | selection strategy (todo 18) |
 | `dedupe_phash_distance` | int \| null | `null` | `>= 0` | pHash Hamming threshold for `dedupe` (`null` = 6) |
@@ -73,6 +73,24 @@ else is rejected with `400` before any bytes are read.
 Unknown fields are ignored. The whole request is bounded by a 120 s
 per-ffmpeg-invocation timeout; extraction failures surface as `422` with
 the ffmpeg stderr tail.
+
+### Supported resolution box (1440p)
+
+The sampler supports sources up to the **2560x1440 box** (constants
+`SUPPORTED_MAX_WIDTH` / `SUPPORTED_MAX_HEIGHT` in `app/config.py`). The source
+dimensions and the container duration are probed in a single ffprobe call
+before any decoding:
+
+| Source resolution | `max_edge` | Outcome |
+|---|---|---|
+| fits the box (`w <= 2560 and h <= 1440`) | `null` or `>= 2560` | **pass-through**: no downscaling, output = source dimensions (odd dimensions aligned to even) |
+| fits the box | `< 2560` and `< source long edge` | scaled in ffmpeg to fit the `max_edge` square box (aspect preserved, never upscaled, even dimensions) |
+| outside the box (e.g. 4K 3840x2160) | `null` or `>= 2560` | **rejected by default** — fail fast with `422` (`ExtractionFailed`) before decoding; no silent downscaling |
+| outside the box | `< 2560` | allowed — explicit downscale opt-in, frames fit the `max_edge` square box |
+
+The reject message names the source size, the supported box and the remedy:
+`source resolution 3840x2160 exceeds the supported 2560x1440 box: set
+max_edge to a smaller value to opt into downscaling`.
 
 ### `POST /sample` — response (200)
 
@@ -105,7 +123,7 @@ the ffmpeg stderr tail.
 | `400` | `video_path` outside `SAMPLER_ALLOWED_ROOTS`, relative or `..`-unnormalised path, symlink target outside the roots, or not a regular file | the specific path-safety violation (refers only to the path the request sent) |
 | `400` | any schema/validation error (bad type, out-of-range, unknown `mode`, missing field) | list of validation errors |
 | `400` | `FrameSelectionError` — `max_frames` below the `min_frames` floor | message containing the minimum frame count |
-| `422` | video cannot be decoded (`ExtractionFailed`: corrupt file, decode error, ffmpeg timeout) | `ExtractionFailed` message with the ffmpeg stderr tail |
+| `422` | video cannot be decoded (`ExtractionFailed`: corrupt file, decode error, ffmpeg timeout) **or** source outside the supported 2560x1440 box without an explicit `max_edge` downscale opt-in | `ExtractionFailed` message with the ffmpeg stderr tail, or the source size + box + remedy |
 | `500` | any unexpected server error | generic `internal error` (traceback logged server-side, never leaked) |
 
 ## Build

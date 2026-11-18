@@ -75,6 +75,31 @@ def _make_testsrc(path: Path, size: str, duration: float = 20.0, rate: float = 1
     return path
 
 
+def _make_testsrc_fast(path: Path, size: str, duration: float = 2.0, rate: float = 10.0) -> Path:
+    """Generate a short libx264 ``ultrafast`` clip (fast at 4K resolutions)."""
+    _run_ffmpeg(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=duration={duration:g}:rate={rate:g}:size={size}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            str(path),
+        ]
+    )
+    return path
+
+
 def _make_scene_cut(path: Path) -> Path:
     """20s clip: 10s black then 10s white — one hard scene cut at t=10s."""
     _run_ffmpeg(
@@ -403,3 +428,57 @@ def test_sample_max_edge_downscales_larger_frames(
         width, height = image.size
         assert max(width, height) <= 160
         assert (width, height) == (160, 120), "320x240 at max_edge=160 must become 160x120"
+
+
+# ---------------------------------------------------------------------------
+# Resolution box (todo 40): out-of-box 4K rejected by default, opt-in via max_edge
+# ---------------------------------------------------------------------------
+
+
+def test_sample_422_out_of_box_source_without_max_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir()
+    video = _make_testsrc_fast(root / "clip4k.mp4", "3840x2160", duration=2, rate=10)
+    monkeypatch.setenv("SAMPLER_ALLOWED_ROOTS", str(root))
+
+    with TestClient(main.app) as client:
+        response = _post(client, _payload(video, max_edge=None))
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "3840x2160" in detail
+    assert "2560x1440" in detail
+    assert "max_edge" in detail
+
+
+def test_sample_422_out_of_box_source_with_large_max_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir()
+    video = _make_testsrc_fast(root / "clip4k.mp4", "3840x2160", duration=2, rate=10)
+    monkeypatch.setenv("SAMPLER_ALLOWED_ROOTS", str(root))
+
+    with TestClient(main.app) as client:
+        response = _post(client, _payload(video, max_edge=2560))
+    assert response.status_code == 422
+    assert "max_edge" in response.json()["detail"]
+
+
+def test_sample_200_out_of_box_source_with_max_edge_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir()
+    video = _make_testsrc_fast(root / "clip4k.mp4", "3840x2160", duration=2, rate=10)
+    monkeypatch.setenv("SAMPLER_ALLOWED_ROOTS", str(root))
+
+    with TestClient(main.app) as client:
+        response = _post(client, _payload(video, max_edge=1920))
+    assert response.status_code == 200
+    for frame in response.json()["frames"]:
+        image = Image.open(BytesIO(base64.b64decode(frame["jpeg_base64"])))
+        width, height = image.size
+        assert (width, height) == (1920, 1080)
+        assert width % 2 == 0 and height % 2 == 0

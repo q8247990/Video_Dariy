@@ -1,4 +1,4 @@
-"""Single-pass ffmpeg frame extraction with scene gating (todo 17, todo 38).
+"""Single-pass ffmpeg frame extraction with scene gating (todo 17, todo 38, 40).
 
 Given a video file, ``extract_frames`` decodes it at a fixed probe rate and
 returns every sampled frame as a JPEG plus a list of *event candidate
@@ -16,10 +16,19 @@ because the metadata filter logs at AV_LOG_INFO — at ``-loglevel error``
 nothing is printed at all. The scene scores are parsed from that same stderr
 in the same call that writes the JPEGs, so the decode happens exactly once.
 
-Optionally the frames are scaled in ffmpeg (todo 38): when ``max_edge`` is
-given, a ``scale`` filter caps the long edge at ``max_edge`` (never upscales,
-long edge a multiple of 32), so the returned JPEGs are already final-size and
+**Resolution box** (todo 40): the supported source box is
+``SUPPORTED_MAX_WIDTH x SUPPORTED_MAX_HEIGHT`` (1440p). A source that fits
+the box passes through without scaling (the always-present ``scale`` filter
+only aligns odd dimensions to even). A source outside the box is rejected
+with :class:`ExtractionFailed` unless the caller opts into downscaling by
+passing a ``max_edge`` smaller than the box long edge; then the frames are
+scaled in ffmpeg to fit the ``max_edge`` square box (aspect preserved, never
+upscaled, even dimensions), so the returned JPEGs are already final-size and
 need no re-encoding downstream.
+
+The source dimensions and container duration come from **one** ffprobe
+invocation (``-show_entries stream=width,height:format=duration``), run
+before the decode so an out-of-box source fails fast without being decoded.
 
 Frame times are derived from the filter output index (``index / probe_fps``),
 never from ``pts_time``: the ``fps`` filter guarantees output frames land
@@ -41,6 +50,7 @@ instead of an error; unreadable files, decode failures and timeouts raise
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -49,6 +59,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from app.config import SUPPORTED_MAX_HEIGHT, SUPPORTED_MAX_WIDTH
 from app.models import CandidateWindow, ExtractedFrame, ExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -120,25 +131,56 @@ def _run(cmd: list[str], timeout_seconds: float) -> subprocess.CompletedProcess[
         raise ExtractionFailed(f"failed to run {cmd[0]}: {exc}") from exc
 
 
-def _scale_filter(max_edge: int) -> str:
-    """Build an ffmpeg ``scale`` filter capping the long edge at ``max_edge``.
+def _scale_filter(box_width: int, box_height: int) -> str:
+    """Build an ffmpeg ``scale`` filter fitting the frame inside ``box_width x box_height``.
 
-    The long edge is scaled down to the largest multiple of 32 not exceeding
-    ``min(edge, max_edge)`` (vision models prefer 32-aligned dims); the short
-    edge is ``-2`` so the aspect ratio is preserved. The long edge is never
-    enlarged: the target is always <= the source edge. When the 32-aligned
-    target would be < 32 (a sub-32 source, or ``max_edge`` < 32) the exact cap
-    ``min(edge, max_edge)`` is used instead so we neither upscale nor emit a
-    zero dimension.
+    ``min(<W>,iw)`` / ``min(<H>,ih)`` cap each output dimension at the source
+    dimension, so the frame is never enlarged;
+    ``force_original_aspect_ratio=decrease`` preserves the aspect ratio inside
+    the box; ``force_divisible_by=2`` rounds each dimension down to an even
+    value (odd source dimensions become even).
     """
+    return (
+        f"scale='min({box_width},iw)':'min({box_height},ih)'"
+        ":force_original_aspect_ratio=decrease:force_divisible_by=2"
+    )
 
-    def _target(edge: str) -> str:
-        m32 = f"trunc(min({edge},{max_edge})/32)*32"
-        return f"if(gte({m32},32),{m32},min({edge},{max_edge}))"
 
-    width = _target("iw")
-    height = _target("ih")
-    return f"scale='if(gte(iw,ih),{width},-2)':'if(gte(iw,ih),-2,{height})'"
+def _out_of_box_error(source_width: int, source_height: int) -> str:
+    """Message for a source that does not fit the supported box without an explicit downscale."""
+    return (
+        f"source resolution {source_width}x{source_height} exceeds the supported "
+        f"{SUPPORTED_MAX_WIDTH}x{SUPPORTED_MAX_HEIGHT} box: "
+        f"set max_edge to a smaller value to opt into downscaling"
+    )
+
+
+def _resolution_box(
+    source_width: int | None,
+    source_height: int | None,
+    max_edge: int | None,
+) -> tuple[int, int] | None:
+    """Resolve the ffmpeg scale box for the extraction pass (todo 40).
+
+    Returns the ``(width, height)`` box the ``scale`` filter must fit the
+    frames inside, or ``None`` for an uncheckable pass-through (source
+    dimensions unknown — nothing to check, nothing to scale).
+
+    - ``max_edge`` smaller than the box long edge is an explicit downscale
+      opt-in: frames fit the ``max_edge`` square box.
+    - Otherwise the source must fit the supported box; a source outside it
+      raises :class:`ExtractionFailed` (fail fast, before decoding).
+    - A fitting source maps to the box itself: ``min(<W>,iw)`` /
+      ``min(<H>,ih)`` then equals the source size, so only odd dimensions are
+      aligned to even.
+    """
+    if max_edge is not None and max_edge < SUPPORTED_MAX_WIDTH:
+        return (max_edge, max_edge)
+    if source_width is not None and source_height is not None:
+        if source_width > SUPPORTED_MAX_WIDTH or source_height > SUPPORTED_MAX_HEIGHT:
+            raise ExtractionFailed(_out_of_box_error(source_width, source_height))
+        return (SUPPORTED_MAX_WIDTH, SUPPORTED_MAX_HEIGHT)
+    return None
 
 
 def _parse_scores(stderr: bytes, probe_fps: float) -> list[tuple[float, float]]:
@@ -165,7 +207,7 @@ def _extract_pass(
     video_path: Path,
     probe_fps: float,
     qv: int,
-    max_edge: int | None,
+    scale_box: tuple[int, int] | None,
     timeout_seconds: float,
     tmp_dir: Path,
 ) -> tuple[list[tuple[float, float]], list[ExtractedFrame]]:
@@ -173,13 +215,13 @@ def _extract_pass(
 
     One ffmpeg invocation decodes the video at ``probe_fps``, attaches a
     ``lavfi.scene_score`` to every sampled frame (``metadata=print`` to
-    stderr), optionally scales the frames to the ``max_edge`` budget, and
-    writes them as JPEGs. Returns ``(scene_scores, frames)``; both are empty
-    when the stream decodes to zero frames.
+    stderr), scales the frames into the ``scale_box`` when a box is given,
+    and writes them as JPEGs. Returns ``(scene_scores, frames)``; both are
+    empty when the stream decodes to zero frames.
     """
     video_filter = f"fps={probe_fps:g},select='gte(scene,0)',metadata=print"
-    if max_edge is not None:
-        video_filter += f",{_scale_filter(max_edge)}"
+    if scale_box is not None:
+        video_filter += f",{_scale_filter(*scale_box)}"
     pattern = tmp_dir / "frame-%06d.jpg"
     cmd = [
         "ffmpeg",
@@ -213,8 +255,43 @@ def _extract_pass(
     return scores, frames
 
 
-def _probe_duration(video_path: Path, timeout_seconds: float) -> float:
-    """Best-effort container duration via ffprobe; 0.0 when unknown/unreadable."""
+def _first_video_stream(streams: object) -> tuple[int, int] | None:
+    """Return ``(width, height)`` of the first stream carrying both dimensions."""
+    if not isinstance(streams, list):
+        return None
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        width = stream.get("width")
+        height = stream.get("height")
+        if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
+            return width, height
+    return None
+
+
+def _format_duration(fmt: object) -> float:
+    """Best-effort container duration in seconds; 0.0 when unknown/invalid."""
+    if not isinstance(fmt, dict):
+        return 0.0
+    try:
+        value = float(fmt.get("duration", "nan"))
+    except ValueError:
+        return 0.0
+    return value if math.isfinite(value) and value > 0 else 0.0
+
+
+def _probe_video_info(
+    video_path: Path, timeout_seconds: float
+) -> tuple[float, int | None, int | None]:
+    """Best-effort container duration and video dimensions in one ffprobe call.
+
+    Returns ``(duration_seconds, width, height)``. A single invocation asks
+    for the stream dimensions and the format duration at once
+    (``-show_entries stream=width,height:format=duration``); the first stream
+    carrying both a width and a height is the video stream. Unknown or
+    unreadable values degrade to ``0.0`` / ``None`` (never an error): the box
+    check is skipped when the dimensions are unknown.
+    """
     try:
         proc = subprocess.run(
             [
@@ -222,23 +299,27 @@ def _probe_duration(video_path: Path, timeout_seconds: float) -> float:
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration",
+                "stream=width,height:format=duration",
                 "-of",
-                "default=noprint_wrappers=1:nokey=1",
+                "json",
                 str(video_path),
             ],
             capture_output=True,
             timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return 0.0
+        return 0.0, None, None
     if proc.returncode != 0:
-        return 0.0
+        return 0.0, None, None
     try:
-        value = float(proc.stdout.decode("utf-8", "replace").strip())
+        payload = json.loads(proc.stdout.decode("utf-8", "replace"))
     except ValueError:
-        return 0.0
-    return value if math.isfinite(value) and value > 0 else 0.0
+        return 0.0, None, None
+    if not isinstance(payload, dict):
+        return 0.0, None, None
+    dims = _first_video_stream(payload.get("streams"))
+    width, height = dims if dims is not None else (None, None)
+    return _format_duration(payload.get("format")), width, height
 
 
 def _build_candidates(
@@ -303,18 +384,25 @@ def extract_frames(
             windows are kept.
         jpeg_quality: Target JPEG quality, 60..95 (mapped to ffmpeg ``-q:v``).
         timeout_seconds: Per-ffmpeg-invocation timeout in seconds.
-        max_edge: When given, frames are scaled in ffmpeg so the long edge is
-            at most ``max_edge`` (never upscaled, long edge a multiple of 32).
-            ``None`` (the default) leaves frames at their source resolution.
+        max_edge: When given and smaller than the supported box long edge
+            (``SUPPORTED_MAX_WIDTH``), frames are scaled in ffmpeg so the long
+            edge is at most ``max_edge`` (aspect preserved, never upscaled,
+            even dimensions) — the explicit opt-in to downscaling. ``None``
+            (the default) leaves in-box frames at their source resolution
+            (odd dimensions aligned to even); a source outside the supported
+            box then fails with :class:`ExtractionFailed`.
 
     Returns:
         An :class:`app.models.ExtractionResult`; frames and candidates are
-        both empty for a zero-frame video.
+        both empty for a zero-frame video. ``source_width`` /
+        ``source_height`` report the probed source resolution (0 when the
+        probe could not determine it).
 
     Raises:
         ValueError: on non-positive/negative parameter values.
         ExtractionFailed: on missing file, unreadable/corrupt video, decode
-            failure or timeout (message carries ffmpeg's stderr tail).
+            failure, timeout, or a source outside the supported resolution
+            box without an explicit ``max_edge`` downscale opt-in.
     """
     if not (isinstance(probe_fps, (int, float)) and math.isfinite(probe_fps) and probe_fps > 0):
         raise ValueError(f"probe_fps must be a finite positive number, got {probe_fps!r}")
@@ -339,27 +427,41 @@ def extract_frames(
     if not path.is_file():
         raise ExtractionFailed(f"video file not found: {path}")
 
+    # Probe once (duration + source dimensions) before decoding: an out-of-box
+    # source must fail fast without being decoded.
+    duration, source_width, source_height = _probe_video_info(path, timeout_seconds)
+    scale_box = _resolution_box(source_width, source_height, max_edge)
+    result_width = source_width or 0
+    result_height = source_height or 0
+
     qv = jpeg_quality_to_qv(jpeg_quality)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="video-dairy-sampler-") as tmp:
         tmp_dir = Path(tmp)
         logger.info(
-            "Extracting frames from %s (probe_fps=%g, qv=%d, max_edge=%s)",
+            "Extracting frames from %s (%dx%d, probe_fps=%g, qv=%d, max_edge=%s, box=%s)",
             path,
+            result_width,
+            result_height,
             probe_fps,
             qv,
             max_edge,
+            scale_box,
         )
         scene_scores, frames = _extract_pass(
-            path, probe_fps, qv, max_edge, timeout_seconds, tmp_dir
+            path, probe_fps, qv, scale_box, timeout_seconds, tmp_dir
         )
         if not frames:
             # Zero decodable frames: empty result, not an error.
             elapsed_ms = int((time.monotonic() - started) * 1000)
             return ExtractionResult(
-                frames=(), candidates=(), elapsed_ms=elapsed_ms, duration_seconds=0.0
+                frames=(),
+                candidates=(),
+                elapsed_ms=elapsed_ms,
+                duration_seconds=0.0,
+                source_width=result_width,
+                source_height=result_height,
             )
-        duration = _probe_duration(path, timeout_seconds)
         if duration <= 0.0 and frames:
             # Fallback: last sampled frame plus one frame period.
             duration = frames[-1].t_seconds + 1.0 / probe_fps
@@ -379,4 +481,6 @@ def extract_frames(
         candidates=candidates,
         elapsed_ms=elapsed_ms,
         duration_seconds=duration,
+        source_width=result_width,
+        source_height=result_height,
     )

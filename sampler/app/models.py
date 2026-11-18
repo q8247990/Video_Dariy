@@ -43,9 +43,13 @@ class ExtractionResult:
     ``frames`` is the complete probe-rate JPEG stream; ``candidates`` are the
     scene-gated event windows. An empty/zero-frame video yields empty tuples
     (not an error). ``elapsed_ms`` covers both ffmpeg passes.
+    ``source_width`` / ``source_height`` report the probed source resolution
+    (0 when the probe could not determine it).
     """
 
     frames: tuple[ExtractedFrame, ...]
     candidates: tuple[CandidateWindow, ...]
     elapsed_ms: int
     duration_seconds: float
+    source_width: int = 0
+    source_height: int = 0

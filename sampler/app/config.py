@@ -19,6 +19,15 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 18080
 DEFAULT_VERSION = "0.1.0"
 
+#: The supported source-resolution box (1440p). A source that fits inside it
+#: (``width <= SUPPORTED_MAX_WIDTH and height <= SUPPORTED_MAX_HEIGHT``) is
+#: passed through without scaling (only even-dimension alignment). A source
+#: outside the box is rejected by default; the caller must explicitly opt
+#: into downscaling by passing a ``max_edge`` smaller than
+#: ``SUPPORTED_MAX_WIDTH``.
+SUPPORTED_MAX_WIDTH = 2560
+SUPPORTED_MAX_HEIGHT = 1440
+
 
 @dataclass(frozen=True)
 class Settings:
