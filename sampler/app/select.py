@@ -85,9 +85,7 @@ def phash(jpeg_bytes: bytes) -> int:
     median of the block.
     """
     image = (
-        Image.open(io.BytesIO(jpeg_bytes))
-        .convert("L")
-        .resize((32, 32), Image.Resampling.LANCZOS)
+        Image.open(io.BytesIO(jpeg_bytes)).convert("L").resize((32, 32), Image.Resampling.LANCZOS)
     )
     matrix = np.asarray(image, dtype=np.float64)
     dct = _DCT_32 @ matrix @ _DCT_32.T
@@ -160,9 +158,7 @@ def _fill_positions(n: int, need: int, forbidden: set[int]) -> list[int]:
     return picked
 
 
-def _uniform_selection(
-    frames: list[ExtractedFrameLike], budget: int
-) -> list[ExtractedFrameLike]:
+def _uniform_selection(frames: list[ExtractedFrameLike], budget: int) -> list[ExtractedFrameLike]:
     """Index-proportional even spacing, deduplicated and back-filled to the
     exact budget (called only when ``1 <= budget < len(frames)``)."""
     n = len(frames)
@@ -208,6 +204,57 @@ def _dedupe_selection(
     return [frames[i] for i in sorted(selected)]
 
 
+def _allocate_window_budgets(
+    window_frames: list[tuple[CandidateWindowLike, list[int]]],
+    window_budget: int,
+) -> list[int]:
+    """Allocate ``window_budget`` frames across the given windows.
+
+    When windows outnumber the budget, the earliest windows each get one
+    frame (the returned list is shorter; the caller pairs windows with
+    allocations in order). Otherwise allocation is proportional to window
+    duration (point windows split the budget evenly), clamped so the total
+    is exactly ``window_budget``.
+    """
+    if len(window_frames) > window_budget:
+        return [1] * window_budget
+    durations = [max(w.t_end - w.t_start, 0.0) for w, _ in window_frames]
+    total = sum(durations)
+    if total <= 0:
+        base, extra = divmod(window_budget, len(window_frames))
+        return [base + (1 if j < extra else 0) for j in range(len(window_frames))]
+    allocations = [max(1, round(window_budget * d / total)) for d in durations]
+    while sum(allocations) > window_budget and any(a > 1 for a in allocations):
+        j = max(range(len(allocations)), key=lambda k: (allocations[k], -k))
+        allocations[j] -= 1
+    while sum(allocations) < window_budget:
+        j = max(range(len(allocations)), key=lambda k: (durations[k], -k))
+        allocations[j] += 1
+    return allocations
+
+
+def _pick_window_positions(m: int, alloc: int) -> list[int]:
+    """Evenly-spaced positions for ``alloc`` frames within a window of ``m``.
+
+    All positions when ``alloc >= m``; the middle position when
+    ``alloc == 1``; otherwise the index-proportional targets back-filled
+    with :func:`_fill_positions` (same formula as ``_uniform_selection``).
+    """
+    if alloc >= m:
+        return list(range(m))
+    if alloc == 1:
+        return [m // 2]
+    picked: list[int] = []
+    seen: set[int] = set()
+    for j in range(alloc):
+        p = round(j * (m - 1) / (alloc - 1))
+        if p not in seen:
+            seen.add(p)
+            picked.append(p)
+    picked.extend(_fill_positions(m, alloc - len(picked), seen))
+    return picked
+
+
 def _event_selection(
     frames: list[ExtractedFrameLike],
     candidates: Sequence[CandidateWindowLike],
@@ -225,9 +272,7 @@ def _event_selection(
     window_frames: list[tuple[CandidateWindowLike, list[int]]] = []
     for window in candidates:
         idx = [
-            i
-            for i, frame in enumerate(frames)
-            if window.t_start <= frame.t_seconds <= window.t_end
+            i for i, frame in enumerate(frames) if window.t_start <= frame.t_seconds <= window.t_end
         ]
         if idx:
             window_frames.append((window, idx))
@@ -239,41 +284,11 @@ def _event_selection(
     if window_budget <= 0:
         return _uniform_selection(frames, budget)
 
-    if len(window_frames) > window_budget:
-        window_frames = window_frames[:window_budget]
-        allocations = [1] * len(window_frames)
-    else:
-        durations = [max(w.t_end - w.t_start, 0.0) for w, _ in window_frames]
-        total = sum(durations)
-        if total <= 0:
-            base, extra = divmod(window_budget, len(window_frames))
-            allocations = [base + (1 if j < extra else 0) for j in range(len(window_frames))]
-        else:
-            allocations = [max(1, round(window_budget * d / total)) for d in durations]
-            while sum(allocations) > window_budget and any(a > 1 for a in allocations):
-                j = max(range(len(allocations)), key=lambda k: (allocations[k], -k))
-                allocations[j] -= 1
-            while sum(allocations) < window_budget:
-                j = max(range(len(allocations)), key=lambda k: (durations[k], -k))
-                allocations[j] += 1
+    allocations = _allocate_window_budgets(window_frames, window_budget)
 
     selected: set[int] = set()
-    for (_, idx), alloc in zip(window_frames, allocations):
-        m = len(idx)
-        if alloc >= m:
-            picked = list(range(m))
-        elif alloc == 1:
-            picked = [m // 2]
-        else:
-            picked = []
-            seen: set[int] = set()
-            for j in range(alloc):
-                p = round(j * (m - 1) / (alloc - 1))
-                if p not in seen:
-                    seen.add(p)
-                    picked.append(p)
-            picked.extend(_fill_positions(m, alloc - len(picked), seen))
-        selected.update(idx[p] for p in picked)
+    for (_, idx), alloc in zip(window_frames, allocations, strict=False):
+        selected.update(idx[p] for p in _pick_window_positions(len(idx), alloc))
 
     need = budget - len(selected)
     if need > 0:
@@ -341,9 +356,7 @@ def select_frames(
             f"at least {floor} frame(s) required (min_frames={min_frames})"
         )
     if mode not in _VALID_MODES:
-        raise ValueError(
-            f"invalid mode {mode!r}; expected one of: {', '.join(_VALID_MODES)}"
-        )
+        raise ValueError(f"invalid mode {mode!r}; expected one of: {', '.join(_VALID_MODES)}")
 
     ordered = _unique_sorted_frames(frames)
     n = len(ordered)

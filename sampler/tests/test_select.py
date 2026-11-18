@@ -14,8 +14,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
-from PIL import Image
-
 from app.select import (
     PHASH_DEFAULT_DISTANCE,
     FrameSelectionError,
@@ -23,6 +21,7 @@ from app.select import (
     phash,
     select_frames,
 )
+from PIL import Image
 
 
 @dataclass(frozen=True)
@@ -111,7 +110,7 @@ def test_uniform_exact_count_ascending_endpoints_and_zones() -> None:
     assert len(selected) == 10
     ts = _timestamps(selected)
     # Strictly ascending, unique timestamps
-    assert all(b > a for a, b in zip(ts, ts[1:]))
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
     # First and last frame are always present
     assert ts[0] == 0.0
     assert ts[-1] == 99.5
@@ -156,7 +155,7 @@ def test_dedupe_keeps_distinct_and_never_within_threshold() -> None:
     # No two selected frames are within the default threshold
     hashes = [phash(f.jpeg_bytes) for f in selected]
     for i, a in enumerate(hashes):
-        for b in hashes[i + 1:]:
+        for b in hashes[i + 1 :]:
             assert hamming(a, b) > PHASH_DEFAULT_DISTANCE
 
 
@@ -164,9 +163,7 @@ def test_dedupe_threshold_changes_selection() -> None:
     frames = make_dedupe_frames()
     default_sel = _timestamps(select_frames(frames, [], budget=10, min_frames=1, mode="dedupe"))
     strict_sel = _timestamps(
-        select_frames(
-            frames, [], budget=10, min_frames=1, mode="dedupe", dedupe_phash_distance=64
-        )
+        select_frames(frames, [], budget=10, min_frames=1, mode="dedupe", dedupe_phash_distance=64)
     )
     assert default_sel != strict_sel
     # A threshold of 64 can never be exceeded (max distance is 64 bits),
@@ -187,7 +184,7 @@ def test_event_allocates_majority_of_budget_to_window() -> None:
     ts = _timestamps(selected)
 
     assert len(selected) == 10
-    assert all(b > a for a, b in zip(ts, ts[1:]))
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
     in_window = [t for t in ts if 40.0 <= t <= 60.0]
     assert len(in_window) >= 7  # 70% of the budget
     assert ts[0] == 0.0
