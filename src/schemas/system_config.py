@@ -19,4 +19,14 @@ class SystemConfigUpdate(BaseModel):
     media_segment_ttl_seconds: int | None = None
     media_entity_image_ttl_seconds: int | None = None
 
+    frame_sampler_enabled: bool | None = None
+    frame_sampler_url: str | None = None
+    frame_sampler_timeout_seconds: int | None = None
+    frame_sampler_queue_limit: int | None = None
+    frame_sampler_model_path: str | None = None
+    frame_sampler_conf_threshold: float | None = None
+    frame_sampler_track_high_thresh: float | None = None
+    frame_sampler_min_area_ratio: float | None = None
+    frame_sampling_session_frame_limit: int | None = None
+
     model_config = ConfigDict(extra="forbid")
