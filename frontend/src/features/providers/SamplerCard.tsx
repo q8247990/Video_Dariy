@@ -1,13 +1,11 @@
-// 帧采样器 / YOLO 设置卡片（模型服务页）。
+// 帧采样器设置卡片（模型服务页）。
 //
 // 复用 features/system-config 的现有查询与写入（queryKey ['system-config']、
 // getSystemConfig / updateSystemConfig），不新增请求层。
 //
-// 「测试采样」按钮说明：采样器是仅后端可达的独立服务（浏览器直连会引入
-// CORS / 网络可达性假设），因此本卡片从不直接调用 {frame_sampler_url}/sample。
-// 按钮恒为禁用态并以 tooltip 说明：端到端采样由分析任务与系统状态校验验证。
-// 若后端日后提供代理端点，在此按钮处接入（启用条件：
-// frame_sampler_enabled 且 frame_sampler_url 非空）。
+// 采样器是仅后端可达的独立服务（浏览器直连会引入 CORS / 网络可达性假设），
+// 前端只维护配置，不直接调用 {frame_sampler_url}/sample；端到端采样由
+// 分析任务与系统状态校验验证。
 
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -175,26 +173,6 @@ function SamplerCardForm({ initialDraft, pending, onSubmit, validate }: SamplerC
         </label>
 
         <label>
-          {t('providers.sampler_queue_limit')}
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={draft.frame_sampler_queue_limit}
-            onChange={(event) => setField('frame_sampler_queue_limit', event.target.value)}
-          />
-          {errorText('frame_sampler_queue_limit') ? (
-            <small className="field-error">{errorText('frame_sampler_queue_limit') as string}</small>
-          ) : (
-            <small className="text-muted">
-              {t('providers.sampler_int_positive_hint', {
-                value: SAMPLER_DEFAULTS.frame_sampler_queue_limit,
-              })}
-            </small>
-          )}
-        </label>
-
-        <label>
           {t('providers.sampler_session_frame_limit')}
           <input
             type="number"
@@ -224,28 +202,16 @@ function SamplerCardForm({ initialDraft, pending, onSubmit, validate }: SamplerC
         <div className="text-muted">
           {t('providers.sampler_impact_defaults', {
             timeout: SAMPLER_DEFAULTS.frame_sampler_timeout_seconds,
-            queue: SAMPLER_DEFAULTS.frame_sampler_queue_limit,
           })}
         </div>
         <div className="text-muted">{t('providers.sampler_impact_no_cap')}</div>
       </div>
 
       <div className="dialog-actions">
-        {/* 恒禁用：浏览器不能直连采样器（见文件头注释）；tooltip 说明端到端验证路径。 */}
-        <button
-          type="button"
-          className="ghost"
-          disabled
-          title={t('providers.sampler_test_tooltip')}
-        >
-          {t('providers.sampler_test_button')}
-        </button>
         <button type="button" onClick={handleSubmit} disabled={pending}>
           {pending ? t('common.saving') : t('providers.sampler_save_button')}
         </button>
       </div>
-
-      <div className="text-muted">{t('providers.sampler_test_note')}</div>
     </div>
   )
 }

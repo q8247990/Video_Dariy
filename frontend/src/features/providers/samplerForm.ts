@@ -4,7 +4,6 @@
 //   frame_sampler_enabled              bool
 //   frame_sampler_url                  可选字符串（空串 = 未配置）
 //   frame_sampler_timeout_seconds      正整数（默认 120）
-//   frame_sampler_queue_limit          正整数（默认 8）
 //   frame_sampling_session_frame_limit 非负整数（默认 0 = 不限制）
 //
 // 错误值为稳定的错误码（不是文案），由 SamplerCard 映射到 i18n 词条，
@@ -14,7 +13,6 @@ export const SAMPLER_DEFAULTS = {
   frame_sampler_enabled: false,
   frame_sampler_url: '',
   frame_sampler_timeout_seconds: 120,
-  frame_sampler_queue_limit: 8,
   frame_sampling_session_frame_limit: 0,
 } as const
 
@@ -22,7 +20,6 @@ export type FrameSamplerConfig = {
   frame_sampler_enabled?: boolean
   frame_sampler_url?: string
   frame_sampler_timeout_seconds?: number
-  frame_sampler_queue_limit?: number
   frame_sampling_session_frame_limit?: number
 }
 
@@ -31,7 +28,6 @@ export type SamplerDraft = {
   frame_sampler_enabled: boolean
   frame_sampler_url: string
   frame_sampler_timeout_seconds: string
-  frame_sampler_queue_limit: string
   frame_sampling_session_frame_limit: string
 }
 
@@ -59,7 +55,6 @@ export const SAMPLER_I18N_KEYS = [
   'providers.sampler_url',
   'providers.sampler_url_hint',
   'providers.sampler_timeout',
-  'providers.sampler_queue_limit',
   'providers.sampler_session_frame_limit',
   'providers.sampler_int_positive_hint',
   'providers.sampler_int_non_negative_hint',
@@ -67,9 +62,6 @@ export const SAMPLER_I18N_KEYS = [
   'providers.sampler_impact_title',
   'providers.sampler_impact_defaults',
   'providers.sampler_impact_no_cap',
-  'providers.sampler_test_button',
-  'providers.sampler_test_tooltip',
-  'providers.sampler_test_note',
   'providers.sampler_save_button',
   'providers.sampler_save_success',
   'providers.sampler_error_not_a_number',
@@ -131,10 +123,6 @@ export function toDraft(config: FrameSamplerConfig): SamplerDraft {
       config.frame_sampler_timeout_seconds,
       SAMPLER_DEFAULTS.frame_sampler_timeout_seconds,
     ),
-    frame_sampler_queue_limit: numberToString(
-      config.frame_sampler_queue_limit,
-      SAMPLER_DEFAULTS.frame_sampler_queue_limit,
-    ),
     frame_sampling_session_frame_limit: numberToString(
       config.frame_sampling_session_frame_limit,
       SAMPLER_DEFAULTS.frame_sampling_session_frame_limit,
@@ -153,7 +141,6 @@ export function toUpdate(draft: SamplerDraft): SamplerUpdateResult {
     frame_sampler_enabled: draft.frame_sampler_enabled,
     frame_sampler_url: draft.frame_sampler_url.trim(),
     frame_sampler_timeout_seconds: draft.frame_sampler_timeout_seconds,
-    frame_sampler_queue_limit: draft.frame_sampler_queue_limit,
     frame_sampling_session_frame_limit: draft.frame_sampling_session_frame_limit,
   }
 
@@ -162,13 +149,6 @@ export function toUpdate(draft: SamplerDraft): SamplerUpdateResult {
     payload.frame_sampler_timeout_seconds = timeout.value
   } else {
     errors.frame_sampler_timeout_seconds = timeout.code
-  }
-
-  const queue = toInteger(draft.frame_sampler_queue_limit, 1)
-  if (queue.ok) {
-    payload.frame_sampler_queue_limit = queue.value
-  } else {
-    errors.frame_sampler_queue_limit = queue.code
   }
 
   const sessionLimit = toInteger(draft.frame_sampling_session_frame_limit, 0)

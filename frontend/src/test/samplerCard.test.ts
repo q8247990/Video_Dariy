@@ -22,7 +22,6 @@ describe('samplerForm.toDraft', () => {
     expect(draft.frame_sampler_enabled).toBe(false)
     expect(draft.frame_sampler_url).toBe('')
     expect(draft.frame_sampler_timeout_seconds).toBe('120')
-    expect(draft.frame_sampler_queue_limit).toBe('8')
     expect(draft.frame_sampling_session_frame_limit).toBe('0')
   })
 
@@ -31,24 +30,24 @@ describe('samplerForm.toDraft', () => {
       frame_sampler_enabled: true,
       frame_sampler_url: 'http://10.0.0.5:18080',
       frame_sampler_timeout_seconds: 90,
-      frame_sampler_queue_limit: 4,
       frame_sampling_session_frame_limit: 64,
     }
     const draft = toDraft(config)
     expect(draft.frame_sampler_enabled).toBe(true)
     expect(draft.frame_sampler_url).toBe('http://10.0.0.5:18080')
     expect(draft.frame_sampler_timeout_seconds).toBe('90')
-    expect(draft.frame_sampler_queue_limit).toBe('4')
     expect(draft.frame_sampling_session_frame_limit).toBe('64')
   })
 
   it('falls back to defaults for non-number values', () => {
     const draft = toDraft({
       frame_sampler_timeout_seconds: Number.NaN,
-      frame_sampler_queue_limit: Number.POSITIVE_INFINITY,
+      frame_sampling_session_frame_limit: Number.POSITIVE_INFINITY,
     })
     expect(draft.frame_sampler_timeout_seconds).toBe(String(SAMPLER_DEFAULTS.frame_sampler_timeout_seconds))
-    expect(draft.frame_sampler_queue_limit).toBe(String(SAMPLER_DEFAULTS.frame_sampler_queue_limit))
+    expect(draft.frame_sampling_session_frame_limit).toBe(
+      String(SAMPLER_DEFAULTS.frame_sampling_session_frame_limit),
+    )
   })
 })
 
@@ -65,7 +64,6 @@ describe('samplerForm.toUpdate', () => {
     expect(result.payload.frame_sampler_enabled).toBe(true)
     expect(result.payload.frame_sampler_url).toBe('http://10.0.0.5:18080')
     expect(result.payload.frame_sampler_timeout_seconds).toBe(120)
-    expect(result.payload.frame_sampler_queue_limit).toBe(8)
     expect(result.payload.frame_sampling_session_frame_limit).toBe(0)
   })
 
@@ -80,24 +78,24 @@ describe('samplerForm.toUpdate', () => {
     expect(result.ok).toBe(false)
     expect(result.errors.frame_sampler_timeout_seconds).toBe('not_a_number')
 
-    const empty = toUpdate(baseDraft({ frame_sampler_queue_limit: '' }))
-    expect(empty.errors.frame_sampler_queue_limit).toBe('not_a_number')
+    const empty = toUpdate(baseDraft({ frame_sampler_timeout_seconds: '' }))
+    expect(empty.errors.frame_sampler_timeout_seconds).toBe('not_a_number')
 
-    const inf = toUpdate(baseDraft({ frame_sampler_queue_limit: 'Infinity' }))
-    expect(inf.errors.frame_sampler_queue_limit).toBe('not_a_number')
+    const inf = toUpdate(baseDraft({ frame_sampler_timeout_seconds: 'Infinity' }))
+    expect(inf.errors.frame_sampler_timeout_seconds).toBe('not_a_number')
   })
 
   it('rejects fractional values on integer fields as not_an_integer', () => {
-    const result = toUpdate(baseDraft({ frame_sampler_queue_limit: '2.5' }))
-    expect(result.errors.frame_sampler_queue_limit).toBe('not_an_integer')
+    const result = toUpdate(baseDraft({ frame_sampler_timeout_seconds: '2.5' }))
+    expect(result.errors.frame_sampler_timeout_seconds).toBe('not_an_integer')
   })
 
-  it('enforces positive ints for timeout and queue limit', () => {
+  it('enforces positive ints for timeout', () => {
     const zero = toUpdate(baseDraft({ frame_sampler_timeout_seconds: '0' }))
     expect(zero.errors.frame_sampler_timeout_seconds).toBe('positive_int')
 
-    const negative = toUpdate(baseDraft({ frame_sampler_queue_limit: '-1' }))
-    expect(negative.errors.frame_sampler_queue_limit).toBe('positive_int')
+    const negative = toUpdate(baseDraft({ frame_sampler_timeout_seconds: '-1' }))
+    expect(negative.errors.frame_sampler_timeout_seconds).toBe('positive_int')
   })
 
   it('allows 0 but rejects negatives on session frame limit', () => {
@@ -113,13 +111,13 @@ describe('samplerForm.toUpdate', () => {
     const result = toUpdate(
       baseDraft({
         frame_sampler_timeout_seconds: '0',
-        frame_sampler_queue_limit: '-1',
+        frame_sampling_session_frame_limit: '-1',
       }),
     )
     expect(result.ok).toBe(false)
     expect(Object.keys(result.errors).sort()).toEqual([
-      'frame_sampler_queue_limit',
       'frame_sampler_timeout_seconds',
+      'frame_sampling_session_frame_limit',
     ])
   })
 })

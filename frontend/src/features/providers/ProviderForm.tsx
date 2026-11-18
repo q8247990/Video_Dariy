@@ -5,14 +5,13 @@ import type { Provider, ProviderCreate, ProviderUpdate } from '../../types/api'
 import { testProvider } from './api'
 import type { TestProviderResult } from './api'
 import {
-  applyPreset,
+  applyMode,
   buildFrameSamplingExtraConfig,
   draftFromExtraConfig,
   emptyFramePolicyDraft,
-  estimatePreview,
   isFramePolicyEmpty,
 } from './framePolicy'
-import type { FramePreset, FramePolicyDraft, FramePreview } from './framePolicy'
+import type { FrameMode, FramePolicyDraft } from './framePolicy'
 
 type ProviderFormProps = {
   initialValue?: Provider
@@ -42,11 +41,6 @@ function readExtraString(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
   if (typeof value === 'string' && value.trim()) return value.trim()
   return ''
-}
-
-function readPositiveInt(raw: string): number | null {
-  const parsed = Number.parseInt(raw, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 function buildExtraConfigJson(
@@ -100,38 +94,7 @@ function getInitialState(initialValue?: Provider): FormState {
   }
 }
 
-// 其他任务会在 types/api.ts 的测试结果中补充 frame_plan（共享类型文件由他人维护，
-// 此处不动它）：用本地结构类型 + as unknown 防御性读取。
-type TestResultFramePlan = {
-  frames: number
-  tokens_per_image: number
-  budget_tokens: number
-  clamp_reason: string
-}
-
-function readTestFramePlan(result: TestProviderResult | null): TestResultFramePlan | null {
-  if (!result) {
-    return null
-  }
-  const candidate: unknown = (result as unknown as { frame_plan?: unknown }).frame_plan
-  if (typeof candidate !== 'object' || candidate === null) {
-    return null
-  }
-  const plan = candidate as Partial<TestResultFramePlan>
-  if (
-    typeof plan.frames !== 'number' ||
-    !Number.isFinite(plan.frames) ||
-    plan.frames <= 0 ||
-    typeof plan.tokens_per_image !== 'number' ||
-    !Number.isFinite(plan.tokens_per_image) ||
-    plan.tokens_per_image <= 0
-  ) {
-    return null
-  }
-  return plan as TestResultFramePlan
-}
-
-const CLAMP_REASON_I18N_KEYS: Record<NonNullable<FramePreview['clampReason']>, string> = {
+const CLAMP_REASON_I18N_KEYS: Record<string, string> = {
   budget: 'providers.frame_policy_clamp_budget',
   max: 'providers.frame_policy_clamp_max',
   duration: 'providers.frame_policy_clamp_duration',
@@ -187,30 +150,16 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
   const apiKeyRequiredError = !initialValue && !form.api_key.trim()
 
   const framePolicyActive = !isFramePolicyEmpty(form.frame_policy)
-  const testFramePlan = readTestFramePlan(testResult)
-  const preview = useMemo(
-    () =>
-      estimatePreview(
-        form.frame_policy,
-        readPositiveInt(form.max_model_len),
-        60,
-        640,
-        480,
-        readPositiveInt(form.max_output_tokens),
-      ),
-    [form.frame_policy, form.max_model_len, form.max_output_tokens],
-  )
-  const previewFrames = testFramePlan ? testFramePlan.frames : preview.frames
-  const previewTokensPerImage = testFramePlan
-    ? testFramePlan.tokens_per_image
-    : preview.tokensPerImage
-  const previewClampReason: string | null = testFramePlan
-    ? CLAMP_REASON_I18N_KEYS[testFramePlan.clamp_reason as keyof typeof CLAMP_REASON_I18N_KEYS]
-      ? t(CLAMP_REASON_I18N_KEYS[testFramePlan.clamp_reason as keyof typeof CLAMP_REASON_I18N_KEYS])
+  // 帧数 / token 预览只显示「测试连接」返回的实测 frame_plan（公式以后端为准，
+  // 前端不再本地估算）；无测试结果时展示引导提示。
+  const framePlan =
+    testResult?.frame_plan &&
+    Number.isFinite(testResult.frame_plan.frames) &&
+    testResult.frame_plan.frames > 0
+      ? testResult.frame_plan
       : null
-    : preview.clampReason
-      ? t(CLAMP_REASON_I18N_KEYS[preview.clampReason])
-      : null
+  const framePlanClampKey = framePlan ? CLAMP_REASON_I18N_KEYS[framePlan.clamp_reason] : undefined
+  const framePlanClampReason = framePlanClampKey ? t(framePlanClampKey) : null
 
   const handleTest = async () => {
     if (!initialValue) return
@@ -448,19 +397,19 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
           </label>
 
           <label>
-            {t('providers.frame_policy_preset')}
+            {t('providers.frame_policy_mode')}
             <select
-              value={form.frame_policy.preset}
+              value={form.frame_policy.mode}
               onChange={(event) =>
                 setForm((old) => ({
                   ...old,
-                  frame_policy: applyPreset(old.frame_policy, event.target.value as FramePreset),
+                  frame_policy: applyMode(old.frame_policy, event.target.value as FrameMode),
                 }))
               }
             >
-              <option value="baseline">{t('providers.frame_policy_preset_baseline')}</option>
-              <option value="dedupe">{t('providers.frame_policy_preset_dedupe')}</option>
-              <option value="event">{t('providers.frame_policy_preset_event')}</option>
+              <option value="uniform">{t('providers.frame_policy_mode_uniform')}</option>
+              <option value="dedupe">{t('providers.frame_policy_mode_dedupe')}</option>
+              <option value="event">{t('providers.frame_policy_mode_event')}</option>
             </select>
           </label>
 
@@ -623,25 +572,21 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
           {framePolicyActive ? (
             <div>
               <strong>{t('providers.frame_policy_preview_title')}</strong>
-              {preview.note ? (
-                <div className="text-muted">
-                  {preview.note === 'no_max_model_len'
-                    ? t('providers.frame_policy_preview_no_context')
-                    : t('providers.frame_policy_preview_impossible')}
-                </div>
+              {framePlan ? (
+                <>
+                  <div className="text-muted">
+                    {t('providers.frame_policy_preview', {
+                      frames: framePlan.frames,
+                      tokens: framePlan.image_tokens,
+                      output: framePlan.max_output_tokens,
+                    })}
+                    {framePlanClampReason ? ` — ${framePlanClampReason}` : ''}
+                  </div>
+                  <div className="text-muted">{t('providers.frame_policy_test_plan_note')}</div>
+                </>
               ) : (
-                <div className="text-muted">
-                  {t('providers.frame_policy_preview', {
-                    frames: previewFrames,
-                    tokens: previewFrames * previewTokensPerImage,
-                    output: preview.outputTokens,
-                  })}
-                  {previewClampReason ? ` — ${previewClampReason}` : ''}
-                </div>
+                <div className="text-muted">{t('providers.frame_policy_preview_need_test')}</div>
               )}
-              {testFramePlan ? (
-                <div className="text-muted">{t('providers.frame_policy_test_plan_note')}</div>
-              ) : null}
             </div>
           ) : null}
         </div>
