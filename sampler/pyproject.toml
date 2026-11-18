@@ -9,6 +9,7 @@ dependencies = [
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.6.4",
     "numpy>=1.26",
+    "pillow>=10",
     "onnxruntime>=1.18",
 ]
 
