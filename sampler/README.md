@@ -133,6 +133,41 @@ curl -s localhost:18080/healthz
 The video root(s) must be mounted **read-only** into the container; the
 sampler never writes into them.
 
+## Docker Compose
+
+The main repo ships the sampler as an **opt-in compose profile**
+(`profiles: ["sampler"]` in `docker-compose.yml`), so a plain
+`docker compose up` still starts only the default 4-service stack
+(postgres / redis / backend / frontend).
+
+From the repo root:
+
+```bash
+docker compose --profile sampler up -d --build
+curl -s localhost:18080/healthz
+# {"status":"ok","model_loaded":false,"version":"0.1.0"}
+```
+
+Port `18080` is published host-side for debugging; the backend reaches the
+sampler over the compose network at `http://sampler:18080` (no published
+port required for that).
+
+Then enable image mode in two steps — the backend reads **SystemConfig, not
+any environment variable**:
+
+1. SystemConfig (settings → system configuration):
+   - `frame_sampler_enabled=true`
+   - `frame_sampler_url=http://sampler:18080`
+2. Provider (settings → model connection): set
+   `extra_config_json.frame_sampling` on the provider you want in image mode.
+
+**Failure semantics (no fallback chain):** without a reachable sampler, the
+analysis task for an image-mode provider fails the affected file with
+`SamplerUnavailable` and the session lands in `PARTIAL`/`FAILED`. The system
+does **not** auto-retry sampler outages (auto-retry only covers PG deadlocks
+and lease timeouts); re-trigger manually with
+`POST /api/v1/tasks/analyze/{session_id}`.
+
 ## Running the tests
 
 `pytest` + `httpx` are installed in the image via the `dev` extra. The test

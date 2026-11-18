@@ -6,6 +6,10 @@
 # 4-container topology: postgres / redis / backend / frontend.
 # The backend container hosts uvicorn, two celery workers, celery beat and the
 # outbox publisher via supervisord (see supervisord.conf).
+# A 5th service, `sampler` (out-of-process frame sampling for image-mode
+# providers, ADR 0014), is opt-in via compose profile `sampler`
+# (`docker compose --profile sampler up -d --build`); a plain
+# `docker compose up` still starts only the 4 services above.
 #
 # APP_ENV defaults to `development` here for the self-host quickstart. Set
 # APP_ENV=production in .env to enable the production secret validation
@@ -78,6 +82,13 @@ services:
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?set DEFAULT_ADMIN_PASSWORD in .env}
       DB_INIT_MAX_RETRIES: ${DB_INIT_MAX_RETRIES:-120}
       DB_INIT_RETRY_INTERVAL_SECONDS: ${DB_INIT_RETRY_INTERVAL_SECONDS:-2}
+      # Informational only: the backend does NOT read this variable. The
+      # effective sampler endpoint is the SystemConfig key `frame_sampler_url`
+      # (the client reads it from the config registry; see sampler/README.md,
+      # "Docker Compose"). It exists so operators can find the endpoint at
+      # the compose level; the sampler itself only starts with
+      # `--profile sampler`.
+      FRAME_SAMPLER_URL: http://sampler:18080
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,6 +137,45 @@ services:
         condition: service_healthy
     ports:
       - "8226:80"
+    networks:
+      - app_bridge
+
+  # Out-of-process frame sampler for image-mode providers (ADR 0014). Opt-in
+  # via compose profile `sampler`; a plain `docker compose up` is unchanged.
+  # No Postgres/Redis, no secrets; the video root is mounted read-only and
+  # joined to app_bridge so the backend can reach it at http://sampler:18080.
+  sampler:
+    build:
+      context: ./sampler
+    container_name: hm_sampler
+    profiles: ["sampler"]
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      SAMPLER_PORT: "18080"
+      # In-container whitelist of roots the sampler may read (empty = nothing
+      # allowed, so /videos must be set for the service to serve requests).
+      SAMPLER_ALLOWED_ROOTS: /videos
+      # Optional ONNX detector model path; empty = service still starts with
+      # model_loaded: false (healthz stays 200).
+      SAMPLER_MODEL_PATH: ${SAMPLER_MODEL_PATH:-}
+    # Published host-side for debugging only; the backend reaches the sampler
+    # over app_bridge, no published port required for that.
+    ports:
+      - "18080:18080"
+    volumes:
+      # Read-only; same host directory as the backend's /data/videos mount.
+      # NOTE: VIDEO_ROOT_PATH here is a HOST path (default ./xiaomi_video,
+      # matching the backend mount), not the in-container /data/videos.
+      - ${VIDEO_ROOT_PATH:-./xiaomi_video}:/videos:ro
+    # Matches the Dockerfile HEALTHCHECK (interval 30s / timeout 5s /
+    # start-period 10s / retries 3).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - app_bridge
 
