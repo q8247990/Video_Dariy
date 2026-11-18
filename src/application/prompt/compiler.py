@@ -33,6 +33,8 @@ def compile_video_recognition_prompt(input_data: VideoRecognitionPromptInput) ->
                 "strategy_note": input_data.strategy_context.strategy_note,
             },
             "event_type_list": input_data.event_type_list,
+            "input_mode": input_data.input_mode,
+            "frame_timestamps": input_data.frame_timestamps,
         }
     )
 

@@ -39,6 +39,11 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
         item for item in EVENT_TYPE_DEFINITIONS if item["type"] in allowed_event_types
     ] or EVENT_TYPE_DEFINITIONS
 
+    # 图像帧模式可选参数：默认 video，保证现有调用方渲染结果与历史完全一致。
+    input_mode = input_data.get("input_mode") or "video"
+    frame_timestamps = list(input_data.get("frame_timestamps") or [])
+    frame_total = len(frame_timestamps)
+
     home_profile = home_context.get("home_profile", {})
     members = home_context.get("members", [])
     pets = home_context.get("pets", [])
@@ -51,7 +56,7 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
     session_start_iso = _serialize_datetime(session_context.get("session_start_time"))
     session_end_iso = _serialize_datetime(session_context.get("session_end_time"))
 
-    system_prompt = render_template("video_recognition/system_rules.j2")
+    system_prompt = render_template("video_recognition/system_rules.j2", input_mode=input_mode)
 
     user_prompt = "\n\n".join(
         [
@@ -76,6 +81,9 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
                 strategy_context=strategy_context,
                 event_type_definitions=event_type_definitions,
                 note_type_list=sorted(ANALYSIS_NOTE_TYPES),
+                input_mode=input_mode,
+                frame_timestamps=frame_timestamps,
+                frame_total=frame_total,
             ),
         ]
     )

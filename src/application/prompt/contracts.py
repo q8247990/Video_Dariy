@@ -38,6 +38,8 @@ class VideoRecognitionPromptInput:
     session_context: SessionPromptContext
     strategy_context: StrategyPromptContext
     event_type_list: list[str] = field(default_factory=list)
+    input_mode: str = "video"
+    frame_timestamps: list[float] = field(default_factory=list)
 
 
 @dataclass
