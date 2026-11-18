@@ -300,5 +300,6 @@ def test_provider_use_case(
             "last_test_at": provider.last_test_at,
             "supports_vision": provider.supports_vision,
             "supports_tool_calling": provider.supports_tool_calling,
+            "frame_plan": result.frame_plan,
         }
     )

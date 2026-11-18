@@ -3,6 +3,7 @@ import type {
   PaginatedData,
   Provider,
   ProviderCreate,
+  ProviderFramePlanPreview,
   ProviderUpdate,
   ProviderUsageDailyItem,
 } from '../../types/api'
@@ -51,6 +52,7 @@ export type TestProviderResult = {
   last_test_at: string | null
   supports_vision: boolean
   supports_tool_calling: boolean
+  frame_plan?: ProviderFramePlanPreview | null
 }
 
 export async function testProvider(id: number): Promise<TestProviderResult> {

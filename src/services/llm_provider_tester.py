@@ -63,6 +63,7 @@ class ProviderTestResult:
     message: str
     supports_vision: bool
     supports_tool_calling: bool
+    frame_plan: dict | None = None
 
 
 def check_image_frame_plan(provider: Any) -> FramePlan | None:
@@ -141,6 +142,31 @@ def _image_frame_plan_failure_message(provider: Any) -> str | None:
     return None
 
 
+def _image_frame_plan_preview(provider: Any) -> dict | None:
+    """Representative frame-plan preview for an image-mode provider.
+
+    Computed through :func:`check_image_frame_plan` — the same helper the
+    create / update validation uses — so the preview can never drift from the
+    validated plan. Returns ``None`` for video-mode providers and when the
+    plan cannot be built (the caller's error message already explains why;
+    no fabricated empty dict is ever returned).
+    """
+    try:
+        plan = check_image_frame_plan(provider)
+    except ValueError:  # includes FramePlanImpossible
+        return None
+    if plan is None:
+        return None
+    return {
+        "frames": plan.frames,
+        "tokens_per_image": plan.tokens_per_image,
+        "image_tokens": plan.frames * plan.tokens_per_image,
+        "budget_tokens": plan.budget_tokens,
+        "clamp_reason": plan.clamp_reason,
+        "max_output_tokens": resolve_image_output_tokens(provider),
+    }
+
+
 def check_provider_connectivity(
     provider: LLMProvider,
     *,
@@ -161,7 +187,13 @@ def check_provider_connectivity(
 
     Returns:
         :class:`ProviderTestResult` carrying the connectivity verdict,
-        localised message and the two capability flags.
+        localised message and the two capability flags. Image-mode
+        providers additionally carry ``frame_plan`` — a preview of the
+        representative frame plan (``frames`` / ``tokens_per_image`` /
+        ``image_tokens`` / ``budget_tokens`` / ``clamp_reason`` /
+        ``max_output_tokens``), computed from config and therefore present
+        even when the probe fails; ``None`` for video-mode providers and for
+        unbuildable plans (the message then carries the remedies).
     """
 
     loc = locale or DEFAULT_LOCALE
@@ -175,12 +207,20 @@ def check_provider_connectivity(
     # cannot fit max_model_len would fail on every real analysis call.
     plan_error = _image_frame_plan_failure_message(provider)
     if plan_error is not None:
+        # Impossible plan: no preview (the error message carries the computed
+        # numbers and remedies); fail fast before any network round-trip.
         return ProviderTestResult(
             success=False,
             message=plan_error,
             supports_vision=False,
             supports_tool_calling=False,
+            frame_plan=None,
         )
+
+    # Computed from the provider config alone (independent of reachability),
+    # so an image-mode provider still reports its plan when the model is
+    # unreachable.
+    frame_plan_preview = _image_frame_plan_preview(provider)
 
     if llm_factory is None:
         # Defensive: rather than silently reaching for the production
@@ -233,4 +273,5 @@ def check_provider_connectivity(
         message=test_message,
         supports_vision=vision_result,
         supports_tool_calling=tool_calling_result,
+        frame_plan=frame_plan_preview,
     )

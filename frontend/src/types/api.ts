@@ -119,6 +119,19 @@ export type ProviderCreate = {
   is_default_qa: boolean
 }
 
+/**
+ * 图像模式抽帧计划预览（provider 测试接口返回）。
+ * 后端在 provider 处于图像模式（配置 frame_sampling）时返回；视频模式或计划无法构建时为 null。
+ */
+export type ProviderFramePlanPreview = {
+  frames: number
+  tokens_per_image: number
+  image_tokens: number
+  budget_tokens: number
+  clamp_reason: string
+  max_output_tokens: number
+}
+
 export type ProviderUpdate = {
   provider_name?: string
   api_base_url?: string
