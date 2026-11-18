@@ -22,8 +22,13 @@ from typing import Any
 
 from src.application.bootstrap_fakes import ScriptedVisionGateway
 from src.models.llm_provider import LLMProvider
-from src.services.analysis.execute import SubChunkRunResult, execute_sub_chunk
+from src.services.analysis.execute import (
+    SubChunkRunResult,
+    execute_sub_chunk,
+    frames_mode_frame_fingerprint,
+)
 from src.services.analysis.plan import SubChunkPlan
+from src.services.frame_sampling.policy import FramePolicy
 from src.services.frame_sampling.types import FrameSample
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
@@ -111,6 +116,11 @@ def _run_execute(
     provider: LLMProvider | None = None,
 ) -> tuple[ScriptedVisionGateway, SubChunkRunResult]:
     client = ScriptedVisionGateway(responses=[_recognition_result_json()])
+    frame_fingerprint = (
+        frames_mode_frame_fingerprint(frames, FramePolicy(), content_signature="unit-test")
+        if frames
+        else None
+    )
     result = execute_sub_chunk(
         client=client,
         provider=provider or _provider(),
@@ -119,6 +129,7 @@ def _run_execute(
         user_prompt=USER_PROMPT,
         video_data_url=VIDEO_DATA_URL,
         frames=frames,
+        frame_fingerprint=frame_fingerprint,
     )
     return client, result
 

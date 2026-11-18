@@ -20,7 +20,13 @@
 
 from __future__ import annotations
 
-from src.services.frame_sampling.budget import FramePlan, FramePlanImpossible, compute_frame_plan
+from src.services.frame_sampling.budget import (
+    FramePlan,
+    FramePlanImpossible,
+    compute_frame_plan,
+    conservative_tokens_per_image,
+    estimate_prompt_tokens,
+)
 from src.services.frame_sampling.fingerprint import content_signature, frame_set_fingerprint
 from src.services.frame_sampling.mode import INPUT_MODE_IMAGE, INPUT_MODE_VIDEO, resolve_input_mode
 from src.services.frame_sampling.policy import FramePolicy
@@ -46,7 +52,9 @@ __all__ = [
     "INPUT_MODE_VIDEO",
     "SampleRequest",
     "compute_frame_plan",
+    "conservative_tokens_per_image",
     "content_signature",
+    "estimate_prompt_tokens",
     "frame_set_fingerprint",
     "resolve_input_mode",
 ]

@@ -37,9 +37,10 @@ from src.models.llm_provider import LLMProvider
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
-from src.services.analysis.execute import execute_sub_chunk
+from src.services.analysis.execute import execute_sub_chunk, frames_mode_frame_fingerprint
 from src.services.analysis.finalize import completed_results_for_run, replace_session_events
 from src.services.analysis.plan import SubChunkPlan
+from src.services.frame_sampling.policy import FramePolicy
 from src.services.frame_sampling.types import FrameSample
 from src.services.video_analysis.mapper import (
     build_event_record_from_recognized_event,
@@ -188,6 +189,11 @@ def _frames() -> list[FrameSample]:
 def _run_execute(*, frames: Any) -> Any:
     """Drive the execute seam with the same scripted response in one mode."""
     client = ScriptedVisionGateway(responses=[FIXED_RECOGNITION_JSON])
+    frame_fingerprint = (
+        frames_mode_frame_fingerprint(frames, FramePolicy(), content_signature="unit-test")
+        if frames
+        else None
+    )
     return execute_sub_chunk(
         client=client,
         provider=_provider(),
@@ -196,6 +202,7 @@ def _run_execute(*, frames: Any) -> Any:
         user_prompt="请逐帧描述画面",
         video_data_url="data:video/mp4;base64,AAAA",
         frames=frames,
+        frame_fingerprint=frame_fingerprint,
     )
 
 

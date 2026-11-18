@@ -38,6 +38,15 @@ class SubChunk:
     ``(session_id, analysis_run_id, chunk_index, sub_chunk_index)``
     shape without a schema migration; ``sub_chunk_index`` is the file's
     ordinal position inside the session.
+
+    ``duration_source`` records the provenance of
+    :attr:`duration_seconds`: ``"probe"`` when it is the ffprobe-measured
+    ``VideoFile.duration_seconds`` stored at scan time, ``"fallback"`` when
+    that column is NULL (or non-positive) and the value was derived from
+    the file's time span / the 60 s fallback instead. Image-mode frame
+    plans persist it in ``TaskLog.detail_json["frame_plan"]`` so an
+    operator can see when a budget was computed from an unmeasured
+    duration.
     """
 
     chunk_index: int
@@ -45,6 +54,7 @@ class SubChunk:
     start_offset_seconds: int
     duration_seconds: int
     file_paths: list[str]
+    duration_source: str = "probe"
 
 
 def build_file_sub_chunks(db: Session, session_id: int) -> list[SubChunk]:
@@ -54,6 +64,8 @@ def build_file_sub_chunks(db: Session, session_id: int) -> list[SubChunk]:
     start offset accumulated from the preceding files' durations. No file
     is ever split and no two files are ever merged.
     """
+    # ``get_session_video_files`` loads full ``VideoFile`` rows, so
+    # ``duration_seconds`` is already in memory — no extra query.
     video_files = get_session_video_files(db, session_id)
     sub_chunks: list[SubChunk] = []
     accumulated_offset = 0
@@ -61,6 +73,13 @@ def build_file_sub_chunks(db: Session, session_id: int) -> list[SubChunk]:
         if not video_file.file_path:
             raise ValueError(f"Video file path is empty: {video_file.id}")
         duration_seconds = resolve_file_duration_seconds(video_file)
+        # Mirrors ``resolve_file_duration_seconds``: the stored value is only
+        # "probe" provenance when it is positive; NULL / non-positive falls
+        # back to the time span (or the 60 s floor), hence "fallback".
+        stored_duration = video_file.duration_seconds
+        duration_source = (
+            "probe" if stored_duration is not None and stored_duration > 0 else "fallback"
+        )
         sub_chunks.append(
             SubChunk(
                 chunk_index=0,
@@ -68,6 +87,7 @@ def build_file_sub_chunks(db: Session, session_id: int) -> list[SubChunk]:
                 start_offset_seconds=accumulated_offset,
                 duration_seconds=duration_seconds,
                 file_paths=[video_file.file_path],
+                duration_source=duration_source,
             )
         )
         accumulated_offset += duration_seconds

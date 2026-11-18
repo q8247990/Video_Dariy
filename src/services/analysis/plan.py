@@ -19,13 +19,25 @@ PLAN_VERSION: int = 2
 # --- chunk_plan.py ---
 @dataclass(frozen=True)
 class SubChunkPlan:
-    """A single sub-chunk work item — the unit the LLM sees once."""
+    """A single sub-chunk work item — the unit the LLM sees once.
+
+    ``duration_source`` (``"probe"`` / ``"fallback"``) is provenance
+    metadata carried from :class:`src.services.session_analysis_video.SubChunk`
+    so image-mode frame plans can record whether the budget was computed
+    from a ffprobe-measured duration or a fallback. It is deliberately NOT
+    part of the checkpoint / run-id fingerprint payloads: a duration
+    re-measurement (probe appearing where a fallback was) does not by
+    itself invalidate stored checkpoints — the namespaced frame fingerprint
+    (video payload or sampled frames) already covers the input the LLM
+    saw, and :data:`PLAN_VERSION` stays at ``2``.
+    """
 
     chunk_index: int
     sub_chunk_index: int
     start_offset_seconds: int
     duration_seconds: int
     file_paths: tuple[str, ...]
+    duration_source: str = "probe"
 
 
 # --- chunk_plan.py ---
@@ -77,6 +89,7 @@ def _plan_item(sub_chunk: SubChunk) -> SubChunkPlan:
         start_offset_seconds=sub_chunk.start_offset_seconds,
         duration_seconds=sub_chunk.duration_seconds,
         file_paths=tuple(sub_chunk.file_paths),
+        duration_source=sub_chunk.duration_source,
     )
 
 

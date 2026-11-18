@@ -44,6 +44,7 @@ from src.services.analysis.contracts import (
 )
 from src.services.analysis.execute import (
     FRAMES_FINGERPRINT_PREFIX,
+    PROVISIONAL_FRAMES_FINGERPRINT,
     VIDEO_FINGERPRINT_PREFIX,
     CheckpointWriteResult,
     ClaimGuards,
@@ -51,6 +52,7 @@ from src.services.analysis.execute import (
     build_provider_client,
     build_sub_chunk_extra_body,
     build_sub_chunk_video_url,
+    claim_checkpoint_before_sampling,
     enforce_fencing,
     execute_sub_chunk,
     frames_mode_frame_fingerprint,
@@ -95,6 +97,7 @@ __all__ = [
     "LateWorkerFencingError",
     "NOT_FOUND_RETRY_DELAYS_SECONDS",
     "POSTGRES_RETRYABLE_SQLSTATES",
+    "PROVISIONAL_FRAMES_FINGERPRINT",
     "RAW_MP4_NUM_FRAMES",
     "RawResponseCapture",
     "RecoverySignalError",
@@ -110,6 +113,7 @@ __all__ = [
     "build_sub_chunk_extra_body",
     "build_sub_chunk_video_url",
     "cancel_session",
+    "claim_checkpoint_before_sampling",
     "claim_session_for_analysis",
     "completed_results_for_run",
     "enforce_fencing",

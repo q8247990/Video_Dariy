@@ -30,7 +30,7 @@ import math
 from dataclasses import dataclass
 
 from src.services.frame_sampling.policy import FramePolicy
-from src.services.frame_sampling.tokens import estimate_image_tokens, fit_long_edge
+from src.services.frame_sampling.tokens import TILE_EDGE, estimate_image_tokens, fit_long_edge
 
 _CLAMP_REASONS: tuple[str, ...] = ("budget", "min", "max", "duration")
 _DURATION_SOURCES: tuple[str, ...] = ("probe", "fallback")
@@ -151,4 +151,43 @@ def compute_frame_plan(
     )
 
 
-__all__ = ["FramePlan", "FramePlanImpossible", "compute_frame_plan"]
+def conservative_tokens_per_image(*, max_edge: int) -> int:
+    """Aspect-agnostic worst-case token cost of one sampled frame.
+
+    The sampler fits the long edge to ``policy.max_edge``
+    (:func:`src.services.frame_sampling.tokens.fit_long_edge`), so for any
+    aspect ratio both fitted edges are ``<= max_edge`` and the tile count is
+    ``<= (max_edge // TILE_EDGE) ** 2``. That square upper bound is what a
+    plan may safely charge per image **without probing the source
+    resolution** — cheaper frames only leave budget headroom, they never
+    overspend.
+    """
+    if isinstance(max_edge, bool) or not isinstance(max_edge, int):
+        raise ValueError(f"max_edge must be an int, got {max_edge!r}")
+    if max_edge <= 0:
+        raise ValueError(f"max_edge must be > 0, got {max_edge}")
+    return max(1, (max_edge // TILE_EDGE) ** 2)
+
+
+def estimate_prompt_tokens(*texts: str) -> int:
+    """Conservative prompt-token estimate for the texts of one vision call.
+
+    Returns ``max(800, sum(len(text) for text in texts))``. For CJK-heavy
+    prompts one source character is one (or occasionally two) tokenizer
+    tokens, so the character count is a workable upper bound for the prompt
+    contribution; the 800-token floor keeps the estimate meaningful (and
+    strictly positive) for empty or tiny prompts. Never returns 0.
+    """
+    for text in texts:
+        if not isinstance(text, str):
+            raise ValueError(f"prompt text must be a str, got {type(text).__name__}")
+    return max(800, sum(len(text) for text in texts))
+
+
+__all__ = [
+    "FramePlan",
+    "FramePlanImpossible",
+    "compute_frame_plan",
+    "conservative_tokens_per_image",
+    "estimate_prompt_tokens",
+]

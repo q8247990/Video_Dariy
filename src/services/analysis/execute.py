@@ -44,6 +44,18 @@ from src.services.video_analysis.schemas import RecognitionResultDTO
 VIDEO_FINGERPRINT_PREFIX = "video:"
 FRAMES_FINGERPRINT_PREFIX = "frames:"
 
+#: Transient checkpoint ``input_fingerprint`` for image-mode sub-chunks
+#: between the pre-sampler claim (:func:`claim_checkpoint_before_sampling`)
+#: and the sampler returning. The claim must own a concrete row *before*
+#: the sampler call so a sampler failure is fenced to a real row
+#: (checkpoint ``error`` + session ``PARTIAL``); the post-sample pre-stage
+#: overwrites the placeholder with the real
+#: :func:`frames_mode_frame_fingerprint` before any LLM call / success
+#: write, so a success row never carries it. The ``frames:`` prefix plus
+#: the non-hex literal ``"pending"`` can never collide with a real digest
+#: or a ``video:`` value.
+PROVISIONAL_FRAMES_FINGERPRINT = "frames:pending"
+
 
 def video_mode_frame_fingerprint(video_data_url: str) -> str:
     """Namespaced checkpoint fingerprint for the raw_mp4 video payload.
@@ -121,6 +133,9 @@ class SubChunkRunResult:
     :func:`get_or_create_checkpoint` so the stored checkpoint matches
     this run's input (``"video:..."`` for the legacy video path,
     ``"frames:..."`` for image mode).
+
+    ``video_data_url`` is the raw_mp4 data URL in video mode; in image
+    mode it is ``""`` (no video payload was read or sent).
     """
 
     recognition_result: RecognitionResultDTO
@@ -268,16 +283,26 @@ def execute_sub_chunk(
     ``"video:" + sha256(video_data_url)`` is computed so video-mode
     checkpoints keep today's invalidation semantics with a
     namespaced stored value. The effective value is returned in
-    :attr:`SubChunkRunResult.frame_fingerprint`.
+    :attr:`SubChunkRunResult.frame_fingerprint`. Supplying ``frames``
+    without ``frame_fingerprint`` raises :class:`ValueError`.
     """
     max_output_tokens = resolve_max_output_tokens(provider, scene_default=8192)
-    if video_data_url is None:
+    has_frames = frames is not None and len(frames) > 0
+    if video_data_url is None and not has_frames:
+        # Only the raw_mp4 path builds the video data URL. Image mode
+        # must never read / base64 the whole video — the frames are the
+        # only visual payload it sends.
         video_data_url = build_sub_chunk_video_url(sub_chunk)
 
     if frame_fingerprint is None:
+        if has_frames:
+            raise ValueError(
+                "execute_sub_chunk requires frame_fingerprint when frames is "
+                "supplied (image mode); compute it via "
+                "frames_mode_frame_fingerprint"
+            )
         frame_fingerprint = video_mode_frame_fingerprint(video_data_url)
 
-    has_frames = frames is not None and len(frames) > 0
     if has_frames:
         # Image mode: frames are sent inline, so no video sampling hint.
         extra_body = {}
@@ -329,7 +354,7 @@ def execute_sub_chunk(
         total_tokens=total_tokens,
         usage=dict(usage),
         raw_response_text=raw_response_text,
-        video_data_url=video_data_url,
+        video_data_url=video_data_url or "",
         extra_body=extra_body,
         payload_mode=payload_mode,
         frame_fingerprint=frame_fingerprint,
@@ -505,6 +530,69 @@ def get_or_create_checkpoint(
         if checkpoint is None:
             raise
     return checkpoint
+
+
+# --- checkpoint_writer.py ---
+def claim_checkpoint_before_sampling(
+    db: Session,
+    *,
+    session_id: int,
+    claim: ClaimGuards,
+    sub_chunk: SubChunkPlan,
+) -> SessionAnalysisCheckpoint | None:
+    """Image-mode pre-sampler claim: own the checkpoint row before sampling.
+
+    Ensures the sub-chunk's checkpoint row exists (created with
+    :data:`PROVISIONAL_FRAMES_FINGERPRINT` when missing) and flips any
+    non-``success`` row to ``processing`` (fenced, lease renewed) so a
+    sampler failure is fenced to a concrete row: the loop-exception
+    handler finds the ``processing`` checkpoint, marks it ``error`` and
+    lands the session on ``PARTIAL``.
+
+    Returns ``None`` when the row is already ``success`` — the resume
+    decision (skip the LLM) can only be made once the post-sample frame
+    fingerprint is known, and the row must not be touched before then.
+    """
+    row = _lookup_checkpoint(
+        db,
+        session_id=session_id,
+        analysis_run_id=claim.analysis_run_id,
+        chunk_index=sub_chunk.chunk_index,
+        sub_chunk_index=sub_chunk.sub_chunk_index,
+    )
+    if row is None:
+        row = SessionAnalysisCheckpoint(
+            session_id=session_id,
+            analysis_run_id=claim.analysis_run_id,
+            chunk_index=sub_chunk.chunk_index,
+            sub_chunk_index=sub_chunk.sub_chunk_index,
+            start_offset_seconds=sub_chunk.start_offset_seconds,
+            input_fingerprint=PROVISIONAL_FRAMES_FINGERPRINT,
+            state=CHECKPOINT_STATE_PENDING,
+        )
+        try:
+            with db.begin_nested():
+                db.add(row)
+                db.flush()
+        except IntegrityError:
+            row = _lookup_checkpoint(
+                db,
+                session_id=session_id,
+                analysis_run_id=claim.analysis_run_id,
+                chunk_index=sub_chunk.chunk_index,
+                sub_chunk_index=sub_chunk.sub_chunk_index,
+            )
+            if row is None:
+                raise
+    if row.state == CHECKPOINT_STATE_SUCCESS:
+        return None
+    mark_checkpoint_processing(
+        db,
+        claim=claim,
+        checkpoint=row,
+        lease_owner=claim.lease_owner or "",
+    )
+    return row
 
 
 # --- checkpoint_writer.py ---
@@ -853,6 +941,7 @@ __all__ = [
     "CheckpointWriteResult",
     "ClaimGuards",
     "FRAMES_FINGERPRINT_PREFIX",
+    "PROVISIONAL_FRAMES_FINGERPRINT",
     "RESUMABLE_STATES",
     "SubChunkRunResult",
     "VIDEO_FINGERPRINT_PREFIX",
@@ -861,6 +950,7 @@ __all__ = [
     "build_provider_client",
     "build_sub_chunk_extra_body",
     "build_sub_chunk_video_url",
+    "claim_checkpoint_before_sampling",
     "enforce_fencing",
     "execute_sub_chunk",
     "frames_mode_frame_fingerprint",

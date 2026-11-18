@@ -12,17 +12,18 @@ Every helper this module calls is either:
   :func:`enforce_token_quota`, :func:`record_token_usage`,
   :func:`parse_video_recognition_output`), or
 * reached through the :class:`~src.services.analysis.contracts.AnalysisPorts`
-  bundle — the five media-layout / event-replace helpers. Tests inject a
-  scripted :class:`AnalysisPorts` via the task-layer holder
+  bundle — the plan / video-URL / event-replace / frame-set helpers.
+  Tests inject a scripted :class:`AnalysisPorts` via the task-layer holder
   (:func:`src.tasks._container.set_analysis_ports_for_tests`) or via
   the ``ports`` kwarg on :func:`run_session_analysis`, so the
-  orchestrator no longer needs monkey-patchable names for those five
+  orchestrator no longer needs monkey-patchable names for those
   helpers.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from src.application.prompt.compiler import compile_video_recognition_prompt
@@ -44,10 +45,12 @@ from src.services.analysis import (
     LateWorkerFencingError,
     build_sub_chunk_extra_body,
     cancel_session,
+    claim_checkpoint_before_sampling,
     claim_session_for_analysis,
     finalize_session_success,
     finalize_skip,
     finalize_stale_message,
+    frames_mode_frame_fingerprint,
     get_or_create_checkpoint,
     is_deadlock_operational_error,
     mark_checkpoint_error,
@@ -67,11 +70,26 @@ from src.services.analysis.plan import SubChunkPlan
 from src.services.dispatch import ensure_task_not_cancelled
 from src.services.dispatch.cancel import TaskCancellationRequested
 from src.services.dispatch.lease import renew_task_lease
+from src.services.frame_sampling import (
+    INPUT_MODE_IMAGE,
+    FramePlan,
+    compute_frame_plan,
+    conservative_tokens_per_image,
+    content_signature,
+    estimate_prompt_tokens,
+    resolve_input_mode,
+)
+from src.services.frame_sampling.policy import FramePolicy, parse_frame_policy
+from src.services.frame_sampling.types import FrameSample
 from src.services.home_profile import build_home_context
 from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.prompt_builder.v2.video_recognition import build_strategy_note
-from src.services.provider_generation_limits import get_generation_limits, resolve_num_frames
+from src.services.provider_generation_limits import (
+    get_generation_limits,
+    resolve_image_output_tokens,
+    resolve_num_frames,
+)
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.mapper import validate_recognition_offsets_within_sub_chunk
 from src.services.video_analysis.output_parser import parse_video_recognition_output
@@ -129,6 +147,84 @@ def _build_prompts(
             event_type_list=sorted(VIDEO_EVENT_TYPES),
         )
     )
+
+
+def _build_frame_plan_for_file(
+    provider: Any,
+    plan_item: SubChunkPlan,
+    system_prompt: str,
+    user_prompt: str,
+) -> tuple[FramePolicy, FramePlan, dict[str, Any]]:
+    """Resolve the image-mode sampling policy + token-budget plan for one file.
+
+    Returns ``(policy, plan, frame_plan_detail)`` where the detail dict is
+    the ``TaskLog.detail_json["frame_plan"]`` payload persisted before the
+    sampler call (``sampler_ms`` pending until the sampler returns).
+
+    The per-image token cost is the aspect-agnostic square worst case
+    (:func:`conservative_tokens_per_image` over ``policy.max_edge``) — no
+    source-resolution probe: the sampler fits the long edge, so no frame can
+    cost more, and cheaper frames only leave budget headroom. The same
+    ``max_edge``-square is fed to :func:`compute_frame_plan` as both frame
+    dimensions, so the recorded ``tokens_per_image`` equals
+    ``plan.tokens_per_image`` exactly.
+    """
+    max_model_len = get_generation_limits(provider).max_model_len
+    if max_model_len is None:
+        raise ValueError("image input mode requires max_model_len on the provider")
+    policy = parse_frame_policy(provider)
+    prompt_tokens_est = estimate_prompt_tokens(system_prompt, user_prompt)
+    max_output_tokens = resolve_image_output_tokens(provider)
+    plan = compute_frame_plan(
+        context_size=max_model_len,
+        policy=policy,
+        duration_seconds=plan_item.duration_seconds,
+        prompt_tokens_est=prompt_tokens_est,
+        frame_width=policy.max_edge,
+        frame_height=policy.max_edge,
+        max_output_tokens=max_output_tokens,
+        duration_source=plan_item.duration_source,
+    )
+    frame_plan_detail = {
+        "context_size": max_model_len,
+        "max_model_len": max_model_len,
+        "tokens_per_image": conservative_tokens_per_image(max_edge=policy.max_edge),
+        "tokens_assumption": "square_worst_case",
+        "prompt_tokens_est": prompt_tokens_est,
+        "max_output_tokens": max_output_tokens,
+        "frames": plan.frames,
+        "clamp_reason": plan.clamp_reason,
+        "duration_seconds": plan_item.duration_seconds,
+        "duration_source": plan_item.duration_source,
+        "sampler_ms": None,
+    }
+    return policy, plan, frame_plan_detail
+
+
+def _write_frame_plan_detail(db: Any, task_log_id: int, *, frame_plan: dict[str, Any]) -> None:
+    """Merge ``frame_plan`` into ``TaskLog.detail_json`` (other keys untouched)."""
+    row = db.query(TaskLog).filter(TaskLog.id == task_log_id).one_or_none()
+    if row is None:
+        raise LateWorkerFencingError(f"TaskLog {task_log_id} disappeared during frame-plan write")
+    detail = dict(row.detail_json) if isinstance(row.detail_json, dict) else {}
+    detail["frame_plan"] = frame_plan
+    row.detail_json = detail
+
+
+def _fill_frame_plan_sampler_detail(
+    db: Any, task_log_id: int, *, sampler_ms: int, frame_source: str
+) -> None:
+    """Fill ``frame_plan.sampler_ms`` / ``frame_source`` once the sampler returns."""
+    row = db.query(TaskLog).filter(TaskLog.id == task_log_id).one_or_none()
+    if row is None:
+        raise LateWorkerFencingError(f"TaskLog {task_log_id} disappeared during frame-plan write")
+    detail = dict(row.detail_json) if isinstance(row.detail_json, dict) else {}
+    existing = detail.get("frame_plan")
+    frame_plan = dict(existing) if isinstance(existing, dict) else {}
+    frame_plan["sampler_ms"] = sampler_ms
+    frame_plan["frame_source"] = frame_source
+    detail["frame_plan"] = frame_plan
+    row.detail_json = detail
 
 
 def run_session_analysis(
@@ -305,6 +401,7 @@ def _run_sub_chunk_loop(
     last_prompt_text: str | None = None
     last_response_text: str | None = None
     last_raw_response_text: str | None = None
+    input_mode = resolve_input_mode(provider)
     try:
         # Mirror the cancel-fence placement: checked once
         # after the claim succeeds (before any chunk work) so a cancel
@@ -331,23 +428,76 @@ def _run_sub_chunk_loop(
                 plan_item,
             )
             last_prompt_text = user_prompt
-            video_data_url = ports.video_data_url(plan_item.file_paths[0])
-            extra_body = build_sub_chunk_extra_body(
-                resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
-            )
-            prepared, result = _run_one_sub_chunk(
-                db=db,
-                self=self,
-                claim=claim,
-                guards=guards,
-                plan_item=plan_item,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                video_data_url=video_data_url,
-                extra_body=extra_body,
-                client=client,
-                provider=provider,
-            )
+            if input_mode == INPUT_MODE_IMAGE:
+                file_path = plan_item.file_paths[0]
+                policy, frame_plan, frame_plan_detail = _build_frame_plan_for_file(
+                    provider, plan_item, system_prompt, user_prompt
+                )
+                # Pre-sampler transaction: persist the frame plan (so a
+                # sampler failure still leaves it in detail_json) and own
+                # the checkpoint row so the failure is fenced to a real
+                # row (checkpoint ``error`` + session ``PARTIAL``).
+                with task_db_session() as pre_sample_db:
+                    _write_frame_plan_detail(
+                        pre_sample_db,
+                        claim.task_log.id,
+                        frame_plan=frame_plan_detail,
+                    )
+                    claim_checkpoint_before_sampling(
+                        pre_sample_db,
+                        session_id=claim.session.id,
+                        claim=guards,
+                        sub_chunk=plan_item,
+                    )
+                    pre_sample_db.commit()
+                # The transaction above committed a new ``detail_json``
+                # outside this session; refresh the in-memory claim so the
+                # final finalize merge starts from current state instead of
+                # clobbering ``frame_plan``.
+                db.refresh(claim.task_log, attribute_names=["detail_json"])
+                # Sampler call — no DB session held here (same invariant
+                # as the LLM call below).
+                frame_set = ports.frame_set(provider, file_path, frame_plan)
+                frame_fingerprint = frames_mode_frame_fingerprint(
+                    frame_set.frames,
+                    policy,
+                    content_signature=content_signature(file_path),
+                )
+                prepared, result = _run_one_sub_chunk(
+                    db=db,
+                    self=self,
+                    claim=claim,
+                    guards=guards,
+                    plan_item=plan_item,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    video_data_url=None,
+                    extra_body={},
+                    client=client,
+                    provider=provider,
+                    frames=frame_set.frames,
+                    frame_fingerprint=frame_fingerprint,
+                    sampler_elapsed_ms=frame_set.elapsed_ms,
+                    frame_source=frame_set.source,
+                )
+            else:
+                video_data_url = ports.video_data_url(plan_item.file_paths[0])
+                extra_body = build_sub_chunk_extra_body(
+                    resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
+                )
+                prepared, result = _run_one_sub_chunk(
+                    db=db,
+                    self=self,
+                    claim=claim,
+                    guards=guards,
+                    plan_item=plan_item,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    video_data_url=video_data_url,
+                    extra_body=extra_body,
+                    client=client,
+                    provider=provider,
+                )
             if result is not None:
                 last_response_text = getattr(result, "raw_response_text", None) or ""
                 last_raw_response_text = last_response_text
@@ -518,10 +668,14 @@ def _run_one_sub_chunk(
     plan_item: SubChunkPlan,
     system_prompt: str,
     user_prompt: str,
-    video_data_url: str,
+    video_data_url: str | None,
     extra_body: dict[str, Any],
     client: Any,
     provider: Any,
+    frames: Sequence[FrameSample] | None = None,
+    frame_fingerprint: str | None = None,
+    sampler_elapsed_ms: int | None = None,
+    frame_source: str | None = None,
 ) -> tuple[_PreparedSubChunk, Any]:
     """Open / close a fresh transaction around the LLM HTTP call.
 
@@ -535,8 +689,22 @@ def _run_one_sub_chunk(
     previous partial run, the function returns without calling the
     vision provider — the resumed run only re-charges the failed
     sub-chunks.
+
+    Image mode: the caller supplies the sampled ``frames`` and the
+    namespaced ``frame_fingerprint`` (the sampler already ran outside
+    any DB session) plus ``sampler_elapsed_ms`` / ``frame_source``;
+    ``video_data_url`` is ``None`` and the checkpoint is keyed on the
+    frame fingerprint instead of the video data URL.
     """
+    has_frames = frames is not None and len(frames) > 0
     with task_db_session() as pre_db:
+        if has_frames:
+            _fill_frame_plan_sampler_detail(
+                pre_db,
+                claim.task_log.id,
+                sampler_ms=sampler_elapsed_ms or 0,
+                frame_source=frame_source or "sampler",
+            )
         checkpoint = get_or_create_checkpoint(
             pre_db,
             session_id=claim.session.id,
@@ -544,7 +712,8 @@ def _run_one_sub_chunk(
             sub_chunk=plan_item,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            video_data_url=video_data_url,
+            video_data_url=None if has_frames else video_data_url,
+            frame_fingerprint=frame_fingerprint if has_frames else None,
         )
         did_call_llm = checkpoint.state != "success"
         if did_call_llm:
@@ -557,13 +726,17 @@ def _run_one_sub_chunk(
             renew_task_lease(pre_db, claim.task_log.id, claim.task_log.lease_owner or "")
             enforce_token_quota(pre_db, provider)
         pre_db.commit()
+        if has_frames:
+            # The sampler-detail fill committed outside this session;
+            # refresh so later in-session merges keep ``frame_plan``.
+            db.refresh(claim.task_log, attribute_names=["detail_json"])
         checkpoint_id = checkpoint.id
         prepared = _PreparedSubChunk(
             checkpoint_id=checkpoint_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             plan_item=plan_item,
-            video_data_url=video_data_url,
+            video_data_url="" if has_frames else video_data_url,
             extra_body=extra_body,
             did_call_llm=did_call_llm,
         )
@@ -580,9 +753,11 @@ def _run_one_sub_chunk(
             sub_chunk=plan_item,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            video_data_url=video_data_url,
+            video_data_url=None if has_frames else video_data_url,
             extra_body=extra_body,
             response_parser=parse_video_recognition_output,
+            frames=frames if has_frames else None,
+            frame_fingerprint=frame_fingerprint if has_frames else None,
         )
         # Sub-chunk boundary guard (both payload modes): an event offset
         # beyond the sub-chunk duration would map the event outside the
