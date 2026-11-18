@@ -169,6 +169,16 @@ RULES: tuple[BoundaryRule, ...] = (
         source_root="src/services",
         source_module_prefix="src.services",
         target_module_prefix="src.infrastructure",
+        # ``src.services.frame_sampling.acquire`` is the production
+        # binding of the frame-sampling port (image-frame-sampling plan,
+        # todo 21): the analysis port calls it with only
+        # (provider, video_path, plan, db), so the sampler HTTP client
+        # binding lives there — the same "port binding" shape as the
+        # composition root carved out of the application rule for
+        # ``src/application/bootstrap.py``. Exactly this one file is
+        # exempt; every other src/services module still cannot import
+        # src.infrastructure.
+        excluded_source_subpaths=("src/services/frame_sampling/acquire.py",),
         owner_todo="Todo 5",
         description=(
             "Adapter binding lives in src/application/bootstrap.py only; "
