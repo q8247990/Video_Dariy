@@ -330,7 +330,8 @@ def test_frame_sampling_counters_survive_success_and_failure_on_postgres(
 
     # --- Assert: counters via the endpoint function. ---
     body = metrics_snapshot(postgres_migrated_engine)
-    entries = {entry["provider_id"]: entry for entry in body["frame_sampling"]}
+    frame_sampling = body["frame_sampling"]
+    entries = {entry["provider_id"]: entry for entry in frame_sampling["by_provider"]}
     entry = entries[provider_id]
     # Baseline 2 calls + 1 success (cache-served, 3 frames); the failed
     # attempt bumps failures_total only (calls_total stays 3).
@@ -357,7 +358,14 @@ def test_frame_sampling_counters_survive_success_and_failure_on_postgres(
         "missing_marked",
     }
     assert isinstance(body["analysis_checkpoint"], list)
-    for item in body["frame_sampling"]:
+    assert set(frame_sampling) == {
+        "calls_total",
+        "failures_total",
+        "frames_total",
+        "cache_hits_total",
+        "by_provider",
+    }
+    for item in frame_sampling["by_provider"]:
         assert set(item) == {
             "provider_id",
             "calls_total",
@@ -365,6 +373,9 @@ def test_frame_sampling_counters_survive_success_and_failure_on_postgres(
             "frames_total",
             "cache_hits_total",
         }
+    # Aggregate totals are the sums of the per-provider entries.
+    for field in ("calls_total", "failures_total", "frames_total", "cache_hits_total"):
+        assert frame_sampling[field] == sum(item[field] for item in frame_sampling["by_provider"])
 
     # The failure left the session PARTIAL with zero events (the failure
     # semantics are unchanged by the counter).
@@ -379,10 +390,17 @@ def test_frame_sampling_metrics_empty_before_any_image_analysis(
     postgres_migrated_engine: Engine,
 ) -> None:
     """No image-mode analysis yet: the counter key is absent from
-    AppRuntimeState and the /metrics list is empty (no fabricated row).
+    AppRuntimeState and the /metrics section carries zero totals with an
+    empty ``by_provider`` list (no fabricated provider row).
     """
     body = metrics_snapshot(postgres_migrated_engine)
-    assert body["frame_sampling"] == []
+    assert body["frame_sampling"] == {
+        "calls_total": 0,
+        "failures_total": 0,
+        "frames_total": 0,
+        "cache_hits_total": 0,
+        "by_provider": [],
+    }
     assert set(body) == {
         "delivery",
         "task_recovery",

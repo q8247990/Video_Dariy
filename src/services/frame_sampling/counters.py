@@ -71,6 +71,36 @@ def is_frame_acquisition_failure(exc: BaseException) -> bool:
     )
 
 
+#: ``TaskLog.detail_json["failure_kind"]`` value recorded when a
+#: sub-chunk failed on the frame-sampler acquisition
+#: (:class:`~src.infrastructure.frame_sampler.client.SamplerUnavailable`
+#: / ``SamplerDisabled`).
+FAILURE_KIND_SAMPLER_UNAVAILABLE = "sampler_unavailable"
+
+#: ``TaskLog.detail_json["failure_kind"]`` value recorded for every
+#: non-sampler analysis failure — the vision LLM call itself, the
+#: output parsing of its response, and pre-loop provider setup. LLM and
+#: parse failures are deliberately one class: both happen *after* the
+#: frames were successfully acquired (or are independent of the sampler
+#: entirely), so neither is a sampler outage, and neither is ever
+#: auto-retried by the sampler-failure rules.
+FAILURE_KIND_LLM = "llm"
+
+
+def classify_failure_kind(exc: BaseException) -> str:
+    """Return the ``failure_kind`` marker for a failed analysis sub-chunk.
+
+    The classification is exhaustive by design: every FAILED / PARTIAL
+    finalisation of a session analysis carries exactly one of
+    :data:`FAILURE_KIND_SAMPLER_UNAVAILABLE` / :data:`FAILURE_KIND_LLM`
+    in ``TaskLog.detail_json``, so operators can distinguish a sampler
+    outage from an LLM-side failure without parsing error text.
+    """
+    if is_frame_acquisition_failure(exc):
+        return FAILURE_KIND_SAMPLER_UNAVAILABLE
+    return FAILURE_KIND_LLM
+
+
 def record_frame_sampling_success(
     db: Session,
     *,

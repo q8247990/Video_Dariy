@@ -168,15 +168,69 @@ def checkpoint_progress(engine: Engine) -> list[dict[str, Any]]:
     return results
 
 
-def frame_sampling_metrics(engine: Engine) -> list[dict[str, Any]]:
-    """Return the per-provider frame-sampling acquisition counters.
+def build_frame_sampling_payload(state_value: Any) -> dict[str, Any]:
+    """Shape the stored counter document into the /metrics payload.
+
+    Pure function of the stored :class:`AppRuntimeState` document so the
+    aggregation is unit-testable without a database. Tolerates a
+    missing / malformed document (returns a payload with zero totals and
+    an empty ``by_provider`` list).
+
+    The payload is::
+
+        {
+            "calls_total": int,         # aggregate over all providers
+            "failures_total": int,      # aggregate over all providers
+            "frames_total": int,        # aggregate over all providers
+            "cache_hits_total": int,    # aggregate over all providers
+            "by_provider": [
+                {"provider_id": int | str, "calls_total": int,
+                 "failures_total": int, "frames_total": int,
+                 "cache_hits_total": int},
+                ...
+            ],
+        }
+
+    The aggregate totals are the sum of the per-provider entries, so an
+    operator can read sampler health without iterating providers.
+    """
+    by_provider: dict[str, Any] = {}
+    if isinstance(state_value, dict):
+        raw = state_value.get("by_provider")
+        if isinstance(raw, dict):
+            by_provider = raw
+    entries: list[dict[str, Any]] = []
+    totals = dict.fromkeys(FRAME_SAMPLING_COUNTER_FIELDS, 0)
+    for provider_id, counters in sorted(by_provider.items()):
+        if not isinstance(counters, dict):
+            continue
+        try:
+            entry_provider_id: int | str = int(provider_id)
+        except ValueError:
+            entry_provider_id = provider_id
+        entry: dict[str, Any] = {"provider_id": entry_provider_id}
+        for field in FRAME_SAMPLING_COUNTER_FIELDS:
+            value = int(counters.get(field, 0))
+            entry[field] = value
+            totals[field] += value
+        entries.append(entry)
+    return {**totals, "by_provider": entries}
+
+
+def frame_sampling_metrics(engine: Engine) -> dict[str, Any]:
+    """Return the frame-sampling acquisition counters (per provider + totals).
 
     Reads the cumulative counters the analyzer orchestration persists
     under :data:`FRAME_SAMPLING_COUNTERS_KEY` (see the module docstring
-    and :mod:`src.services.frame_sampling.counters` for the write side).
-    Returns an empty list when no image-mode analysis has run yet.
+    and :mod:`src.services.frame_sampling.counters` for the write side)
+    and shapes them with :func:`build_frame_sampling_payload`: the
+    aggregate ``calls_total`` / ``failures_total`` / ``frames_total`` /
+    ``cache_hits_total`` sit next to the ``by_provider`` list so sampler
+    health is visible without iterating providers. When no image-mode
+    analysis has run yet the payload carries zero totals and an empty
+    ``by_provider`` list.
 
-    Each entry is one provider:
+    Per-provider entry fields:
 
     * ``provider_id`` — the ``LLMProvider.id`` (int when parseable);
     * ``calls_total`` — successful frame acquisitions (one per logical
@@ -196,26 +250,7 @@ def frame_sampling_metrics(engine: Engine) -> list[dict[str, Any]]:
                 AppRuntimeState.state_key == FRAME_SAMPLING_COUNTERS_KEY
             )
         ).scalar_one_or_none()
-    by_provider: dict[str, Any] = {}
-    if isinstance(value, dict):
-        raw = value.get("by_provider")
-        if isinstance(raw, dict):
-            by_provider = raw
-    entries: list[dict[str, Any]] = []
-    for provider_id, counters in sorted(by_provider.items()):
-        if not isinstance(counters, dict):
-            continue
-        try:
-            entry_provider_id: int | str = int(provider_id)
-        except ValueError:
-            entry_provider_id = provider_id
-        entries.append(
-            {
-                "provider_id": entry_provider_id,
-                **{field: int(counters.get(field, 0)) for field in FRAME_SAMPLING_COUNTER_FIELDS},
-            }
-        )
-    return entries
+    return build_frame_sampling_payload(value)
 
 
 def metrics_snapshot(engine: Engine) -> dict[str, Any]:
@@ -232,6 +267,7 @@ __all__ = [
     "FRAME_SAMPLING_COUNTER_FIELDS",
     "FRAME_SAMPLING_COUNTERS_KEY",
     "HEARTBEAT_COUNTERS_KEY",
+    "build_frame_sampling_payload",
     "checkpoint_progress",
     "frame_sampling_metrics",
     "metrics_snapshot",

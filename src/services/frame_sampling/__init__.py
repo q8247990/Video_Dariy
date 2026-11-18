@@ -20,8 +20,10 @@
     Per-provider frame-sampling acquisition counters persisted on the
     ``/metrics`` surface (todo 12): :func:`record_frame_sampling_success`
     / :func:`record_frame_sampling_failure` (transactional increments on
-    the ``AppRuntimeState`` snapshot) and
-    :func:`is_frame_acquisition_failure` (sampler-failure classification).
+    the ``AppRuntimeState`` snapshot),
+    :func:`is_frame_acquisition_failure` (sampler-failure classification)
+    and :func:`classify_failure_kind` (the
+    ``TaskLog.detail_json["failure_kind"]`` marker).
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ from src.services.frame_sampling.budget import (
     estimate_prompt_tokens,
 )
 from src.services.frame_sampling.counters import (
+    FAILURE_KIND_LLM,
+    FAILURE_KIND_SAMPLER_UNAVAILABLE,
+    classify_failure_kind,
     is_frame_acquisition_failure,
     record_frame_sampling_failure,
     record_frame_sampling_success,
@@ -50,6 +55,8 @@ from src.services.frame_sampling.types import (
 )
 
 __all__ = [
+    "FAILURE_KIND_LLM",
+    "FAILURE_KIND_SAMPLER_UNAVAILABLE",
     "FRAME_SET_SOURCES",
     "FramePlan",
     "FramePlanImpossible",
@@ -60,6 +67,7 @@ __all__ = [
     "INPUT_MODE_IMAGE",
     "INPUT_MODE_VIDEO",
     "SampleRequest",
+    "classify_failure_kind",
     "compute_frame_plan",
     "conservative_tokens_per_image",
     "content_signature",

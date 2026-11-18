@@ -22,6 +22,7 @@ from src.models.task_log import TaskLog
 from src.services.analysis.contracts import RAW_MP4_NUM_FRAMES, LateWorkerFencingError
 from src.services.analysis.plan import SubChunkPlan, sub_chunk_fingerprint
 from src.services.dispatch import finalize_task_log, renew_task_lease
+from src.services.frame_sampling import classify_failure_kind
 from src.services.frame_sampling.fingerprint import frame_set_fingerprint
 from src.services.frame_sampling.policy import FramePolicy
 from src.services.frame_sampling.types import FrameSample, FrameSet
@@ -904,7 +905,18 @@ def record_recovery_failure(
     priority: str,
     session_id: int | None,
 ) -> None:
-    """Mark the TaskLog as FAILED with the standard analyzer error detail."""
+    """Mark the TaskLog as FAILED with the standard analyzer error detail.
+
+    The detail payload always carries ``failure_kind``
+    (:func:`src.services.frame_sampling.classify_failure_kind`):
+    ``"sampler_unavailable"`` when the failure was a frame-sampler
+    acquisition failure, ``"llm"`` for every other failure (vision LLM
+    call, output parsing, provider setup). The marker lands on both
+    session transitions (``PARTIAL`` when a checkpoint was in flight,
+    ``FAILED`` otherwise) because both are finalised through this
+    function. Existing ``detail_json`` keys (e.g. ``frame_plan``) are
+    preserved — ``finalize_task_log`` merges.
+    """
     transition_task_log(
         db,
         claim.task_log_id,
@@ -923,6 +935,7 @@ def record_recovery_failure(
             "failed_chunk_index": failed_chunk_index,
             "failed_sub_chunk_index": failed_sub_chunk_index,
             "error_type": type(error).__name__,
+            "failure_kind": classify_failure_kind(error),
             "prompt_text": truncate_text(last_prompt_text, 4000),
             "raw_response_excerpt": truncate_text(last_response_text, 1500),
             "raw_response_full": truncate_text(last_response_text, 16000),
