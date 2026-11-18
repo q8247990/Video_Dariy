@@ -17,6 +17,7 @@ import {
   updateProvider,
 } from './api'
 import { ProviderForm } from './ProviderForm'
+import { SamplerCard } from './SamplerCard'
 import { confirmDialog } from '../../lib/confirm'
 
 export function ProvidersPage() {
@@ -264,6 +265,8 @@ export function ProvidersPage() {
           </tbody>
         </table>
       </div>
+
+      <SamplerCard />
 
       {(showCreate || editing) && (
         <div

@@ -706,6 +706,10 @@ button.capability-btn-active {
   color: var(--muted);
 }
 
+.field-error {
+  color: var(--danger);
+}
+
 .summary-detail {
   margin-top: 0.7rem;
   display: grid;
