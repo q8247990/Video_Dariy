@@ -1,28 +1,30 @@
-"""Two-pass ffmpeg frame extraction with scene gating (todo 17).
+"""Single-pass ffmpeg frame extraction with scene gating (todo 17, todo 38).
 
 Given a video file, ``extract_frames`` decodes it at a fixed probe rate and
 returns every sampled frame as a JPEG plus a list of *event candidate
 windows* — time ranges that likely contain an event, derived from ffmpeg's
 scene-change scores.
 
-The extraction runs two ffmpeg passes plus a best-effort ffprobe duration
-read:
+The extraction is a **single ffmpeg pass** (todo 38: one decode instead of
+two). One invocation decodes the video at ``probe_fps`` with the filter chain
+``fps=<probe_fps>,select='gte(scene,0)',metadata=print[,scale=...]`` and
+writes the frames as JPEGs (``-f image2``). ``select`` with a ``scene``
+expression makes ffmpeg attach a ``lavfi.scene_score`` metadata value (0 =
+identical to previous frame, 1 = completely different) to every sampled frame;
+``metadata=print`` dumps it to stderr. The pass runs at ``-loglevel info``
+because the metadata filter logs at AV_LOG_INFO — at ``-loglevel error``
+nothing is printed at all. The scene scores are parsed from that same stderr
+in the same call that writes the JPEGs, so the decode happens exactly once.
 
-1. **Scene pass** — ``fps=<probe_fps>,select='gte(scene,0)',metadata=print``
-   into a null sink. ``select`` with a ``scene`` expression makes ffmpeg
-   attach a ``lavfi.scene_score`` metadata value (0 = identical to previous
-   frame, 1 = completely different) to every sampled frame;
-   ``metadata=print`` dumps it to stderr. This pass runs at ``-loglevel
-   info`` because the metadata filter logs at AV_LOG_INFO — at
-   ``-loglevel error`` nothing is printed at all.
-2. **JPEG pass** — ``fps=<probe_fps> -q:v <qv> -f image2`` into a
-   temporary directory, read back sorted by name. Runs at
-   ``-loglevel error`` for a clean stderr.
+Optionally the frames are scaled in ffmpeg (todo 38): when ``max_edge`` is
+given, a ``scale`` filter caps the long edge at ``max_edge`` (never upscales,
+long edge a multiple of 32), so the returned JPEGs are already final-size and
+need no re-encoding downstream.
 
 Frame times are derived from the filter output index (``index / probe_fps``),
 never from ``pts_time``: the ``fps`` filter guarantees output frames land
 exactly on ``n / probe_fps``, and the ``metadata=print`` block omits
-``pts_time`` for some streams. The same rule gives the JPEG pass its
+``pts_time`` for some streams. The same rule gives the JPEG files their
 timestamps (file index / probe_fps).
 
 Candidate windows: a sampled frame with scene score >= ``SCENE_THRESHOLD``
@@ -118,14 +120,67 @@ def _run(cmd: list[str], timeout_seconds: float) -> subprocess.CompletedProcess[
         raise ExtractionFailed(f"failed to run {cmd[0]}: {exc}") from exc
 
 
-def _scene_pass(
-    video_path: Path, probe_fps: float, timeout_seconds: float
-) -> list[tuple[float, float]]:
-    """Run the scene-score pass; return ``(t_seconds, score)`` per frame.
+def _scale_filter(max_edge: int) -> str:
+    """Build an ffmpeg ``scale`` filter capping the long edge at ``max_edge``.
 
-    Returns an empty list when the stream decodes to zero frames (empty
-    video) instead of raising.
+    The long edge is scaled down to the largest multiple of 32 not exceeding
+    ``min(edge, max_edge)`` (vision models prefer 32-aligned dims); the short
+    edge is ``-2`` so the aspect ratio is preserved. The long edge is never
+    enlarged: the target is always <= the source edge. When the 32-aligned
+    target would be < 32 (a sub-32 source, or ``max_edge`` < 32) the exact cap
+    ``min(edge, max_edge)`` is used instead so we neither upscale nor emit a
+    zero dimension.
     """
+
+    def _target(edge: str) -> str:
+        m32 = f"trunc(min({edge},{max_edge})/32)*32"
+        return f"if(gte({m32},32),{m32},min({edge},{max_edge}))"
+
+    width = _target("iw")
+    height = _target("ih")
+    return f"scale='if(gte(iw,ih),{width},-2)':'if(gte(iw,ih),-2,{height})'"
+
+
+def _parse_scores(stderr: bytes, probe_fps: float) -> list[tuple[float, float]]:
+    """Parse ``(t_seconds, scene_score)`` pairs from ``metadata=print`` stderr.
+
+    Frame time = output index / probe_fps (see module docstring): the ``fps``
+    filter guarantees exact ``n / probe_fps`` timestamps, while ``pts_time``
+    may be absent from the printed block.
+    """
+    scores: list[tuple[float, float]] = []
+    current_index: int | None = None
+    for line in stderr.decode("utf-8", "replace").splitlines():
+        header = _FRAME_HEADER_RE.search(line)
+        if header:
+            current_index = int(header.group(1))
+            continue
+        score = _SCORE_RE.search(line)
+        if score and current_index is not None:
+            scores.append((current_index / probe_fps, float(score.group(1))))
+    return scores
+
+
+def _extract_pass(
+    video_path: Path,
+    probe_fps: float,
+    qv: int,
+    max_edge: int | None,
+    timeout_seconds: float,
+    tmp_dir: Path,
+) -> tuple[list[tuple[float, float]], list[ExtractedFrame]]:
+    """Run the single-pass ffmpeg extraction.
+
+    One ffmpeg invocation decodes the video at ``probe_fps``, attaches a
+    ``lavfi.scene_score`` to every sampled frame (``metadata=print`` to
+    stderr), optionally scales the frames to the ``max_edge`` budget, and
+    writes them as JPEGs. Returns ``(scene_scores, frames)``; both are empty
+    when the stream decodes to zero frames.
+    """
+    video_filter = f"fps={probe_fps:g},select='gte(scene,0)',metadata=print"
+    if max_edge is not None:
+        video_filter += f",{_scale_filter(max_edge)}"
+    pattern = tmp_dir / "frame-%06d.jpg"
     cmd = [
         "ffmpeg",
         "-nostdin",
@@ -135,51 +190,7 @@ def _scene_pass(
         "-i",
         str(video_path),
         "-vf",
-        f"fps={probe_fps:g},select='gte(scene,0)',metadata=print",
-        "-f",
-        "null",
-        "-",
-    ]
-    proc = _run(cmd, timeout_seconds)
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode("utf-8", "replace")
-        if _NO_STREAM_MARKER in stderr:
-            logger.info("No decodable frames in %s", video_path)
-            return []
-        raise ExtractionFailed(
-            f"scene-score pass failed for {video_path}: {_stderr_tail(proc.stderr)}"
-        )
-    scores: list[tuple[float, float]] = []
-    current_index: int | None = None
-    for line in proc.stderr.decode("utf-8", "replace").splitlines():
-        header = _FRAME_HEADER_RE.search(line)
-        if header:
-            current_index = int(header.group(1))
-            continue
-        score = _SCORE_RE.search(line)
-        if score and current_index is not None:
-            # Frame time = output index / probe_fps (see module docstring):
-            # the fps filter guarantees exact ``n / probe_fps`` timestamps,
-            # while pts_time may be absent from the printed block.
-            scores.append((current_index / probe_fps, float(score.group(1))))
-    return scores
-
-
-def _jpeg_pass(
-    video_path: Path, probe_fps: float, qv: int, timeout_seconds: float, tmp_dir: Path
-) -> list[ExtractedFrame]:
-    """Run the JPEG extraction pass; read back the frames sorted by name."""
-    pattern = tmp_dir / "frame-%06d.jpg"
-    cmd = [
-        "ffmpeg",
-        "-nostdin",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(video_path),
-        "-vf",
-        f"fps={probe_fps:g}",
+        video_filter,
         "-q:v",
         str(qv),
         "-f",
@@ -188,13 +199,18 @@ def _jpeg_pass(
     ]
     proc = _run(cmd, timeout_seconds)
     if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace")
+        if _NO_STREAM_MARKER in stderr:
+            logger.info("No decodable frames in %s", video_path)
+            return [], []
         raise ExtractionFailed(
-            f"jpeg extraction pass failed for {video_path}: {_stderr_tail(proc.stderr)}"
+            f"frame extraction failed for {video_path}: {_stderr_tail(proc.stderr)}"
         )
+    scores = _parse_scores(proc.stderr, probe_fps)
     frames: list[ExtractedFrame] = []
     for index, path in enumerate(sorted(tmp_dir.glob("frame-*.jpg"))):
         frames.append(ExtractedFrame(t_seconds=index / probe_fps, jpeg_bytes=path.read_bytes()))
-    return frames
+    return scores, frames
 
 
 def _probe_duration(video_path: Path, timeout_seconds: float) -> float:
@@ -274,6 +290,7 @@ def extract_frames(
     max_event_windows: int,
     jpeg_quality: int,
     timeout_seconds: float = 120.0,
+    max_edge: int | None = None,
 ) -> ExtractionResult:
     """Extract probe-rate JPEG frames and scene-gated candidate windows.
 
@@ -286,6 +303,9 @@ def extract_frames(
             windows are kept.
         jpeg_quality: Target JPEG quality, 60..95 (mapped to ffmpeg ``-q:v``).
         timeout_seconds: Per-ffmpeg-invocation timeout in seconds.
+        max_edge: When given, frames are scaled in ffmpeg so the long edge is
+            at most ``max_edge`` (never upscaled, long edge a multiple of 32).
+            ``None`` (the default) leaves frames at their source resolution.
 
     Returns:
         An :class:`app.models.ExtractionResult`; frames and candidates are
@@ -310,6 +330,10 @@ def extract_frames(
         or max_event_windows < 1
     ):
         raise ValueError(f"max_event_windows must be an integer >= 1, got {max_event_windows!r}")
+    if max_edge is not None and (
+        not isinstance(max_edge, int) or isinstance(max_edge, bool) or max_edge < 1
+    ):
+        raise ValueError(f"max_edge must be an integer >= 1 or None, got {max_edge!r}")
 
     path = Path(video_path)
     if not path.is_file():
@@ -319,15 +343,22 @@ def extract_frames(
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="video-dairy-sampler-") as tmp:
         tmp_dir = Path(tmp)
-        logger.info("Extracting frames from %s (probe_fps=%g, qv=%d)", path, probe_fps, qv)
-        scene_scores = _scene_pass(path, probe_fps, timeout_seconds)
-        if not scene_scores:
+        logger.info(
+            "Extracting frames from %s (probe_fps=%g, qv=%d, max_edge=%s)",
+            path,
+            probe_fps,
+            qv,
+            max_edge,
+        )
+        scene_scores, frames = _extract_pass(
+            path, probe_fps, qv, max_edge, timeout_seconds, tmp_dir
+        )
+        if not frames:
             # Zero decodable frames: empty result, not an error.
             elapsed_ms = int((time.monotonic() - started) * 1000)
             return ExtractionResult(
                 frames=(), candidates=(), elapsed_ms=elapsed_ms, duration_seconds=0.0
             )
-        frames = _jpeg_pass(path, probe_fps, qv, timeout_seconds, tmp_dir)
         duration = _probe_duration(path, timeout_seconds)
         if duration <= 0.0 and frames:
             # Fallback: last sampled frame plus one frame period.

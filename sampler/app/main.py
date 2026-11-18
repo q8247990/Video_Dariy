@@ -3,18 +3,14 @@
 Out-of-process service that samples frames from surveillance recordings for
 the main pipeline. It exposes:
 
-- ``GET /healthz`` — liveness, model availability, version (always 200).
+- ``GET /healthz`` — liveness and version (always 200).
 - ``POST /sample`` — decode a whitelisted video file at a fixed probe rate,
   select a bounded set of frames, and return them as base64 JPEGs together
   with the ffmpeg scene-detection candidate windows.
 
-Honesty note: the ONNX person detector and tracker (todo 16) are implemented
-and unit-tested but **not yet used by /sample**; candidate windows currently
-come from ffmpeg scene detection (todo 17) only.
-
-The process always starts and answers 200 even when the model file is
-missing or invalid; callers check ``model_loaded`` to decide whether
-person-aware sampling is possible.
+Candidate windows come from ffmpeg scene detection only; the ONNX person
+detector was removed until a consumer path exists, so ``/sample`` is not
+person-aware.
 """
 
 from __future__ import annotations
@@ -30,9 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import allowed_roots, get_settings
-from app.detector import detector_ready
 from app.extract import ExtractionFailed, extract_frames
-from app.images import resize_jpeg
 from app.security import PathSecurityError, resolve_allowed_path
 from app.select import FrameSelectionError, select_frames
 
@@ -107,16 +101,10 @@ class SampleResponse(BaseModel):
 
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
-    """Report liveness, model availability and the service version.
-
-    ``model_loaded`` is ``True`` only when the configured model file exists
-    and loads into an onnxruntime session; a missing or invalid model still
-    yields 200 with ``model_loaded: false`` (never raises).
-    """
+    """Report liveness and the service version (always 200)."""
     settings = get_settings()
     return {
         "status": "ok",
-        "model_loaded": detector_ready(settings.model_path_raw),
         "version": settings.version,
     }
 
@@ -147,6 +135,7 @@ def sample(request: SampleRequest) -> SampleResponse:
             window_post_seconds=request.window_post_seconds,
             max_event_windows=request.max_event_windows,
             jpeg_quality=request.jpeg_quality,
+            max_edge=request.max_edge,
             timeout_seconds=SAMPLE_TIMEOUT_SECONDS,
         )
     except ExtractionFailed as exc:
@@ -166,12 +155,12 @@ def sample(request: SampleRequest) -> SampleResponse:
         logger.warning("Frame selection rejected for %s: %s", request.video_path, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # The JPEGs are already final-size: extract_frames scaled them in ffmpeg to
+    # the max_edge budget (never upscaled), so we only base64-encode here.
     frames = [
         FrameOut(
             t_seconds=frame.t_seconds,
-            jpeg_base64=base64.b64encode(
-                resize_jpeg(frame.jpeg_bytes, request.max_edge, request.jpeg_quality)
-            ).decode("ascii"),
+            jpeg_base64=base64.b64encode(frame.jpeg_bytes).decode("ascii"),
         )
         for frame in selected
     ]
