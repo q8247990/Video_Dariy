@@ -41,6 +41,12 @@ export type FramePolicyNumericKey =
 /** 表单草稿：输入框一律存字符串，enabled 存 boolean，未知键存 unknown。 */
 export type FramePolicyDraft = {
   enabled: boolean
+  /**
+   * 已存配置的 frame_sampling 是否显式包含 `enabled` 键。
+   * 后端契约（src/services/frame_sampling/mode.py）：键缺失 = 图像模式（启用）。
+   * 序列化时据此保留「缺省」形态，避免未触碰开关的保存写出 `enabled: true` 噪声。
+   */
+  hasEnabledKey: boolean
   mode: FrameMode
   target_context_ratio: string
   max_edge: string
@@ -89,6 +95,7 @@ const FRAME_POLICY_KEY_SET: ReadonlySet<string> = new Set<string>([
 export function emptyFramePolicyDraft(): FramePolicyDraft {
   return {
     enabled: false,
+    hasEnabledKey: false,
     mode: 'event',
     target_context_ratio: '',
     max_edge: '',
@@ -127,15 +134,18 @@ function readMode(extra: Record<string, unknown>): FrameMode {
 /**
  * 将已存储的 frame_sampling 子配置转换为表单草稿。
  *
- * - enabled：严格 bool 才采纳；非 bool（后端按视频模式处理）显示为未启用。
+ * - enabled：与后端 resolve_input_mode 一致——键缺失 = 启用（图像模式）；
+ *   显式 bool 按其值；非 bool（后端按视频模式处理）显示为未启用。
  * - mode：`mode` 优先；旧 `preset` 键按映射展示（baseline→uniform）；未知 / 缺失回落 'event'。
  * - 未知键收入 draft.unknown，序列化时原样写回（往返保留）。
  */
 export function draftFromExtraConfig(extra: Record<string, unknown>): FramePolicyDraft {
   const draft = emptyFramePolicyDraft()
   draft.mode = readMode(extra)
+  const hasEnabledKey = Object.prototype.hasOwnProperty.call(extra, 'enabled')
   const enabled = extra.enabled
-  draft.enabled = typeof enabled === 'boolean' ? enabled : false
+  draft.hasEnabledKey = hasEnabledKey
+  draft.enabled = typeof enabled === 'boolean' ? enabled : !hasEnabledKey
   for (const key of FRAME_POLICY_NUMERIC_KEYS) {
     draft[key] = readDraftValue(extra[key])
   }
@@ -163,10 +173,11 @@ export function applyMode(draft: FramePolicyDraft, mode: FrameMode): FramePolicy
   return next
 }
 
-/** 草稿是否「未启用且未填写任何内容」——此时不写 frame_sampling 键（保持视频模式）。 */
+/** 草稿是否「未启用、无显式 enabled 键且未填写任何内容」——此时不写 frame_sampling 键。 */
 export function isFramePolicyEmpty(draft: FramePolicyDraft): boolean {
   return (
     draft.enabled === false &&
+    draft.hasEnabledKey === false &&
     draft.mode === 'event' &&
     FRAME_POLICY_NUMERIC_KEYS.every((key) => draft[key].trim() === '') &&
     Object.keys(draft.unknown).length === 0
@@ -220,9 +231,14 @@ export function buildFrameSamplingExtraConfig(
   if (isFramePolicyEmpty(draft)) {
     return null
   }
-  const out: Record<string, unknown> = {
-    mode: draft.mode,
-    enabled: draft.enabled,
+  const out: Record<string, unknown> = { mode: draft.mode }
+  // 后端把「enabled 缺失」与「enabled: true」等价（均为图像模式）：启用时只在原配置
+  // 本来就显式写有该键时才回写 true，避免未触碰开关的保存引入噪声；禁用必须显式写
+  // false（缺失 = 启用，不能省略）。
+  if (draft.enabled) {
+    if (draft.hasEnabledKey) out.enabled = true
+  } else {
+    out.enabled = false
   }
 
   const ratio = inFloatRange(draft.target_context_ratio, 0.5, 1.0)

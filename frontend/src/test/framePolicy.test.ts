@@ -80,12 +80,14 @@ describe('framePolicy 序列化', () => {
   it('未启用的空草稿序列化为 null（不写 frame_sampling 键）', () => {
     expect(buildFrameSamplingExtraConfig(emptyFramePolicyDraft())).toBeNull()
     expect(isFramePolicyEmpty(emptyFramePolicyDraft())).toBe(true)
+    expect(emptyFramePolicyDraft().hasEnabledKey).toBe(false)
   })
 
-  it('启用且仅改模式时写出 mode 与 enabled', () => {
+  it('启用且仅改模式时只写 mode（缺省 enabled 即图像模式）', () => {
     const draft: FramePolicyDraft = { ...emptyFramePolicyDraft(), enabled: true, mode: 'uniform' }
     const out = buildFrameSamplingExtraConfig(draft)
-    expect(out).toMatchObject({ mode: 'uniform', enabled: true })
+    expect(out).toMatchObject({ mode: 'uniform' })
+    expect(out).not.toHaveProperty('enabled')
   })
 
   it('非法 / 超范围值被省略，合法值保留，未知键不丢失', () => {
@@ -142,9 +144,45 @@ describe('framePolicy 序列化', () => {
     expect(buildFrameSamplingExtraConfig(blanked)?.dedupe_phash_distance).toBeNull()
   })
 
-  it('operator 禁用区块时 enabled 序列化为 false', () => {
+  it('禁用时 enabled 序列化为 false，原配置显式写过 true 时保留 true', () => {
     const draft = { ...emptyFramePolicyDraft(), enabled: true, max_frames: '60' }
-    expect(buildFrameSamplingExtraConfig(draft)?.enabled).toBe(true)
+    expect(buildFrameSamplingExtraConfig(draft)).not.toHaveProperty('enabled')
     expect(buildFrameSamplingExtraConfig({ ...draft, enabled: false })?.enabled).toBe(false)
+    const explicitTrue = draftFromExtraConfig({ enabled: true, max_frames: 60 })
+    expect(buildFrameSamplingExtraConfig(explicitTrue)?.enabled).toBe(true)
+  })
+})
+
+describe('framePolicy enabled 与后端 resolve_input_mode 对齐', () => {
+  it('缺省 enabled 的已存配置显示为启用（后端视为图像模式）', () => {
+    expect(draftFromExtraConfig({}).enabled).toBe(true)
+    const draft = draftFromExtraConfig({ mode: 'uniform', min_frames: 3, max_frames: 8 })
+    expect(draft.enabled).toBe(true)
+    expect(draft.hasEnabledKey).toBe(false)
+  })
+
+  it('显式 enabled:false 显示为未启用且往返保留 false', () => {
+    const withPolicy = draftFromExtraConfig({ mode: 'uniform', enabled: false, max_frames: 8 })
+    expect(withPolicy.enabled).toBe(false)
+    expect(buildFrameSamplingExtraConfig(withPolicy)?.enabled).toBe(false)
+
+    const bare = draftFromExtraConfig({ enabled: false })
+    expect(bare.enabled).toBe(false)
+    expect(buildFrameSamplingExtraConfig(bare)?.enabled).toBe(false)
+  })
+
+  it('非 bool 的 enabled（后端按视频模式处理）显示为未启用', () => {
+    expect(draftFromExtraConfig({ enabled: 'yes' }).enabled).toBe(false)
+    expect(draftFromExtraConfig({ enabled: null }).enabled).toBe(false)
+  })
+
+  it('未触碰开关保存缺省 enabled 配置：不写 enabled 键，图像模式保持不变', () => {
+    const original = { mode: 'uniform', min_frames: 3, max_frames: 8 }
+    const out = buildFrameSamplingExtraConfig(draftFromExtraConfig(original))
+    expect(out).not.toBeNull()
+    expect(out).not.toHaveProperty('enabled')
+    expect(out).toMatchObject(original)
+    // frame_sampling 仍存在且 enabled 缺失 => 后端 resolve_input_mode 仍为 image
+    expect(draftFromExtraConfig(out as Record<string, unknown>).enabled).toBe(true)
   })
 })

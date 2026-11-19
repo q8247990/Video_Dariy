@@ -84,7 +84,9 @@ function getInitialState(initialValue?: Provider): FormState {
     max_output_tokens: readExtraString(extra.max_output_tokens),
     num_frames: readExtraString(extra.num_frames) || '120',
     frame_policy:
-      typeof rawFrameSampling === 'object' && rawFrameSampling !== null
+      typeof rawFrameSampling === 'object' &&
+      rawFrameSampling !== null &&
+      !Array.isArray(rawFrameSampling)
         ? draftFromExtraConfig(rawFrameSampling as Record<string, unknown>)
         : emptyFramePolicyDraft(),
     enabled: initialValue?.enabled ?? true,
