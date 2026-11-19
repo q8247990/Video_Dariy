@@ -45,6 +45,13 @@ from src.application.bootstrap_fakes import (
     ScriptedVisionGateway,
     ScriptedVisionGatewayFactory,
 )
+from src.application.prompt.compiler import compile_video_recognition_prompt
+from src.application.prompt.contracts import (
+    SessionPromptContext,
+    StrategyPromptContext,
+    VideoRecognitionPromptInput,
+    VideoSourcePromptContext,
+)
 from src.core.pipeline_constants import TaskStatus
 from src.infrastructure.frame_sampler import SamplerUnavailable
 from src.models.event_record import EventRecord
@@ -57,10 +64,15 @@ from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.analysis.plan import build_analysis_plan
 from src.services.frame_sampling.budget import (
+    compute_frame_plan,
     conservative_tokens_per_image,
     estimate_prompt_tokens,
 )
+from src.services.frame_sampling.policy import parse_frame_policy
 from src.services.frame_sampling.types import FrameSample, FrameSet
+from src.services.home_profile import build_home_context
+from src.services.prompt_builder.v2.video_recognition import build_strategy_note
+from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
@@ -173,7 +185,7 @@ def _base_action(pg_db_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------------------
 
 
-def _seed_provider(db: Session, *, image_mode: bool) -> LLMProvider:
+def _seed_provider(db: Session, *, image_mode: bool, max_frames: int = 12) -> LLMProvider:
     """Seed the default vision provider (video mode, or image mode with budget)."""
     extra_config_json: dict[str, Any] | None = None
     if image_mode:
@@ -181,7 +193,7 @@ def _seed_provider(db: Session, *, image_mode: bool) -> LLMProvider:
             "frame_sampling": {
                 "mode": "event",
                 "min_frames": 2,
-                "max_frames": 12,
+                "max_frames": max_frames,
                 "probe_fps": 2.0,
                 "max_edge": MAX_EDGE,
                 "target_context_ratio": 0.9,
@@ -326,6 +338,57 @@ def _set_responses(*responses: str) -> None:
         factory.install_gateway(ScriptedVisionGateway(responses=list(responses)))
 
 
+def _compiler_prompts(
+    db: Session,
+    session_id: int,
+    *,
+    sub_chunk_index: int = 0,
+    start_offset_seconds: int = 0,
+    duration_seconds: int = 60,
+    input_mode: str = "video",
+    frame_timestamps: list[float] | None = None,
+) -> tuple[str, str]:
+    """Render the expected prompts through the public compiler (no DB writes)."""
+    session = db.query(VideoSession).filter(VideoSession.id == session_id).one()
+    source = db.query(VideoSource).filter(VideoSource.id == session.source_id).one()
+    home_context = build_home_context(db)
+    ingest_type = (
+        "xiaomi_nas_backup" if source.source_type == "local_directory" else source.source_type
+    )
+    return compile_video_recognition_prompt(
+        VideoRecognitionPromptInput(
+            home_context=home_context,
+            video_source=VideoSourcePromptContext(
+                source_name=source.source_name,
+                camera_name=source.camera_name,
+                location_name=source.location_name,
+                prompt_text=source.prompt_text,
+                source_type=source.source_type,
+            ),
+            session_context=SessionPromptContext(
+                session_id=session.id,
+                source_id=session.source_id,
+                session_start_time=session.session_start_time,
+                session_end_time=session.session_end_time,
+                total_duration_seconds=session.total_duration_seconds,
+                segment_index=sub_chunk_index,
+                segment_start_offset_sec=start_offset_seconds,
+                segment_duration_seconds=duration_seconds,
+            ),
+            strategy_context=StrategyPromptContext(
+                ingest_type=ingest_type,
+                source_type=source.source_type,
+                strategy_note=build_strategy_note(
+                    ingest_type=ingest_type, source_type=source.source_type
+                ),
+            ),
+            event_type_list=sorted(VIDEO_EVENT_TYPES),
+            input_mode=input_mode,
+            frame_timestamps=list(frame_timestamps or []),
+        )
+    )
+
+
 def _write_video_file(path: Path, name: str, payload: bytes = b"\x00\x01fake-mp4-bytes") -> str:
     file_path = path / name
     file_path.write_bytes(payload)
@@ -449,6 +512,171 @@ def test_image_mode_records_frame_plan_and_sends_interleaved_frames(
         assert session.analysis_status == "success"
     finally:
         verify_db.close()
+
+
+def test_image_mode_prompt_contains_frame_list_and_image_rules(
+    pg_db_factory: SessionFactory,
+    tmp_path: Path,
+) -> None:
+    """The orchestration layer must SEND the image-mode prompt, not only build it.
+
+    Regression for the spike-49 defect: ``_build_prompts`` used to omit
+    ``input_mode`` / ``frame_timestamps``, so the gateway received the video
+    branch (no timestamp list, video rules) even though the payload was
+    interleaved images. The assertions read the scripted gateway's recorded
+    ``messages`` — i.e. the exact request body — after a full task run.
+    """
+    frame_port = FakeFramePort()
+    _install_ports(use_real_plan=True, frame_port=frame_port)
+
+    file_path = _write_video_file(tmp_path, "cam1.mp4")
+    db = pg_db_factory()
+    try:
+        _seed_provider(db, image_mode=True)
+        session_id = _seed_source_session(db, files=[(file_path, 60)])
+        db.commit()
+    finally:
+        db.close()
+
+    _set_responses(_recognition_result_json(0))
+    analyze_session_task.run(session_id=session_id)
+
+    frames = frame_port.results[0].frames
+    gateway = _latest_gateway()
+    assert len(gateway.calls) == 1
+    system_prompt = gateway.calls[0]["messages"][0]["content"]
+    user_content = gateway.calls[0]["messages"][1]["content"]
+    user_prompt = user_content[-1]["text"]
+
+    # system prompt is the image branch, not the video branch.
+    assert "5. 事件粒度：优先输出多个短事件，只有同一持续行为才合并。" in system_prompt
+    assert (
+        "6. 时间规则：offset_start_sec / offset_end_sec 以本批第 0 帧为 0 秒，"
+        "且必须对齐到给定帧时间戳。" in system_prompt
+    )
+    assert "15. 事件数量上限：每个文件最多输出 8 个事件" in system_prompt
+    assert "连续同类活动尽量合并" not in system_prompt
+
+    # user prompt carries the REAL timestamps of the frames sent.
+    assert "本批帧时间戳：" in user_prompt
+    timestamp_lines = [line for line in user_prompt.splitlines() if line.startswith("帧 ")]
+    assert timestamp_lines == [
+        f"帧 {index}/{len(frames)} — t={frame.t_seconds:.1f}s"
+        for index, frame in enumerate(frames, start=1)
+    ]
+    # The interleaved payload labels and the prompt list agree line by line.
+    labels = [item["text"] for item in user_content if item.get("type") == "text"][:-1]
+    assert labels == timestamp_lines
+
+    verify_db = pg_db_factory()
+    try:
+        task_log = (
+            verify_db.query(TaskLog)
+            .filter(TaskLog.task_target_id == session_id)
+            .order_by(TaskLog.id.desc())
+            .one()
+        )
+        frame_plan = task_log.detail_json["frame_plan"]
+        video_system, video_user = _compiler_prompts(verify_db, session_id)
+    finally:
+        verify_db.close()
+
+    # The recorded estimate covers the frame list, not just the video prompt.
+    assert frame_plan["prompt_tokens_est"] == estimate_prompt_tokens(system_prompt, user_prompt)
+    assert frame_plan["prompt_tokens_est"] > estimate_prompt_tokens(video_system, video_user)
+
+
+def test_image_mode_frame_plan_converges_with_frame_list_budget(
+    pg_db_factory: SessionFactory,
+    tmp_path: Path,
+) -> None:
+    """The budget plan must converge with the frame list it will actually send.
+
+    With a large ``max_frames`` the budget (not the policy ceiling) decides
+    the count. The frame-list block itself consumes prompt tokens, so the
+    first plan (estimated without / with a short list) is larger than the
+    plan re-rendered with its own frame count. This test pins the fixed
+    point: the recorded ``prompt_tokens_est`` equals the estimate of the
+    prompt actually sent, and re-running ``compute_frame_plan`` with that
+    estimate reproduces the recorded frame count (no extra convergence round
+    would change it).
+    """
+    frame_port = FakeFramePort()
+    _install_ports(use_real_plan=True, frame_port=frame_port)
+
+    file_path = _write_video_file(tmp_path, "cam1.mp4")
+    db = pg_db_factory()
+    try:
+        _seed_provider(db, image_mode=True, max_frames=60)
+        session_id = _seed_source_session(db, files=[(file_path, 60)])
+        db.commit()
+    finally:
+        db.close()
+
+    _set_responses(_recognition_result_json(0))
+    analyze_session_task.run(session_id=session_id)
+
+    gateway = _latest_gateway()
+    assert len(gateway.calls) == 1
+    system_prompt = gateway.calls[0]["messages"][0]["content"]
+    user_prompt = gateway.calls[0]["messages"][1]["content"][-1]["text"]
+    final_prompt_tokens_est = estimate_prompt_tokens(system_prompt, user_prompt)
+
+    verify_db = pg_db_factory()
+    try:
+        task_log = (
+            verify_db.query(TaskLog)
+            .filter(TaskLog.task_target_id == session_id)
+            .order_by(TaskLog.id.desc())
+            .one()
+        )
+        frame_plan = task_log.detail_json["frame_plan"]
+        provider = (
+            verify_db.query(LLMProvider).filter(LLMProvider.is_default_vision.is_(True)).one()
+        )
+        policy = parse_frame_policy(provider)
+        video_system, video_user = _compiler_prompts(verify_db, session_id)
+    finally:
+        verify_db.close()
+
+    frames = frame_port.results[0].frames
+    timestamp_lines = [line for line in user_prompt.splitlines() if line.startswith("帧 ")]
+    assert len(timestamp_lines) == frame_plan["frames"]
+    assert frame_plan["clamp_reason"] == "budget"
+    assert frame_plan["frames"] == len(frames)
+    assert frame_plan["frames"] < 60
+    # Fixed point: the estimate used for the plan is the prompt actually sent.
+    assert frame_plan["prompt_tokens_est"] == final_prompt_tokens_est
+    # The frame list really moved the budget: the plan that ignores it is larger.
+    plan_without_frame_list = compute_frame_plan(
+        context_size=frame_plan["context_size"],
+        policy=policy,
+        duration_seconds=frame_plan["duration_seconds"],
+        prompt_tokens_est=estimate_prompt_tokens(video_system, video_user),
+        frame_width=policy.max_edge,
+        frame_height=policy.max_edge * 9 // 16,
+        max_output_tokens=frame_plan["max_output_tokens"],
+        duration_source=frame_plan["duration_source"],
+    )
+    assert plan_without_frame_list.frames > frame_plan["frames"]
+    recomputed = compute_frame_plan(
+        context_size=frame_plan["context_size"],
+        policy=policy,
+        duration_seconds=frame_plan["duration_seconds"],
+        prompt_tokens_est=frame_plan["prompt_tokens_est"],
+        frame_width=policy.max_edge,
+        frame_height=policy.max_edge * 9 // 16,
+        max_output_tokens=frame_plan["max_output_tokens"],
+        duration_source=frame_plan["duration_source"],
+    )
+    assert recomputed.frames == frame_plan["frames"]
+    # The post-acquire guard's inequality holds for the real request.
+    assert (
+        final_prompt_tokens_est
+        + frame_plan["max_output_tokens"]
+        + len(frames) * frame_plan["tokens_per_image"]
+        <= frame_plan["max_model_len"]
+    )
 
 
 def test_image_mode_sampler_failure_keeps_frame_plan_and_marks_partial(
@@ -643,3 +871,49 @@ def test_video_mode_does_not_call_frame_port_or_record_frame_plan(
             assert _is_sha256_hex(checkpoint.input_fingerprint)
     finally:
         verify_db.close()
+
+
+def test_video_mode_prompt_is_byte_identical_to_compiler_defaults(
+    pg_db_factory: SessionFactory,
+) -> None:
+    """Video mode keeps rendering the compiler's default (video) branch.
+
+    Snapshot pin for the raw_mp4 path: the scripts the gateway received must
+    equal ``compile_video_recognition_prompt`` called with the contract
+    defaults (``input_mode="video"`` / ``frame_timestamps=[]``), byte for
+    byte, including the video-only rule wording and no frame list.
+    """
+    _install_ports(use_real_plan=False)
+
+    db = pg_db_factory()
+    try:
+        _seed_provider(db, image_mode=False)
+        session_id = _seed_source_session(db, files=[])
+        db.commit()
+        expected_prompts = [
+            _compiler_prompts(
+                db,
+                session_id,
+                sub_chunk_index=index,
+                start_offset_seconds=index * 60,
+            )
+            for index in range(3)
+        ]
+    finally:
+        db.close()
+
+    _set_responses(
+        _recognition_result_json(0),
+        _recognition_result_json(1),
+        _recognition_result_json(2),
+    )
+    analyze_session_task.run(session_id=session_id)
+
+    gateway = _latest_gateway()
+    assert len(gateway.calls) == 3
+    for call, (expected_system, expected_user) in zip(gateway.calls, expected_prompts, strict=True):
+        assert call["messages"][0]["content"] == expected_system
+        assert call["messages"][1]["content"][-1]["text"] == expected_user
+        assert "连续同类活动尽量合并" in expected_system
+        assert "本批帧时间戳" not in expected_user
+        assert "优先输出多个短事件" not in expected_system

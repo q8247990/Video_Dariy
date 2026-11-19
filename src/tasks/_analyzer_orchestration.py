@@ -77,6 +77,7 @@ from src.services.dispatch.cancel import TaskCancellationRequested
 from src.services.dispatch.lease import renew_task_lease
 from src.services.frame_sampling import (
     INPUT_MODE_IMAGE,
+    INPUT_MODE_VIDEO,
     FramePlan,
     compute_frame_plan,
     conservative_tokens_per_image,
@@ -118,8 +119,15 @@ def _build_prompts(
     home_context: dict[str, Any],
     session: Any,
     sub_chunk: SubChunkPlan,
+    *,
+    input_mode: str = INPUT_MODE_VIDEO,
+    frame_timestamps: Sequence[float] = (),
 ) -> tuple[str, str]:
     """Assemble the recognition prompts for one sub-chunk work item.
+
+    ``input_mode`` / ``frame_timestamps`` default to the video-mode values so
+    the raw_mp4 path renders byte-identically; image mode passes ``"image"``
+    plus the timestamps of the frames actually sent to the model.
 
     Lives in the task layer (and not in ``src.services.analysis``)
     because the assembly calls
@@ -155,21 +163,29 @@ def _build_prompts(
                 strategy_note=strategy_note,
             ),
             event_type_list=sorted(VIDEO_EVENT_TYPES),
+            input_mode=input_mode,
+            frame_timestamps=list(frame_timestamps),
         )
     )
 
 
-def _build_frame_plan_for_file(
-    provider: Any,
-    plan_item: SubChunkPlan,
-    system_prompt: str,
-    user_prompt: str,
-) -> tuple[FramePolicy, FramePlan, dict[str, Any]]:
-    """Resolve the image-mode sampling policy + token-budget plan for one file.
+def _resolve_image_budget(provider: Any) -> tuple[int, FramePolicy, int]:
+    """Resolve ``(max_model_len, policy, max_output_tokens)`` once per file."""
+    max_model_len = get_generation_limits(provider).max_model_len
+    if max_model_len is None:
+        raise ValueError("image input mode requires max_model_len on the provider")
+    return max_model_len, parse_frame_policy(provider), resolve_image_output_tokens(provider)
 
-    Returns ``(policy, plan, frame_plan_detail)`` where the detail dict is
-    the ``TaskLog.detail_json["frame_plan"]`` payload persisted before the
-    sampler call (``sampler_ms`` pending until the sampler returns).
+
+def _derive_frame_plan(
+    *,
+    plan_item: SubChunkPlan,
+    policy: FramePolicy,
+    max_model_len: int,
+    max_output_tokens: int,
+    prompt_tokens_est: int,
+) -> tuple[FramePlan, dict[str, Any]]:
+    """Derive the frame plan + the ``TaskLog.detail_json["frame_plan"]`` payload.
 
     The per-image token cost is the 1440p 16:9 box upper bound
     (:func:`conservative_tokens_per_image` over ``policy.max_edge``) — no
@@ -180,12 +196,6 @@ def _build_frame_plan_for_file(
     dimensions, so the recorded ``tokens_per_image`` equals
     ``plan.tokens_per_image`` exactly.
     """
-    max_model_len = get_generation_limits(provider).max_model_len
-    if max_model_len is None:
-        raise ValueError("image input mode requires max_model_len on the provider")
-    policy = parse_frame_policy(provider)
-    prompt_tokens_est = estimate_prompt_tokens(system_prompt, user_prompt)
-    max_output_tokens = resolve_image_output_tokens(provider)
     plan = compute_frame_plan(
         context_size=max_model_len,
         policy=policy,
@@ -209,7 +219,138 @@ def _build_frame_plan_for_file(
         "duration_source": plan_item.duration_source,
         "sampler_ms": None,
     }
-    return policy, plan, frame_plan_detail
+    return plan, frame_plan_detail
+
+
+def _synthetic_frame_timestamps(duration_seconds: float, frame_count: int) -> tuple[float, ...]:
+    """The timestamps :func:`compute_frame_plan` emits for ``frame_count`` frames."""
+    return tuple(index * duration_seconds / frame_count for index in range(frame_count))
+
+
+def _build_image_prompts(
+    source: VideoSource,
+    home_context: dict[str, Any],
+    session: Any,
+    sub_chunk: SubChunkPlan,
+    frame_timestamps: Sequence[float],
+) -> tuple[str, str]:
+    """Render the recognition prompts in the ``input_mode="image"`` branch."""
+    return _build_prompts(
+        source,
+        home_context,
+        session,
+        sub_chunk,
+        input_mode=INPUT_MODE_IMAGE,
+        frame_timestamps=frame_timestamps,
+    )
+
+
+def _plan_image_prompts(
+    *,
+    provider: Any,
+    plan_item: SubChunkPlan,
+    source: VideoSource,
+    home_context: dict[str, Any],
+    session: Any,
+) -> tuple[FramePolicy, FramePlan, dict[str, Any], str, str]:
+    """Converge the frame plan with the image prompt's frame-list block.
+
+    ``compute_frame_plan`` needs ``prompt_tokens_est`` before the frames are
+    known, while the image prompt's size depends on the frame count (one
+    ``帧 i/N — t=X.Xs`` line per frame). The dependency is monotone: a longer
+    frame list only increases the estimate, and a larger estimate can only
+    keep or reduce the planned count. Starting from the smallest legal list
+    (one frame) gives an upper bound ``k0``; re-rendering with ``k0`` lines
+    yields ``k1 <= k0`` and one final round yields ``k2 ∈ [k1, k0]``.
+
+    The plan handed to the sampler is the one whose estimate was rendered
+    with at least as many lines as it plans to acquire: when ``k2 <= k1``
+    the second re-plan wins (estimate rendered with ``k1`` lines); when
+    ``k2 > k1`` the first re-plan wins (estimate rendered with ``k0``
+    lines) because re-planning with fewer lines would understate the prompt
+    the next round would render. Either way the final rendered prompt cannot
+    outgrow the budget by more than rounding; the caller re-checks the real
+    prompt against ``max_model_len`` after acquisition and fails loudly on
+    overflow.
+    """
+    max_model_len, policy, max_output_tokens = _resolve_image_budget(provider)
+
+    def _render(frame_count: int) -> tuple[str, str]:
+        return _build_image_prompts(
+            source,
+            home_context,
+            session,
+            plan_item,
+            _synthetic_frame_timestamps(plan_item.duration_seconds, frame_count),
+        )
+
+    def _plan(frame_count: int) -> tuple[FramePlan, dict[str, Any]]:
+        system_prompt, user_prompt = _render(frame_count)
+        return _derive_frame_plan(
+            plan_item=plan_item,
+            policy=policy,
+            max_model_len=max_model_len,
+            max_output_tokens=max_output_tokens,
+            prompt_tokens_est=estimate_prompt_tokens(system_prompt, user_prompt),
+        )
+
+    probe_plan, _ = _plan(1)
+    first_plan, first_detail = _plan(probe_plan.frames)
+    second_plan, second_detail = _plan(first_plan.frames)
+    if second_plan.frames <= first_plan.frames:
+        frame_plan, frame_plan_detail = second_plan, second_detail
+    else:
+        frame_plan, frame_plan_detail = first_plan, first_detail
+    system_prompt, user_prompt = _render(frame_plan.frames)
+    logger.debug(
+        "Session %s file %s frame-plan convergence: probe=%d first=%d second=%d "
+        "chosen=%d clamp=%s prompt_tokens_est=%d",
+        session.id,
+        plan_item.sub_chunk_index,
+        probe_plan.frames,
+        first_plan.frames,
+        second_plan.frames,
+        frame_plan.frames,
+        frame_plan.clamp_reason,
+        frame_plan_detail["prompt_tokens_est"],
+    )
+    return policy, frame_plan, frame_plan_detail, system_prompt, user_prompt
+
+
+def _check_image_prompt_budget(
+    *,
+    session_id: int,
+    file_path: str,
+    system_prompt: str,
+    user_prompt: str,
+    frame_count: int,
+    frame_plan: FramePlan,
+    frame_plan_detail: dict[str, Any],
+) -> None:
+    """Fail loudly when the acquired frame set outgrows ``max_model_len``.
+
+    The pre-sampler plan is conservative (its estimate covers at least as
+    many frame-list lines as it plans to acquire), but the sampler returns
+    the real frames and the prompt is rebuilt from their timestamps. This
+    guard is the last line of defence: silently sending a request beyond the
+    model context would be truncated or rejected by the provider.
+    """
+    prompt_tokens_est = estimate_prompt_tokens(system_prompt, user_prompt)
+    budget_used = (
+        prompt_tokens_est
+        + frame_plan_detail["max_output_tokens"]
+        + frame_count * frame_plan.tokens_per_image
+    )
+    max_model_len = frame_plan_detail["max_model_len"]
+    if budget_used > max_model_len:
+        raise ValueError(
+            "image-mode request exceeds max_model_len after frame acquisition: "
+            f"session={session_id} file={file_path} "
+            f"prompt_tokens_est={prompt_tokens_est} "
+            f"+ max_output_tokens={frame_plan_detail['max_output_tokens']} "
+            f"+ frames={frame_count} * tokens_per_image={frame_plan.tokens_per_image} "
+            f"= {budget_used} > max_model_len={max_model_len}"
+        )
 
 
 def _write_frame_plan_detail(db: Any, task_log_id: int, *, frame_plan: dict[str, Any]) -> None:
@@ -469,9 +610,20 @@ def _run_sub_chunk_loop(
             last_prompt_text = user_prompt
             if input_mode == INPUT_MODE_IMAGE:
                 file_path = plan_item.file_paths[0]
-                policy, frame_plan, frame_plan_detail = _build_frame_plan_for_file(
-                    provider, plan_item, system_prompt, user_prompt
+                (
+                    policy,
+                    frame_plan,
+                    frame_plan_detail,
+                    system_prompt,
+                    user_prompt,
+                ) = _plan_image_prompts(
+                    provider=provider,
+                    plan_item=plan_item,
+                    source=claim.source,
+                    home_context=home_context,
+                    session=claim.session,
                 )
+                last_prompt_text = user_prompt
                 planned_total = frames_acquired + frame_plan.frames
                 if frame_budget_limit > 0 and planned_total > frame_budget_limit:
                     # Budget pre-check: acquiring this file's planned frames
@@ -535,6 +687,25 @@ def _run_sub_chunk_loop(
                 # sampler may return fewer than planned); the pre-check
                 # above used the plan to avoid an over-budget acquisition.
                 frames_acquired += len(frame_set.frames)
+                # Rebuild with the REAL timestamps of the frames being sent:
+                # the plan-time render above only exists to size the budget.
+                system_prompt, user_prompt = _build_image_prompts(
+                    claim.source,
+                    home_context,
+                    claim.session,
+                    plan_item,
+                    tuple(frame.t_seconds for frame in frame_set.frames),
+                )
+                last_prompt_text = user_prompt
+                _check_image_prompt_budget(
+                    session_id=claim.session.id,
+                    file_path=file_path,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    frame_count=len(frame_set.frames),
+                    frame_plan=frame_plan,
+                    frame_plan_detail=frame_plan_detail,
+                )
                 frame_fingerprint = frames_mode_frame_fingerprint(
                     frame_set.frames,
                     policy,
