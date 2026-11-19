@@ -490,13 +490,14 @@ DailySummary 1 --- 1 summary_date
 - `frontend`
   - Nginx 托管前端静态资源并代理后端接口
 - `sampler`（compose profile `sampler`，图像输入模式启用）
-  - 进程外抽帧服务：独立 FastAPI 容器，ffmpeg 解码 + ONNX 运行时
-  - `GET /healthz`（存活 / 模型加载状态 / 版本）与 `POST /sample`（白名单视频抽帧，
-    返回 base64 JPEG 帧与场景候选窗口）
+  - 进程外抽帧服务：独立 FastAPI 容器，只用 ffmpeg 解码并编码 JPEG；不含 ONNX / cv2 / numpy 推理
+  - `GET /healthz` 返回 `{status, version}`（恒 200）；`POST /sample` 走白名单视频抽帧，
+    响应只含 base64 JPEG 帧（`frames`）与 `elapsed_ms`
   - 只读挂载视频根目录，`SAMPLER_ALLOWED_ROOTS` 白名单限制可读路径；不接 Postgres / Redis
-  - 候选窗口当前来自 ffmpeg 场景检测；ONNX 人检测 / 跟踪已实现并有单测，但尚未接入 `/sample`
-  - 注：`docker-compose.yml` 的接线随部署任务（todo 32）落地，当前文件尚未包含该服务定义，
-    按上述拓扑以 `--profile sampler` 启用
+  - 候选窗口由 ffmpeg 场景检测产生，仅驱动内部 `event` 选帧模式，不进入 HTTP 响应；
+    ONNX 人检测 / 跟踪器已删除（无消费方）
+  - 该服务已写入 `docker-compose.yml`，用 `docker compose --profile sampler up -d` 启用；
+    宿主视频目录经 `VIDEO_HOST_PATH` 挂载到容器内 `/data/videos`，并设 `SAMPLER_ALLOWED_ROOTS=/data/videos`
 
 ### 7.2 容器启动要点
 
