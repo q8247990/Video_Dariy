@@ -31,7 +31,7 @@ whitelisted by `SAMPLER_ALLOWED_ROOTS`.
 | Method | Path | Response |
 |---|---|---|
 | GET | `/healthz` | `200 {"status": "ok", "version": "<str>"}` — always 200 |
-| POST | `/sample` | `200` with frames + candidates (see below); `400` path/validation; `422` undecodable video; `500` unexpected |
+| POST | `/sample` | `200` with frames (see below); `400` path/validation; `422` undecodable video; `500` unexpected |
 
 ### `POST /sample` — request
 
@@ -99,22 +99,18 @@ max_edge to a smaller value to opt into downscaling`.
   "frames": [
     {"t_seconds": 0.0, "jpeg_base64": "<base64 of the JPEG bytes>"}
   ],
-  "candidates": [
-    {"t_start": 5.0, "t_end": 20.0, "reasons": ["scene"]}
-  ],
-  "elapsed_ms": 123,
-  "duration_seconds": 60.0
+  "elapsed_ms": 123
 }
 ```
 
 - `frames`: the selected frames (at most `max_frames`), strictly ascending
   `t_seconds`, each `jpeg_base64` is a complete JPEG (`\xff\xd8…\xff\xd9`),
   long edge `<= max_edge`, aspect ratio preserved.
-- `candidates`: scene-detection candidate windows (ffmpeg scene scores,
-  todo 17) with `reasons` = `["scene"]` (single trigger) or `["merged"]`
-  (merged triggers). **Not person-aware.**
-- `elapsed_ms`: both ffmpeg passes. `duration_seconds`: container duration
-  (best-effort ffprobe, 0.0 when unknown, last-frame fallback).
+- `elapsed_ms`: both ffmpeg passes.
+
+Candidate windows are an internal detail of `event` mode: they are derived
+from ffmpeg scene detection (todo 17) and consumed by `select_frames`, but
+they are not part of the HTTP response.
 
 ### `POST /sample` — error codes
 

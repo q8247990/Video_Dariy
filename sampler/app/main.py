@@ -5,12 +5,13 @@ the main pipeline. It exposes:
 
 - ``GET /healthz`` — liveness and version (always 200).
 - ``POST /sample`` — decode a whitelisted video file at a fixed probe rate,
-  select a bounded set of frames, and return them as base64 JPEGs together
-  with the ffmpeg scene-detection candidate windows.
+  select a bounded set of frames, and return them as base64 JPEGs with the
+  elapsed extraction time.
 
-Candidate windows come from ffmpeg scene detection only; the ONNX person
-detector was removed until a consumer path exists, so ``/sample`` is not
-person-aware.
+Candidate windows come from ffmpeg scene detection and drive the ``event``
+selection mode internally; they are not part of the HTTP response. The ONNX
+person detector was removed until a consumer path exists, so ``/sample`` is
+not person-aware.
 """
 
 from __future__ import annotations
@@ -73,25 +74,13 @@ class FrameOut(BaseModel):
     jpeg_base64: str
 
 
-class CandidateOut(BaseModel):
-    """One candidate event window in the ``/sample`` response."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    t_start: float
-    t_end: float
-    reasons: list[str]
-
-
 class SampleResponse(BaseModel):
     """Response body for ``POST /sample``."""
 
     model_config = ConfigDict(extra="ignore")
 
     frames: list[FrameOut]
-    candidates: list[CandidateOut]
     elapsed_ms: int
-    duration_seconds: float
 
 
 # ---------------------------------------------------------------------------
@@ -176,12 +165,7 @@ def sample(request: SampleRequest) -> SampleResponse:
     )
     return SampleResponse(
         frames=frames,
-        candidates=[
-            CandidateOut(t_start=window.t_start, t_end=window.t_end, reasons=list(window.reasons))
-            for window in result.candidates
-        ],
         elapsed_ms=result.elapsed_ms,
-        duration_seconds=result.duration_seconds,
     )
 
 

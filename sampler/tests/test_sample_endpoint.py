@@ -3,8 +3,8 @@
 Covers the fixed HTTP contract the backend client (todo 20) codes against:
 path safety (400), schema validation (400), FrameSelectionError (400 with the
 minimum in the message), undecodable video (422 with an ffmpeg hint), the
-200 happy path (frame count bounds, base64 JPEGs, ascending timestamps,
-duration), event-mode candidate overlap, budget enforcement and the
+200 happy path (frame count bounds, base64 JPEGs, ascending timestamps),
+event-mode scene-window selection, budget enforcement and the
 max_edge / jpeg_quality re-encoding guarantee.
 
 Fixture videos are generated with ffmpeg lavfi inside an allowed tmp root.
@@ -312,7 +312,9 @@ def test_sample_200_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         response = _post(client, _payload(video))
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"frames", "candidates", "elapsed_ms", "duration_seconds"}
+    assert set(body.keys()) == {"frames", "elapsed_ms"}
+    assert "candidates" not in body
+    assert "duration_seconds" not in body
 
     frames = body["frames"]
     assert isinstance(frames, list)
@@ -326,21 +328,15 @@ def test_sample_200_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert times == sorted(times)
     assert len(set(times)) == len(times), "t_seconds must be strictly ascending"
 
-    assert isinstance(body["candidates"], list)
-    for window in body["candidates"]:
-        assert set(window.keys()) == {"t_start", "t_end", "reasons"}
-        assert isinstance(window["reasons"], list)
-
     assert body["elapsed_ms"] >= 0
-    assert body["duration_seconds"] == pytest.approx(20.0, abs=0.5)
 
 
 # ---------------------------------------------------------------------------
-# event mode: candidates from the scene cut, frames overlap the window
+# event mode: frames come from the scene-cut candidate window
 # ---------------------------------------------------------------------------
 
 
-def test_sample_event_mode_returns_candidates_overlapping_window(
+def test_sample_event_mode_selects_frames_near_scene_cut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "allowed"
@@ -349,22 +345,16 @@ def test_sample_event_mode_returns_candidates_overlapping_window(
     monkeypatch.setenv("SAMPLER_ALLOWED_ROOTS", str(root))
 
     with TestClient(main.app) as client:
-        response = _post(client, _payload(video, mode="event"))
+        response = _post(client, _payload(video, mode="event", max_frames=10))
     assert response.status_code == 200
     body = response.json()
-
-    candidates = body["candidates"]
-    assert len(candidates) >= 1
-    # The hard cut at t=10s must produce a window around it.
-    cut_window = next((w for w in candidates if w["t_start"] <= 10.0 <= w["t_end"]), None)
-    assert cut_window is not None
+    assert set(body.keys()) == {"frames", "elapsed_ms"}
 
     frames = body["frames"]
-    assert len(frames) >= 1
-    overlapping = [
-        f for f in frames if cut_window["t_start"] <= f["t_seconds"] <= cut_window["t_end"]
-    ]
-    assert overlapping, "event mode must select frames inside the candidate window"
+    assert len(frames) == 10
+    assert any(5.0 <= frame["t_seconds"] <= 20.0 for frame in frames)
+    assert "candidates" not in body
+    assert "duration_seconds" not in body
 
 
 # ---------------------------------------------------------------------------
