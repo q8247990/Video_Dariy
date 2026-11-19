@@ -329,8 +329,10 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 
 - **模式判定**：`resolve_input_mode` 读 `LLMProvider.extra_config_json.frame_sampling`；存在该键且 `enabled`
   缺省或为 `true` 走图像模式，缺失或畸形配置一律回落视频模式（不抛错）
-- **图像数据流**：每模型抽帧策略（`extra_config_json.frame_sampling`，预设 `baseline` / `dedupe` /
-  `event` 只是默认值包）→ 帧预算推导（`compute_frame_plan`：上下文 × `target_context_ratio` 扣除
+- **图像数据流**：每模型抽帧策略（`extra_config_json.frame_sampling`，`mode` 取
+  `uniform` / `dedupe` / `event`，各自的数值只是默认值包；旧 `preset` 值仍被接受并映射到对应
+  `mode`，见 `src/services/frame_sampling/policy.py`）→ 帧预算推导（`compute_frame_plan`：
+  上下文 × `target_context_ratio` 扣除
   prompt 与输出预算后除以单图 token，四道闸门夹紧，时间戳全段等间隔）→ 进程外采样器
   `POST /sample`（ffmpeg 按 `probe_fps` 解码、在预算内选帧、在 `max_edge` 盒内不缩放——默认
   `2560×1440` 盒、超盒源默认拒绝，唯一 opt-in 降采样是显式调低 `max_edge`；JPEG 编码）→
@@ -684,7 +686,7 @@ Session 分析状态（`analysis_status`）主要包括：
 python3 -m pytest tests/unit -q         # 单元测试（数据库用例统一依赖真实 PostgreSQL）
 python3 -m pytest -m postgres           # 集成测试，同样需真实 PostgreSQL（DATABASE_URL）
 python3 -m alembic upgrade head
-python3 -m alembic heads                # 期望 20260928_0027
+python3 -m alembic heads                # 期望 20261028_0028
 ruff check .
 ruff format --check src tests
 ```

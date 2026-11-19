@@ -100,7 +100,7 @@ vllm serve OpenBMB/MiniCPM-V-4_5-int4 \
 ### Docker Compose 全栈部署（推荐）
 
 `docker-compose.yml` 包含以下服务（5 容器拓扑，其中 `sampler` 属 compose profile `sampler`，
-随部署任务 todo 32 接入 compose；当前文件尚未包含该服务定义）：
+需用 `docker compose --profile sampler up -d` 显式启用）：
 
 | 服务 | 说明 |
 |------|------|
@@ -445,7 +445,7 @@ python3 -m pytest -m postgres
 
 # 迁移检查
 python3 -m alembic upgrade head
-python3 -m alembic heads   # 期望 20260928_0027
+python3 -m alembic heads   # 期望 20261028_0028
 
 # 代码检查
 ruff check .
