@@ -332,8 +332,10 @@ Nginx 会将 `/api/`、`/mcp`、`/health` 转发到后端。
 - **图像数据流**：每模型抽帧策略（`extra_config_json.frame_sampling`，预设 `baseline` / `dedupe` /
   `event` 只是默认值包）→ 帧预算推导（`compute_frame_plan`：上下文 × `target_context_ratio` 扣除
   prompt 与输出预算后除以单图 token，四道闸门夹紧，时间戳全段等间隔）→ 进程外采样器
-  `POST /sample`（ffmpeg 按 `probe_fps` 解码、在预算内选帧、长边缩放到 `max_edge`、JPEG 编码）→
-  图文交错 payload（`text("帧 i/N — t=X.Xs")` 与 `data:image/jpeg;base64` 交替，共 `2N+1` 个 part）→
+  `POST /sample`（ffmpeg 按 `probe_fps` 解码、在预算内选帧、在 `max_edge` 盒内不缩放——默认
+  `2560×1440` 盒、超盒源默认拒绝，唯一 opt-in 降采样是显式调低 `max_edge`；JPEG 编码）→
+  图文交错 payload（`text("帧 i/N — t=X.Xs")` 与 `data:image/jpeg;base64` 交替，共 `2N+1` 个 part，
+  单图 token 按 1440p 16:9 盒上限计费：`max_edge` 默认 2560 → 3600 tok/帧，见 ADR 0014）→
   输出解析为与视频模式同构的 `EventRecord`（offset 对齐到帧时刻，绝对时间公式不变）
 - **文件粒度不变**：一文件 = 一 sub-chunk = 一次 LLM 调用；不合并、不裁剪、不切片
 - **无降级链**：图像模式对采样器是硬依赖，没有本地 ffmpeg 兜底、均匀兜底或 `degraded` 标记；
