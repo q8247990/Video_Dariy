@@ -57,6 +57,7 @@ from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.analysis import (
+    PROVISIONAL_FRAMES_FINGERPRINT,
     LateWorkerFencingError,
     build_sub_chunk_extra_body,
     build_sub_chunk_video_url,
@@ -949,3 +950,151 @@ def test_image_mode_sampler_failure_pins_zero_events_on_postgres(
         assert "frame_source" not in frame_plan
         assert frame_plan["tokens_assumption"] == "1440p_box_16x9"
         assert frame_plan["frames"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# Image-mode pre-sampler claim (plan row 42 / F3 §5.3 regression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.postgres
+def test_image_mode_pre_sampler_claim_reaches_success_with_autoflush_off_on_postgres(
+    postgres_migrated_engine: Engine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Image mode end-to-end under production session semantics.
+
+    Production ``SessionLocal`` is configured ``autoflush=False``; the
+    existing analyzer fixtures use autoflush-enabled sessions, which hid the
+    bug: the pre-sampler claim stored ``frames:pending``, the post-sample
+    fingerprint reset only mutated the ORM object, and the fencing UPDATE in
+    ``mark_checkpoint_processing`` matched 0 rows -> the worker exited as a
+    "late worker", leaving the TaskLog RUNNING forever with no LLM call.
+
+    Pin the full image-mode stage chain instead: pre-sampler claim -> fake
+    sampler frames -> checkpoint ``success`` -> event persisted -> TaskLog
+    terminal SUCCESS.
+    """
+
+    @contextmanager
+    def _autoflush_off_task_session() -> Iterator[Session]:
+        db = Session(bind=postgres_migrated_engine, autoflush=False)
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(
+        "src.tasks._analyzer_orchestration.task_db_session", _autoflush_off_task_session
+    )
+
+    video_file_path = tmp_path / "cam1.mp4"
+    video_file_path.write_bytes(b"\x00\x01\x02\x03")
+
+    with Session(postgres_migrated_engine) as db:
+        _seed_image_mode_provider(db)
+        source = _new_source(db)
+        video_session = _new_session(db, source)
+        session_id = video_session.id
+        _seed_video_file(db, source, video_session, str(video_file_path), 60)
+
+    ports = _install_image_mode_ports()
+    _set_responses(_recognition_result_json(0))
+
+    result = analyze_session_task.run(session_id=session_id)
+
+    assert result["events_created"] == 1
+    assert "late_worker" not in result
+    assert len(ports.frame_set_calls) == 1
+    assert len(_latest_gateway().calls) == 1
+
+    with Session(postgres_migrated_engine) as verify:
+        checkpoint = (
+            verify.query(SessionAnalysisCheckpoint)
+            .filter(SessionAnalysisCheckpoint.session_id == session_id)
+            .one()
+        )
+        assert checkpoint.state == "success"
+        assert checkpoint.input_fingerprint != PROVISIONAL_FRAMES_FINGERPRINT
+        assert len(checkpoint.input_fingerprint) == 64
+        assert checkpoint.event_payload is not None
+        assert verify.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 1
+        video_session = verify.query(VideoSession).filter(VideoSession.id == session_id).one()
+        assert video_session.analysis_status == "success"
+        task_log = (
+            verify.query(TaskLog)
+            .filter(TaskLog.task_target_id == session_id)
+            .order_by(TaskLog.id.desc())
+            .one()
+        )
+        assert task_log.status == TaskStatus.SUCCESS
+        assert task_log.finished_at is not None
+        assert task_log.detail_json["frame_plan"]["sampler_ms"] == 12
+
+
+@pytest.mark.postgres
+def test_late_fencing_with_live_claim_finalizes_task_log_on_postgres(
+    postgres_migrated_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    """A checkpoint-level fencing failure while our TaskLog lease is still
+    current must finalize the run, never leave the TaskLog RUNNING.
+
+    The scripted gateway's ``on_call`` hook finalizes the checkpoint from a
+    separate session after the worker's pre-stage commit (simulating a
+    competing writer that wins the row). The subsequent success write in
+    ``write_sub_chunk_checkpoint`` matches 0 rows and raises
+    :class:`LateWorkerFencingError`; because ``enforce_fencing`` still passes,
+    the orchestrator must route it through the standard failure handler
+    (TaskLog FAILED + ``detail_json["error_type"]``) instead of the old
+    "late worker" silent return.
+    """
+    video_file_path = tmp_path / "cam1.mp4"
+    video_file_path.write_bytes(b"\x00\x01\x02\x03")
+
+    with Session(postgres_migrated_engine) as db:
+        _seed_image_mode_provider(db)
+        source = _new_source(db)
+        video_session = _new_session(db, source)
+        session_id = video_session.id
+        _seed_video_file(db, source, video_session, str(video_file_path), 60)
+
+    _install_image_mode_ports()
+
+    def _finish_checkpoint_elsewhere(call_index: int, _snapshot: dict[str, Any]) -> None:
+        if call_index != 0:
+            return
+        with Session(postgres_migrated_engine) as rival_db:
+            checkpoint = (
+                rival_db.query(SessionAnalysisCheckpoint)
+                .filter(SessionAnalysisCheckpoint.session_id == session_id)
+                .one()
+            )
+            checkpoint.state = "success"
+            checkpoint.completed_at = datetime.now(timezone.utc)
+            rival_db.commit()
+
+    factory = _container.get_container().llm_factory
+    assert isinstance(factory, ScriptedVisionGatewayFactory)
+    factory.install_gateway(
+        ScriptedVisionGateway(
+            responses=[_recognition_result_json(0)],
+            on_call=_finish_checkpoint_elsewhere,
+        )
+    )
+
+    with pytest.raises(LateWorkerFencingError):
+        analyze_session_task.run(session_id=session_id)
+
+    with Session(postgres_migrated_engine) as verify:
+        assert verify.query(EventRecord).filter(EventRecord.session_id == session_id).count() == 0
+        task_log = (
+            verify.query(TaskLog)
+            .filter(TaskLog.task_target_id == session_id)
+            .order_by(TaskLog.id.desc())
+            .one()
+        )
+        assert task_log.status == TaskStatus.FAILED
+        assert task_log.finished_at is not None
+        assert task_log.detail_json["error_type"] == "LateWorkerFencingError"

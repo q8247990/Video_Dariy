@@ -54,14 +54,18 @@ from src.models.video_session import VideoSession
 from src.models.video_session_file_rel import VideoSessionFileRel
 from src.models.video_source import VideoSource
 from src.services.analysis import (
+    PROVISIONAL_FRAMES_FINGERPRINT,
     RAW_MP4_NUM_FRAMES,
     ClaimGuards,
     LateWorkerFencingError,
     build_analysis_plan,
     build_sub_chunk_extra_body,
     build_sub_chunk_video_url,
+    claim_checkpoint_before_sampling,
+    frames_mode_frame_fingerprint,
     get_or_create_checkpoint,
     mark_checkpoint_error,
+    mark_checkpoint_processing,
     record_recovery_failure,
     sub_chunk_fingerprint,
     video_mode_frame_fingerprint,
@@ -70,6 +74,8 @@ from src.services.analysis import (
 )
 from src.services.analysis.plan import SubChunkPlan
 from src.services.dispatch import finalize_task_log
+from src.services.frame_sampling.policy import FramePolicy
+from src.services.frame_sampling.types import FrameSample
 from src.services.video_analysis.output_parser import parse_video_recognition_output
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
@@ -467,6 +473,141 @@ def test_checkpoint_write_rejects_stale_worker_fencing_mismatch(
     )
     assert refreshed.state == "pending"
     assert refreshed.event_payload is None
+
+
+# ---------------------------------------------------------------------------
+# checkpoint_writer — image-mode pre-sampler claim (frames:pending placeholder)
+# ---------------------------------------------------------------------------
+
+
+def _image_mode_real_frame_fingerprint() -> str:
+    """Real image-mode frame fingerprint used by the placeholder tests."""
+    frames = [FrameSample(t_seconds=0.0, jpeg_bytes=b"\xff\xd8frame\xff\xd9")]
+    return frames_mode_frame_fingerprint(frames, FramePolicy(), content_signature="test-signature")
+
+
+def test_provisional_frames_checkpoint_transitions_to_real_fingerprint(
+    pg_db: Session,
+) -> None:
+    """Image mode: the same worker that created the pre-sampler
+    ``frames:pending`` checkpoint can move it to the real fingerprint and
+    drive it to ``processing``.
+
+    Production uses ``SessionLocal(autoflush=False)``. A pure ORM mutation
+    of ``input_fingerprint`` leaves the DB row at ``frames:pending``, so the
+    fencing UPDATE in :func:`mark_checkpoint_processing` (filtered on the
+    real fingerprint) matches 0 rows and raises
+    :class:`LateWorkerFencingError` — the F3 "late worker" zombie. The
+    reset must be durable before that UPDATE runs.
+    """
+    pg_db.autoflush = False
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=1, file_duration_seconds=60)
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-image")
+    guards = _build_guards(task_log)
+    sub_chunk = build_analysis_plan(pg_db, session_id).sub_chunks[0]
+
+    provisional = claim_checkpoint_before_sampling(
+        pg_db,
+        session_id=session_id,
+        claim=guards,
+        sub_chunk=sub_chunk,
+    )
+    assert provisional is not None
+    pg_db.commit()
+    assert provisional.input_fingerprint == PROVISIONAL_FRAMES_FINGERPRINT
+    assert provisional.state == "processing"
+
+    real_frame_fingerprint = _image_mode_real_frame_fingerprint()
+    checkpoint = get_or_create_checkpoint(
+        pg_db,
+        session_id=session_id,
+        claim=guards,
+        sub_chunk=sub_chunk,
+        system_prompt="sys",
+        user_prompt="user",
+        frame_fingerprint=real_frame_fingerprint,
+    )
+
+    # Must not raise: the provisional -> real transition is durably persisted
+    # before the fencing UPDATE.
+    mark_checkpoint_processing(
+        pg_db,
+        claim=guards,
+        checkpoint=checkpoint,
+        lease_owner=guards.lease_owner or "",
+    )
+    pg_db.commit()
+
+    expected_fingerprint = sub_chunk_fingerprint(
+        system_prompt="sys",
+        user_prompt="user",
+        frame_fingerprint=real_frame_fingerprint,
+        sub_chunk=sub_chunk,
+    )
+    pg_db.expire_all()
+    stored = pg_db.query(SessionAnalysisCheckpoint).filter_by(id=checkpoint.id).one()
+    assert stored.state == "processing"
+    assert stored.input_fingerprint == expected_fingerprint
+    assert stored.input_fingerprint != PROVISIONAL_FRAMES_FINGERPRINT
+    assert stored.attempt_count >= 1
+
+
+def test_provisional_frames_checkpoint_rejected_after_lease_takeover(
+    pg_db: Session,
+) -> None:
+    """The durable provisional -> real transition must not bypass the
+    TaskLog fence: a genuinely late worker (lease owner + generation
+    changed by a recovery take-over) is still rejected by
+    :func:`mark_checkpoint_processing` and leaves the row untouched.
+    """
+    pg_db.autoflush = False
+    _, session_id = _seed_source_with_video_files(pg_db, file_count=1, file_duration_seconds=60)
+    task_log = _bind_running_task_log(pg_db, session_id=session_id, queue_task_id="q-image-old")
+    stale_guards = _build_guards(task_log)
+    sub_chunk = build_analysis_plan(pg_db, session_id).sub_chunks[0]
+
+    provisional = claim_checkpoint_before_sampling(
+        pg_db,
+        session_id=session_id,
+        claim=stale_guards,
+        sub_chunk=sub_chunk,
+    )
+    assert provisional is not None
+    pg_db.commit()
+
+    # Recovery take-over: a new worker owns the lease with a bumped generation.
+    task_log = pg_db.query(TaskLog).filter(TaskLog.id == task_log.id).one()
+    detail = task_log.detail_json if isinstance(task_log.detail_json, dict) else {}
+    detail["generation"] = stale_guards.generation + 1
+    task_log.detail_json = detail
+    task_log.lease_owner = "q-image-recovery"
+    pg_db.commit()
+
+    sp = pg_db.connection().begin_nested()
+    try:
+        checkpoint = get_or_create_checkpoint(
+            pg_db,
+            session_id=session_id,
+            claim=stale_guards,
+            sub_chunk=sub_chunk,
+            system_prompt="sys",
+            user_prompt="user",
+            frame_fingerprint=_image_mode_real_frame_fingerprint(),
+        )
+        with pytest.raises(LateWorkerFencingError):
+            mark_checkpoint_processing(
+                pg_db,
+                claim=stale_guards,
+                checkpoint=checkpoint,
+                lease_owner=stale_guards.lease_owner or "",
+            )
+    finally:
+        sp.rollback()
+
+    pg_db.expire_all()
+    stored = pg_db.query(SessionAnalysisCheckpoint).filter_by(id=provisional.id).one()
+    assert stored.input_fingerprint == PROVISIONAL_FRAMES_FINGERPRINT
+    assert stored.state == "processing"
 
 
 # ---------------------------------------------------------------------------

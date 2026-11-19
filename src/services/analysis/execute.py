@@ -505,6 +505,18 @@ def get_or_create_checkpoint(
             checkpoint.completion_tokens = 0
             checkpoint.total_tokens = 0
             checkpoint.completed_at = None
+            # ``SessionLocal`` runs with ``autoflush=False``, so the reset
+            # above is invisible to the fencing UPDATEs in
+            # :func:`mark_checkpoint_processing` / :func:`write_sub_chunk_checkpoint`
+            # (they filter on ``input_fingerprint``) until the transaction
+            # flushes. Image mode hits this on every file: the pre-sampler
+            # claim stored :data:`PROVISIONAL_FRAMES_FINGERPRINT` and this
+            # reset rewrites it to the real frame fingerprint. Flushing keeps
+            # the row on the same id / analysis_run_id / resumable-state
+            # predicates the fencing already enforces; a stale worker still
+            # fails :func:`enforce_fencing` and the whole transaction rolls
+            # back.
+            db.flush()
         return checkpoint
 
     checkpoint = SessionAnalysisCheckpoint(

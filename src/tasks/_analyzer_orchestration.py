@@ -374,6 +374,22 @@ def run_session_analysis(
         return success_return
 
 
+def _claim_owns_task_log(guards: ClaimGuards) -> bool:
+    """Return True when ``guards`` still match the live TaskLog row.
+
+    Reads the row through a fresh session: the long-lived orchestration
+    session may hold a stale in-memory TaskLog while the heartbeat bumps the
+    generation from another connection. ``False`` means a recovery worker
+    owns the task and every row must be left to that owner.
+    """
+    try:
+        with task_db_session() as check_db:
+            enforce_fencing(check_db, claim=guards)
+    except LateWorkerFencingError:
+        return False
+    return True
+
+
 def _run_sub_chunk_loop(
     *,
     db: Any,
@@ -588,12 +604,20 @@ def _run_sub_chunk_loop(
         handle_deadlock_retry_exhausted(db, exc=exc, claim=claim, session_id=claim.session.id)
         raise self.retry(exc=exc.original, countdown=2 ** (self.request.retries + 1)) from exc
     except LateWorkerFencingError as exc:
-        logger.info(
-            "Late worker detected for session %s: %s; exiting cleanly",
-            claim.session.id,
-            exc,
+        return _handle_late_worker_fencing(
+            db=db,
+            self=self,
+            claim=claim,
+            guards=guards,
+            provider=provider,
+            priority=priority,
+            last_prompt_text=last_prompt_text,
+            last_response_text=last_response_text,
+            last_raw_response_text=last_raw_response_text,
+            exc=exc,
+            sub_chunk_count=sub_chunk_count,
+            parse_modes=parse_modes,
         )
-        return sub_chunk_count, parse_modes, True
     except Exception as exc:
         return _handle_loop_exception(
             db=db,
@@ -718,6 +742,58 @@ def _finalize_session_frame_budget_exhausted(
         "frame_budget_exhausted": budget_detail,
         "session_id": claim.session.id,
     }
+
+
+def _handle_late_worker_fencing(
+    *,
+    db: Any,
+    self: Any,
+    claim: Any,
+    guards: ClaimGuards,
+    provider: Any,
+    priority: str,
+    last_prompt_text: str | None,
+    last_response_text: str | None,
+    last_raw_response_text: str | None,
+    exc: LateWorkerFencingError,
+    sub_chunk_count: int,
+    parse_modes: list[str],
+) -> tuple[int, list[str], bool]:
+    """Classify a checkpoint fencing failure by TaskLog ownership.
+
+    When the guards no longer match the TaskLog a recovery worker owns the
+    task, so this worker exits without touching any row. When the guards
+    still match, the failure came from a checkpoint-level race while we own
+    the lease: route it through the standard failure handler so the TaskLog
+    reaches a terminal state instead of staying RUNNING (the F3 zombie).
+    """
+    if not _claim_owns_task_log(guards):
+        logger.info(
+            "Late worker detected for session %s: %s; exiting cleanly",
+            claim.session.id,
+            exc,
+        )
+        return sub_chunk_count, parse_modes, True
+    logger.warning(
+        "Checkpoint fencing failed for session %s while the task lease is still ours: %s; "
+        "finalizing the run as failed",
+        claim.session.id,
+        exc,
+    )
+    return _handle_loop_exception(
+        db=db,
+        self=self,
+        claim=claim,
+        guards=guards,
+        provider=provider,
+        priority=priority,
+        last_prompt_text=last_prompt_text,
+        last_response_text=last_response_text,
+        last_raw_response_text=last_raw_response_text,
+        exc=exc,
+        sub_chunk_count=sub_chunk_count,
+        parse_modes=parse_modes,
+    )
 
 
 def _handle_loop_exception(
