@@ -424,6 +424,9 @@ def test_image_mode_records_frame_plan_and_sends_interleaved_frames(
         assert isinstance(frame_plan["prompt_tokens_est"], int)
         assert frame_plan["prompt_tokens_est"] >= 800
         assert frame_plan["max_output_tokens"] == MAX_OUTPUT_TOKENS
+        # Single-resolver invariant: the request's max_tokens is the same
+        # number the frame-budget formula subtracted (2048 here, not 8192).
+        assert gateway.calls[0]["max_tokens"] == frame_plan["max_output_tokens"]
         # The recorded frame count is the plan's and equals the frame set
         # the sampler actually returned.
         assert frame_plan["frames"] == plan.frames == 12

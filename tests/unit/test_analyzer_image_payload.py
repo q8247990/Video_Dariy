@@ -219,3 +219,55 @@ def test_empty_frames_behaves_like_video_mode() -> None:
     assert result.payload_mode == "video"
     assert call["extra_body"]["media_io_kwargs"]["video"]["num_frames"] == 120
     assert result.extra_body == {"media_io_kwargs": {"video": {"num_frames": 120}}}
+
+
+# ---------------------------------------------------------------------------
+# Output-token budget — image mode must send the SAME cap the frame-budget
+# formula subtracts (resolve_image_output_tokens); video mode keeps the 8192
+# scene default. The scripted gateway records the exact ``max_tokens``.
+# ---------------------------------------------------------------------------
+
+
+def test_image_mode_sends_configured_frame_sampling_output_tokens() -> None:
+    """``frame_sampling.max_output_tokens=1024`` is exactly what is sent.
+
+    The frame-budget formula charges 1024 for this provider, so the request
+    must ask for 1024 as well (input + output <= max_model_len).
+    """
+    provider = _provider(extra_config_json={"frame_sampling": {"max_output_tokens": 1024}})
+
+    client, _ = _run_execute(frames=_three_frames(), provider=provider)
+
+    assert client.calls[0]["max_tokens"] == 1024
+
+
+def test_image_mode_sends_default_4096_output_tokens() -> None:
+    """Image mode with nothing configured sends ``resolve_image_output_tokens``'s 4096."""
+    client, _ = _run_execute(frames=_three_frames())
+
+    assert client.calls[0]["max_tokens"] == 4096
+
+
+def test_video_mode_keeps_scene_default_8192_output_tokens() -> None:
+    """Video mode keeps the analyzer scene default of 8192 (unchanged)."""
+    client, _ = _run_execute(frames=None)
+
+    assert client.calls[0]["max_tokens"] == 8192
+
+
+def test_image_mode_output_tokens_clamp_to_max_model_len() -> None:
+    """The configured image cap is clamped by ``max_model_len``, as resolved.
+
+    A configured 8192 on a 2048-token window resolves to 2048, so that is
+    the value the request must carry.
+    """
+    provider = _provider(
+        extra_config_json={
+            "frame_sampling": {"max_output_tokens": 8192},
+            "max_model_len": 2048,
+        }
+    )
+
+    client, _ = _run_execute(frames=_three_frames(), provider=provider)
+
+    assert client.calls[0]["max_tokens"] == 2048

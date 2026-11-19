@@ -29,7 +29,11 @@ from src.services.frame_sampling.types import FrameSample, FrameSet
 from src.services.llm_output_utils import truncate_text
 from src.services.llm_qos import record_token_usage
 from src.services.pipeline_state import transition_task_log
-from src.services.provider_generation_limits import resolve_max_output_tokens, resolve_num_frames
+from src.services.provider_generation_limits import (
+    resolve_image_output_tokens,
+    resolve_max_output_tokens,
+    resolve_num_frames,
+)
 from src.services.provider_selector import (
     PROVIDER_TYPE_VISION,
     find_required_enabled_provider,
@@ -287,8 +291,18 @@ def execute_sub_chunk(
     :attr:`SubChunkRunResult.frame_fingerprint`. Supplying ``frames``
     without ``frame_fingerprint`` raises :class:`ValueError`.
     """
-    max_output_tokens = resolve_max_output_tokens(provider, scene_default=8192)
     has_frames = frames is not None and len(frames) > 0
+    # INVARIANT: the output cap sent here must equal the cap the frame-budget
+    # formula subtracted in compute_frame_plan, otherwise `input + output`
+    # can exceed `max_model_len` (the plan validated against 4096 while the
+    # request asks for 8192). Both sides therefore call the ONE resolver
+    # resolve_image_output_tokens (frame_sampling.max_output_tokens ->
+    # top-level max_output_tokens -> 4096, clamped by max_model_len); video
+    # mode keeps this scene's 8192 default unchanged.
+    if has_frames:
+        max_output_tokens = resolve_image_output_tokens(provider)
+    else:
+        max_output_tokens = resolve_max_output_tokens(provider, scene_default=8192)
     if video_data_url is None and not has_frames:
         # Only the raw_mp4 path builds the video data URL. Image mode
         # must never read / base64 the whole video — the frames are the
