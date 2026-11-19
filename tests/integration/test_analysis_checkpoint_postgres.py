@@ -31,12 +31,23 @@ from src.application.bootstrap_fakes import (
     ScriptedVisionGateway,
     ScriptedVisionGatewayFactory,
 )
+from src.core.pipeline_constants import TaskStatus
 from src.models.event_record import EventRecord
 from src.models.llm_provider import LLMProvider
 from src.models.llm_usage_log import LLMUsageLog
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
+from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
+from src.services.analysis import (
+    ClaimGuards,
+    get_or_create_checkpoint,
+    mark_checkpoint_processing,
+    video_mode_frame_fingerprint,
+    write_sub_chunk_checkpoint,
+    write_token_usage,
+)
+from src.services.analysis.plan import SubChunkPlan
 from src.services.video_analysis.schemas import (
     RecognitionResultDTO,
     RecognizedEventDTO,
@@ -364,6 +375,143 @@ def test_purge_stale_checkpoints_keeps_current_run_and_usage_rows(
         preserved = db.query(LLMUsageLog).filter(LLMUsageLog.id == usage.id).one()
         assert preserved.total_tokens == 10
         assert preserved.analysis_checkpoint_id is None
+    finally:
+        db.rollback()
+        db.close()
+
+
+@pytest.mark.postgres
+def test_changed_fingerprint_rerun_replaces_checkpoint_usage_on_postgres(
+    postgres_migrated_engine,
+) -> None:
+    """A reset (fingerprint changed) + re-run must not duplicate usage.
+
+    ``get_or_create_checkpoint`` resets an already-success checkpoint to
+    ``pending`` when its input fingerprint changes while the
+    ``(session_id, analysis_run_id, chunk_index, sub_chunk_index)`` work key
+    stays the same (``analysis_run_id`` is derived from the session file
+    paths, so a re-trigger reuses the row). The second success write calls
+    ``record_token_usage`` again for the same ``analysis_checkpoint_id``;
+    ``uq_llm_usage_log_checkpoint`` used to reject it with an
+    ``IntegrityError``. The ledger row must be replaced in place.
+    """
+    db = Session(bind=postgres_migrated_engine)
+    try:
+        provider = _seed_provider(db)
+        source = VideoSource(
+            source_name="PG rerun camera",
+            camera_name="PG rerun camera",
+            location_name="home",
+            source_type="local_directory",
+            config_json={"root_path": "/tmp"},
+            enabled=True,
+        )
+        db.add(source)
+        db.flush()
+        session = VideoSession(
+            source_id=source.id,
+            session_start_time=datetime.now(timezone.utc),
+            session_end_time=datetime.now(timezone.utc),
+            total_duration_seconds=60,
+            analysis_status="sealed",
+        )
+        db.add(session)
+        db.flush()
+        task_log = TaskLog(
+            task_type="session_analysis",
+            task_target_id=session.id,
+            queue_task_id="q-rerun",
+            dedupe_key=f"session_analysis|{session.id}",
+            status=TaskStatus.RUNNING,
+            lease_owner="q-rerun",
+            detail_json={"priority": "hot", "generation": 0, "analysis_run_id": "rerun-run"},
+        )
+        db.add(task_log)
+        db.commit()
+
+        guards = ClaimGuards(
+            task_log_id=task_log.id,
+            analysis_run_id="rerun-run",
+            generation=0,
+            lease_owner="q-rerun",
+        )
+        sub_chunk = SubChunkPlan(
+            chunk_index=0,
+            sub_chunk_index=0,
+            start_offset_seconds=0,
+            duration_seconds=60,
+            file_paths=("/tmp/fake/clip-0000.mp4",),
+        )
+
+        first = get_or_create_checkpoint(
+            db,
+            session_id=session.id,
+            claim=guards,
+            sub_chunk=sub_chunk,
+            system_prompt="sys",
+            user_prompt="user",
+            frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,AAA"),
+        )
+        mark_checkpoint_processing(db, claim=guards, checkpoint=first, lease_owner="q-rerun")
+        write_sub_chunk_checkpoint(
+            db,
+            claim=guards,
+            checkpoint=first,
+            recognition_result=_recognition_result(0),
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+        )
+        write_token_usage(
+            db,
+            provider=provider,
+            checkpoint=first,
+            session_id=session.id,
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+        db.commit()
+        checkpoint_id = first.id
+
+        second = get_or_create_checkpoint(
+            db,
+            session_id=session.id,
+            claim=guards,
+            sub_chunk=sub_chunk,
+            system_prompt="sys",
+            user_prompt="user",
+            frame_fingerprint=video_mode_frame_fingerprint("data:video/mp4;base64,BBB"),
+        )
+        assert second.id == checkpoint_id
+        assert second.state == "pending"
+        assert second.total_tokens == 0
+
+        mark_checkpoint_processing(db, claim=guards, checkpoint=second, lease_owner="q-rerun")
+        write_sub_chunk_checkpoint(
+            db,
+            claim=guards,
+            checkpoint=second,
+            recognition_result=_recognition_result(1),
+            prompt_tokens=20,
+            completion_tokens=10,
+            total_tokens=30,
+        )
+        write_token_usage(
+            db,
+            provider=provider,
+            checkpoint=second,
+            session_id=session.id,
+            usage={"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        )
+        db.commit()
+
+        usage_rows = (
+            db.query(LLMUsageLog).filter(LLMUsageLog.analysis_checkpoint_id == checkpoint_id).all()
+        )
+        assert len(usage_rows) == 1
+        assert usage_rows[0].total_tokens == 30
+        assert usage_rows[0].prompt_tokens == 20
+        assert usage_rows[0].completion_tokens == 10
+        assert second.total_tokens == 30
     finally:
         db.rollback()
         db.close()

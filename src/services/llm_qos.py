@@ -69,6 +69,29 @@ def record_token_usage(
         return
 
     usage_date = (now or datetime.now(timezone.utc)).date()
+    if analysis_checkpoint_id is not None:
+        # ``uq_llm_usage_log_checkpoint`` allows at most one usage row per
+        # checkpoint. A re-run whose input fingerprint changed resets the
+        # checkpoint row (state / token columns) and then reports this
+        # run's numbers again, so the ledger row must be replaced, not
+        # appended. Concurrency is already fenced by the checkpoint state
+        # machine (the success write is a fenced UPDATE), hence a plain
+        # lookup + update suffices — no DB-specific ``ON CONFLICT``.
+        existing = (
+            db.query(LLMUsageLog)
+            .filter(LLMUsageLog.analysis_checkpoint_id == analysis_checkpoint_id)
+            .one_or_none()
+        )
+        if existing is not None:
+            existing.provider_id = provider_id
+            existing.provider_name_snapshot = provider_name_snapshot
+            existing.usage_date = usage_date
+            existing.scene = scene
+            existing.prompt_tokens = prompt_tokens
+            existing.completion_tokens = completion_tokens
+            existing.total_tokens = total_tokens
+            return
+
     db.add(
         LLMUsageLog(
             provider_id=provider_id,
