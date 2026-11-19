@@ -164,12 +164,17 @@ services:
       - "18080:18080"
     volumes:
       # Path parity with the backend, not convenience: the backend sends the
-      # exact VIDEO_ROOT_PATH string (/data/videos/...) as video_path to the
-      # sampler, so the video root must be mounted at the SAME in-container
-      # path as the backend's VIDEO_ROOT_PATH, or every /sample call is
-      # rejected (400). Host source matches the backend's mount
-      # (default ./xiaomi_video).
-      - ${VIDEO_ROOT_PATH:-./xiaomi_video}:/data/videos:ro
+      # exact in-container VIDEO_ROOT_PATH string (/data/videos/...) as
+      # video_path to the sampler, so the video root must be mounted at the
+      # SAME in-container path as the backend's VIDEO_ROOT_PATH, or every
+      # /sample call is rejected (400).
+      #
+      # Two different variables on purpose: VIDEO_HOST_PATH is the host
+      # directory compose bind-mounts (same convention as
+      # docker-compose.release.yml); VIDEO_ROOT_PATH is the in-container path
+      # the backend and the sampler read (/data/videos). Never point the host
+      # side at VIDEO_ROOT_PATH: /data/videos does not exist on the host.
+      - ${VIDEO_HOST_PATH:-./xiaomi_video}:/data/videos:ro
     # Matches the Dockerfile HEALTHCHECK (interval 30s / timeout 5s /
     # start-period 10s / retries 3).
     healthcheck:

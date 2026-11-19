@@ -167,13 +167,23 @@ Port `18080` is published host-side for debugging; the backend reaches the
 sampler over the compose network at `http://sampler:18080` (no published
 port required for that).
 
-**Path parity is mandatory, not convenience.** The backend sends the DB
-`video_path` (e.g. `/data/videos/clip.mp4`) to the sampler verbatim, so the
-sampler must see the videos at the **same absolute in-container path** the
-backend uses — in `docker-compose.yml` that means the same host directory
-mounted at `/data/videos:ro` with `SAMPLER_ALLOWED_ROOTS=/data/videos`. If
-the two paths differ, the allow-list rejects every `/sample` request with
-`400`.
+**Path parity is mandatory, not convenience — and it involves two different
+variables.** The backend sends the DB `video_path` (e.g.
+`/data/videos/clip.mp4`) to the sampler verbatim, so the sampler must see the
+videos at the **same absolute in-container path** the backend uses:
+`/data/videos`, whitelisted via `SAMPLER_ALLOWED_ROOTS=/data/videos`.
+
+- `VIDEO_HOST_PATH` (host side): the directory compose bind-mounts,
+  `${VIDEO_HOST_PATH:-./xiaomi_video}` in `docker-compose.yml` — the same
+  convention as `docker-compose.release.yml`. It is interpolated on the host,
+  so it must be a real host path.
+- `VIDEO_ROOT_PATH` (container side): the in-container path the backend and
+  the sampler read (`/data/videos`). It must equal the mount target and
+  `SAMPLER_ALLOWED_ROOTS`; it is **not** a host path.
+
+Do not use `VIDEO_ROOT_PATH` as the compose volume source: `/data/videos`
+does not exist on the host, so the sampler would see an empty video root and
+reject every `/sample` request with `400`.
 
 Then enable image mode in two steps — the backend reads **SystemConfig, not
 any environment variable**:
