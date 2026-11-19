@@ -167,6 +167,14 @@ Port `18080` is published host-side for debugging; the backend reaches the
 sampler over the compose network at `http://sampler:18080` (no published
 port required for that).
 
+**Path parity is mandatory, not convenience.** The backend sends the DB
+`video_path` (e.g. `/data/videos/clip.mp4`) to the sampler verbatim, so the
+sampler must see the videos at the **same absolute in-container path** the
+backend uses — in `docker-compose.yml` that means the same host directory
+mounted at `/data/videos:ro` with `SAMPLER_ALLOWED_ROOTS=/data/videos`. If
+the two paths differ, the allow-list rejects every `/sample` request with
+`400`.
+
 Then enable image mode in two steps — the backend reads **SystemConfig, not
 any environment variable**:
 

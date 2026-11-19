@@ -154,17 +154,22 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       SAMPLER_PORT: "18080"
       # In-container whitelist of roots the sampler may read (empty = nothing
-      # allowed, so /videos must be set for the service to serve requests).
-      SAMPLER_ALLOWED_ROOTS: /videos
+      # allowed). MUST equal the backend's VIDEO_ROOT_PATH: the backend sends
+      # the DB video_path (e.g. /data/videos/clip.mp4) to the sampler verbatim,
+      # so a mismatched root rejects every /sample request with 400.
+      SAMPLER_ALLOWED_ROOTS: /data/videos
     # Published host-side for debugging only; the backend reaches the sampler
     # over app_bridge, no published port required for that.
     ports:
       - "18080:18080"
     volumes:
-      # Read-only; same host directory as the backend's /data/videos mount.
-      # NOTE: VIDEO_ROOT_PATH here is a HOST path (default ./xiaomi_video,
-      # matching the backend mount), not the in-container /data/videos.
-      - ${VIDEO_ROOT_PATH:-./xiaomi_video}:/videos:ro
+      # Path parity with the backend, not convenience: the backend sends the
+      # exact VIDEO_ROOT_PATH string (/data/videos/...) as video_path to the
+      # sampler, so the video root must be mounted at the SAME in-container
+      # path as the backend's VIDEO_ROOT_PATH, or every /sample call is
+      # rejected (400). Host source matches the backend's mount
+      # (default ./xiaomi_video).
+      - ${VIDEO_ROOT_PATH:-./xiaomi_video}:/data/videos:ro
     # Matches the Dockerfile HEALTHCHECK (interval 30s / timeout 5s /
     # start-period 10s / retries 3).
     healthcheck:
