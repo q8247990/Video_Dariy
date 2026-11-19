@@ -15,7 +15,6 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 from app.select import (
-    PHASH_DEFAULT_DISTANCE,
     FrameSelectionError,
     hamming,
     phash,
@@ -94,6 +93,19 @@ def make_dedupe_frames() -> list[ExtractedFrame]:
     return frames
 
 
+def make_identical_frames(count: int = 40) -> list[ExtractedFrame]:
+    """A long run of byte-identical frames (t = 0.0 .. 0.5 * (count - 1))."""
+    red_jpeg = _jpeg(_solid((255, 0, 0)))
+    return [ExtractedFrame(t_seconds=0.5 * i, jpeg_bytes=red_jpeg) for i in range(count)]
+
+
+def make_far_apart_frames(count: int = 20) -> list[ExtractedFrame]:
+    """Frames whose pairwise pHash distances exceed the default threshold."""
+    return [
+        ExtractedFrame(t_seconds=0.5 * i, jpeg_bytes=_jpeg(_noise(i + 1))) for i in range(count)
+    ]
+
+
 def _timestamps(frames: list[ExtractedFrame]) -> list[float]:
     return [f.t_seconds for f in frames]
 
@@ -140,35 +152,83 @@ def test_budget_greater_than_frame_count_returns_all_in_time_order() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dedupe_keeps_distinct_and_never_within_threshold() -> None:
+def test_dedupe_keeps_distinct_frames_and_fills_to_exact_budget() -> None:
     frames = make_dedupe_frames()
     selected = select_frames(frames, [], budget=10, min_frames=1, mode="dedupe")
     ts = _timestamps(selected)
 
-    # All five distinct frames are kept
+    # All five distinct frames are kept by the pHash walk
     assert {10.0, 10.5, 11.0, 11.5, 12.0} <= set(ts)
-    # The 20 identical frames collapse to the first one; even-spacing fill
-    # candidates are all identical to it and rejected, so the deterministic
-    # selection is exactly these 6 frames (fewer than budget on purpose:
-    # the dedupe constraint takes priority over the exact-count guarantee).
-    assert ts == [0.0, 10.0, 10.5, 11.0, 11.5, 12.0]
-    # No two selected frames are within the default threshold
-    hashes = [phash(f.jpeg_bytes) for f in selected]
-    for i, a in enumerate(hashes):
-        for b in hashes[i + 1 :]:
-            assert hamming(a, b) > PHASH_DEFAULT_DISTANCE
+    # The 20 identical frames cannot starve the budget: the farthest-first
+    # fill reaches exactly 10 frames while both endpoints stay selected.
+    assert len(selected) == 10
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+    assert ts[0] == 0.0
+    assert ts[-1] == 12.0
 
 
 def test_dedupe_threshold_changes_selection() -> None:
-    frames = make_dedupe_frames()
-    default_sel = _timestamps(select_frames(frames, [], budget=10, min_frames=1, mode="dedupe"))
+    frames = make_far_apart_frames(20)
+    default_sel = _timestamps(select_frames(frames, [], budget=8, min_frames=1, mode="dedupe"))
     strict_sel = _timestamps(
-        select_frames(frames, [], budget=10, min_frames=1, mode="dedupe", dedupe_phash_distance=64)
+        select_frames(frames, [], budget=8, min_frames=1, mode="dedupe", dedupe_phash_distance=64)
     )
+    # The default threshold keeps every frame and even-spaces it down to the
+    # budget; threshold 64 rejects the walk, so the hash-guided farthest-first
+    # fill chooses instead. Both still return exactly the budget.
+    assert len(default_sel) == len(strict_sel) == 8
     assert default_sel != strict_sel
-    # A threshold of 64 can never be exceeded (max distance is 64 bits),
-    # so only the first frame survives the walk and nothing can be filled.
-    assert strict_sel == [0.0]
+    assert default_sel[0] == strict_sel[0] == 0.0
+    assert default_sel[-1] == strict_sel[-1] == 9.5
+
+
+def test_dedupe_nearly_identical_frames_still_return_exact_budget() -> None:
+    """Replay §7.1 repro (sessions 640/753 returned 1 frame): near-identical
+    content must not collapse the selection below the budget."""
+    frames = make_identical_frames(40)
+    selected = select_frames(frames, [], budget=8, min_frames=3, mode="dedupe")
+    ts = _timestamps(selected)
+
+    assert len(selected) == 8
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+    # The oldest and newest frames still anchor the selection.
+    assert ts[0] == 0.0
+    assert ts[-1] == 19.5
+
+
+def test_dedupe_all_frames_far_apart_truncates_to_exact_budget() -> None:
+    """Replay §7.1 repro (sessions 648/588 returned 17 frames for budget 8):
+    the pHash walk kept everything, so the budget must truncate it."""
+    frames = make_far_apart_frames(20)
+    selected = select_frames(frames, [], budget=8, min_frames=3, mode="dedupe")
+    ts = _timestamps(selected)
+
+    assert len(selected) == 8
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+    assert ts[0] == 0.0
+    assert ts[-1] == 9.5
+
+
+def test_dedupe_max_threshold_still_returns_exact_budget_and_endpoints() -> None:
+    # Threshold 64 rejects every frame after the first; the farthest-first
+    # fill still has to reach the budget while keeping both endpoints.
+    frames = make_far_apart_frames(20)
+    selected = select_frames(
+        frames, [], budget=5, min_frames=1, mode="dedupe", dedupe_phash_distance=64
+    )
+    ts = _timestamps(selected)
+
+    assert len(selected) == 5
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+    assert ts[0] == 0.0
+    assert ts[-1] == 9.5
+
+
+def test_dedupe_budget_above_frame_count_returns_all_frames() -> None:
+    # A budget larger than the extracted stream cannot invent frames.
+    frames = make_identical_frames(5)
+    selected = select_frames(frames, [], budget=8, min_frames=1, mode="dedupe")
+    assert _timestamps(selected) == [0.0, 0.5, 1.0, 1.5, 2.0]
 
 
 # ---------------------------------------------------------------------------

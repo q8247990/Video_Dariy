@@ -4,8 +4,10 @@ Selects a bounded number of frames from an extracted frame sequence using one
 of three deterministic strategies:
 
 - ``uniform``  — index-proportional even spacing over the whole clip
-- ``dedupe``   — perceptual-hash (pHash) walk keeping only frames that are
-  sufficiently different from every kept frame, then even-spacing fill
+- ``dedupe``   — perceptual-hash (pHash) walk keeping frames that are
+  sufficiently different from every kept frame, down-sampled evenly when the
+  walk overshoots the budget and farthest-first filled when it undershoots,
+  so exactly ``budget`` frames are returned
 - ``event``    — up to 70% of the budget allocated to candidate event windows
   (proportional to window duration, at least one frame per non-empty window),
   then even-spacing fill for the remainder; identical to ``uniform`` when
@@ -176,32 +178,95 @@ def _uniform_selection(frames: list[ExtractedFrameLike], budget: int) -> list[Ex
     return [frames[i] for i in selected]
 
 
+def _downsample_positions(positions: list[int], budget: int) -> list[int]:
+    """Evenly down-sample ascending ``positions`` to exactly ``budget`` entries.
+
+    Both endpoints are preserved (``budget == 1`` keeps the first position
+    only). The result stays strictly ascending: the source list is strictly
+    ascending and the spacing exceeds one entry whenever a down-sample is
+    needed, so no two rounded targets can collide.
+    """
+    count = len(positions)
+    if budget >= count:
+        return list(positions)
+    if budget == 1:
+        return [positions[0]]
+    step = (count - 1) / (budget - 1)
+    return [positions[round(j * step)] for j in range(budget)]
+
+
+def _farthest_first_fill(
+    hashes: Sequence[int],
+    times: Sequence[float],
+    selected: list[int],
+    need: int,
+) -> None:
+    """Append ``need`` indices to ``selected`` by farthest-first order.
+
+    Each round picks the unselected frame whose minimum Hamming distance to
+    the already-selected hashes is largest; ties break toward the largest
+    minimum time gap, then the earliest index. The threshold is deliberately
+    not a filter here: when every remaining frame sits within it, the
+    farthest one is still taken so the budget is honoured. ``selected`` must
+    be non-empty. Runs in O(len(hashes) * need) with incremental minima.
+    """
+    n = len(hashes)
+    chosen = set(selected)
+    min_distance = [0] * n
+    min_gap = [0.0] * n
+    for i in range(n):
+        if i in chosen:
+            continue
+        min_distance[i] = min(hamming(hashes[i], hashes[k]) for k in chosen)
+        min_gap[i] = min(abs(times[i] - times[k]) for k in chosen)
+    for _ in range(need):
+        best = max(
+            (i for i in range(n) if i not in chosen),
+            key=lambda i: (min_distance[i], min_gap[i], -i),
+            default=None,
+        )
+        if best is None:
+            return
+        chosen.add(best)
+        selected.append(best)
+        for i in range(n):
+            if i in chosen:
+                continue
+            min_distance[i] = min(min_distance[i], hamming(hashes[i], hashes[best]))
+            min_gap[i] = min(min_gap[i], abs(times[i] - times[best]))
+
+
 def _dedupe_selection(
     frames: list[ExtractedFrameLike], budget: int, threshold: int
 ) -> list[ExtractedFrameLike]:
-    """Walk frames in time order, keeping a frame only when its pHash is
-    more than ``threshold`` bits away from every kept frame; fill the
-    remainder with even spacing that also respects the threshold.
+    """Select exactly ``budget`` frames by pHash-guided farthest-first order.
 
-    When the remaining content is all too similar to the kept frames the
-    selection may end up smaller than ``budget`` (the dedupe constraint
-    takes priority over the exact-count guarantee).
+    The greedy walk keeps every frame farther than ``threshold`` bits from
+    all previously kept frames. That set is then forced onto the budget: an
+    even down-sample preserving both endpoints when it overshoots, and a
+    farthest-first fill when it undershoots. The threshold ranks candidates
+    but is relaxed when it would starve the budget; the first and last
+    frames of the stream always survive (except ``budget == 1``, where the
+    first frame wins), so head/tail coverage is kept. With
+    ``budget >= len(frames)`` all frames are returned, since selection
+    cannot invent frames.
     """
     n = len(frames)
+    if budget >= n:
+        return list(frames)
     hashes = [phash(frame.jpeg_bytes) for frame in frames]
+    times = [frame.t_seconds for frame in frames]
     kept: list[int] = []
     for i, h in enumerate(hashes):
         if all(hamming(h, hashes[k]) > threshold for k in kept):
             kept.append(i)
-    selected = set(kept)
-    need = budget - len(kept)
-    if need > 0:
-        for idx in _fill_positions(n, need, selected):
-            if all(hamming(hashes[idx], hashes[k]) > threshold for k in selected):
-                selected.add(idx)
-            if len(selected) >= budget:
-                break
-    return [frames[i] for i in sorted(selected)]
+    if kept[-1] != n - 1:
+        kept.append(n - 1)
+    if len(kept) > budget:
+        return [frames[i] for i in _downsample_positions(kept, budget)]
+    if len(kept) < budget:
+        _farthest_first_fill(hashes, times, kept, budget - len(kept))
+    return [frames[i] for i in sorted(kept)]
 
 
 def _allocate_window_budgets(
@@ -325,21 +390,21 @@ def select_frames(
         min_frames: floor used by the budget check.
         mode: one of ``"uniform"``, ``"dedupe"``, ``"event"``; anything else
             raises ``ValueError``.
-        dedupe_phash_distance: ``dedupe`` threshold; ``None`` means
-            :data:`PHASH_DEFAULT_DISTANCE` (6).
+        dedupe_phash_distance: ``dedupe`` preference threshold; frames above
+            it are kept first. ``None`` means
+            :data:`PHASH_DEFAULT_DISTANCE` (6). It is relaxed only when it
+            would keep the selection off the budget.
         head_seconds: size of the clip head zone (see notes).
         tail_seconds: size of the clip tail zone (see notes).
 
     Output guarantees:
-        - ``budget >= len(frames)`` -> all frames, in timestamp order.
+        - ``budget >= len(frames)`` -> all frames, in timestamp order; a
+          selection cannot invent frames.
         - otherwise: exactly ``budget`` frames with strictly ascending unique
-          ``t_seconds`` — except that ``dedupe`` may return fewer when the
-          remaining content is all within the distance threshold of the
-          kept frames (the dedupe constraint wins).
+          ``t_seconds`` in every mode (``dedupe`` included).
         - the first (earliest) frame is always included. The last frame is
           always included as well, except with ``budget == 1`` over a longer
-          clip (first frame wins) or when the ``dedupe`` threshold rejects
-          it.
+          clip (first frame wins).
         - head/tail zone coverage: with ``head_seconds``/``tail_seconds``
           non-negative, the head zone (first ``head_seconds`` seconds) and
           the tail zone (last ``tail_seconds`` seconds) each contain at
