@@ -40,6 +40,20 @@ class OpenAIClient:
             return {"chat_template_kwargs": {"enable_thinking": False}}
         return {}
 
+    def _request_headers(self) -> dict[str, str]:
+        """Build request headers, omitting the bearer token for keyless providers.
+
+        Keyless local servers (vLLM / llama.cpp with no ``--api-key``) never
+        set ``api_key``. Sending ``Authorization: Bearer `` is rejected by
+        httpx itself ("Illegal header value"), so the header is only added
+        when a non-empty key is configured. The provider row keeps ``""``
+        for keyless entries (see :func:`src.core.provider_key_crypto.encrypt_provider_api_key`).
+        """
+        headers = {"Content-Type": "application/json"}
+        if self.api_key.strip():
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
     def _request_with_retry(self, url: str, headers: dict, payload: dict) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
@@ -88,7 +102,7 @@ class OpenAIClient:
         (e.g. ``chat_template_kwargs`` for qwen) are preserved unless explicitly
         overridden. Default ``None`` is a no-op."""
         url = f"{self.api_base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = self._request_headers()
         payload = {"model": self.model_name, "messages": messages, "temperature": temperature}
         payload.update(self._build_default_request_extras())
         if extra_body:
@@ -132,7 +146,7 @@ class OpenAIClient:
     ) -> tuple[str | None, list[dict[str, Any]] | None]:
         """带 tool_calling 的 chat completion，返回 (content, tool_calls)。"""
         url = f"{self.api_base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = self._request_headers()
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,

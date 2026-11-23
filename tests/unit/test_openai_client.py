@@ -143,6 +143,30 @@ def test_non_qwen_model_does_not_add_disable_thinking_payload(monkeypatch) -> No
     assert "chat_template_kwargs" not in recorded_requests[0]["json"]
 
 
+def test_keyless_provider_omits_authorization_header(monkeypatch) -> None:
+    """An empty api_key must not produce an illegal ``Bearer  `` header."""
+    recorded_requests: list[dict[str, Any]] = []
+
+    def _client_factory(*args: Any, **kwargs: Any) -> _DummyClient:
+        del args, kwargs
+        return _DummyClient(
+            recorded_requests, [(200, {"choices": [{"message": {"content": "pong"}}]})]
+        )
+
+    monkeypatch.setattr("src.providers.openai_client.httpx.Client", _client_factory)
+
+    client = OpenAIClient(
+        api_base_url="http://192.168.1.102:8000/v1",
+        api_key="",
+        model_name="qwen3.5-9b",
+    )
+
+    assert client.chat_completion(messages=[{"role": "user", "content": "hi"}]) == "pong"
+    headers = recorded_requests[0]["headers"]
+    assert "Authorization" not in headers
+    assert headers["Content-Type"] == "application/json"
+
+
 def test_chat_completion_retries_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.providers.openai_client.time.sleep", lambda _: None)
     recorded_requests: list[dict[str, Any]] = []
