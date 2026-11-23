@@ -10,7 +10,6 @@ from src.application.pipeline.commands import (
 )
 from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.core.pipeline_constants import ScanMode, TaskStatus, TaskType
-from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
 from src.services.dispatch import (
     create_pending_task_log,
@@ -30,13 +29,15 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
 
     Each ``dispatch_*`` call writes the business ``TaskLog`` row, a
     ``TaskDelivery`` intent row and the pre-assigned broker ``task_id`` to
-    the caller-supplied ``db`` session without committing. The caller
-    commits and then calls :func:`src.services.dispatch.outbox.flush_task_deliveries`
-    with :attr:`pending_deliveries`.
+    the caller-supplied ``db`` session without committing. Intents are
+    collected in the :func:`src.services.dispatch.outbox.pending_deliveries`
+    context of the calling thread (one dispatcher instance is shared per
+    process, so a per-instance list would mix concurrent requests). The
+    caller commits and then calls
+    :func:`src.services.dispatch.outbox.flush_task_deliveries` with the
+    collected list. Without an active collection context the intent stays
+    in ``task_delivery`` and the heartbeat's retry sweep publishes it.
     """
-
-    def __init__(self) -> None:
-        self.pending_deliveries: list[TaskDelivery] = []
 
     def _stage(
         self,
@@ -49,18 +50,13 @@ class CeleryTaskDispatcher(TaskDispatcherPort):
         kwargs: dict[str, Any] | None = None,
     ) -> str:
         task_id = new_task_id()
-        delivery = record_delivery(
+        record_delivery(
             db,
             task_log,
             TaskCommand(task_name=task_name, queue=queue, args=args, kwargs=kwargs),
             task_id=task_id,
         )
-        self.pending_deliveries.append(delivery)
         return task_id
-
-    def pop_pending(self) -> list[TaskDelivery]:
-        pending, self.pending_deliveries = self.pending_deliveries, []
-        return pending
 
     def dispatch_session_build(self, db: Session, command: SessionBuildCommand) -> str | None:
         """Enqueue a hot or full session build.

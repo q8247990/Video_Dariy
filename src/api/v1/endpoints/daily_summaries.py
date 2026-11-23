@@ -16,6 +16,7 @@ from src.models.video_session import VideoSession
 from src.schemas.daily_summary import DailySummaryResponse
 from src.schemas.response import BaseResponse, PaginatedResponse
 from src.services.dispatch import build_dedupe_key, find_duplicate_active_task
+from src.services.dispatch.outbox import flush_task_deliveries, pending_deliveries
 
 router = APIRouter()
 
@@ -97,20 +98,22 @@ def generate_all_daily_summaries(
     queued_task_ids: list[str] = []
     skipped_dates: list[str] = []
 
-    try:
-        for current_date in target_dates:
-            if _has_active_daily_summary_task(db, current_date):
-                skipped_dates.append(str(current_date))
-            else:
-                task_id = orchestrator.dispatch_generate_daily_summary(
-                    db,
-                    GenerateDailySummaryCommand(target_date_str=str(current_date)),
-                )
-                queued_task_ids.append(str(task_id))
-        db.commit()
-    except OperationalError as exc:
-        db.rollback()
-        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=exc))
+    with pending_deliveries() as deliveries:
+        try:
+            for current_date in target_dates:
+                if _has_active_daily_summary_task(db, current_date):
+                    skipped_dates.append(str(current_date))
+                else:
+                    task_id = orchestrator.dispatch_generate_daily_summary(
+                        db,
+                        GenerateDailySummaryCommand(target_date_str=str(current_date)),
+                    )
+                    queued_task_ids.append(str(task_id))
+            db.commit()
+            flush_task_deliveries(db, deliveries)
+        except OperationalError as exc:
+            db.rollback()
+            return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=exc))
 
     return BaseResponse(
         data={

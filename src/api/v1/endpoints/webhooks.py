@@ -9,8 +9,14 @@ from src.api.deps import DB, CurrentUser, Locale, Orchestrator
 from src.application.pipeline.commands import SendWebhookCommand
 from src.core.i18n import t
 from src.models.webhook_config import WebhookConfig
-from src.schemas.response import BaseResponse, PaginatedData, PaginatedResponse, PaginationDetails
+from src.schemas.response import (
+    BaseResponse,
+    PaginatedData,
+    PaginatedResponse,
+    PaginationDetails,
+)
 from src.schemas.webhook import WebhookCreate, WebhookResponse, WebhookUpdate
+from src.services.dispatch.outbox import flush_task_deliveries, pending_deliveries
 from src.services.webhook_payload import build_webhook_event_payload
 from src.services.webhook_url_policy import WebhookUrlPolicyError, validate_webhook_url
 
@@ -116,18 +122,20 @@ def test_webhook(
         {"message": "This is a test webhook push."},
     )
 
-    try:
-        orchestrator.dispatch_webhook(
-            db,
-            SendWebhookCommand(
-                event_type="test_event",
-                payload=payload,
-                webhook_id=int(id),
-            ),
-        )
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        logger.exception("Failed to enqueue test webhook task for webhook_id=%s", id)
-        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    with pending_deliveries() as deliveries:
+        try:
+            orchestrator.dispatch_webhook(
+                db,
+                SendWebhookCommand(
+                    event_type="test_event",
+                    payload=payload,
+                    webhook_id=int(id),
+                ),
+            )
+            db.commit()
+            flush_task_deliveries(db, deliveries)
+        except OperationalError as e:
+            db.rollback()
+            logger.exception("Failed to enqueue test webhook task for webhook_id=%s", id)
+            return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     return BaseResponse(data={"success": True, "message": "Test webhook scheduled."})

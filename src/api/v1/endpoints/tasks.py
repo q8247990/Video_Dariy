@@ -30,6 +30,7 @@ from src.models.video_source import VideoSource
 from src.schemas.response import BaseResponse, PaginatedResponse
 from src.schemas.task_log import TaskLogResponse
 from src.services.dispatch import is_singleton_task_running
+from src.services.dispatch.outbox import flush_task_deliveries, pending_deliveries
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -96,16 +97,18 @@ def retry_task_log(
     container: ContainerDep,
     id: int,
 ) -> Any:
-    result: RetryTaskLogResult = retry_task_log_use_case(
-        db=db,
-        task_log_id=id,
-        locale=locale,
-        container=container,
-    )
-    if result.error_code != 0:
-        data = {"task_id": result.task_id} if result.task_id else None
-        return BaseResponse(code=result.error_code, message=result.error_message, data=data)
-    db.commit()
+    with pending_deliveries() as deliveries:
+        result: RetryTaskLogResult = retry_task_log_use_case(
+            db=db,
+            task_log_id=id,
+            locale=locale,
+            container=container,
+        )
+        if result.error_code != 0:
+            data = {"task_id": result.task_id} if result.task_id else None
+            return BaseResponse(code=result.error_code, message=result.error_message, data=data)
+        db.commit()
+        flush_task_deliveries(db, deliveries)
     return BaseResponse(data={"task_id": result.task_id})
 
 
@@ -123,16 +126,18 @@ def trigger_full_build(
     if is_singleton_task_running(db, TaskType.SESSION_BUILD, id, scan_mode=ScanMode.FULL):
         return BaseResponse(code=4004, message=t("task.full_build_running", locale))
 
-    try:
-        task_id = orchestrator.dispatch_session_build(
-            db,
-            SessionBuildCommand(source_id=id, scan_mode=ScanMode.FULL),
-        )
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        logger.exception("Failed to enqueue full build task for source_id=%s", id)
-        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    with pending_deliveries() as deliveries:
+        try:
+            task_id = orchestrator.dispatch_session_build(
+                db,
+                SessionBuildCommand(source_id=id, scan_mode=ScanMode.FULL),
+            )
+            db.commit()
+            flush_task_deliveries(db, deliveries)
+        except OperationalError as e:
+            db.rollback()
+            logger.exception("Failed to enqueue full build task for source_id=%s", id)
+            return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     logger.info(
         "dispatched task task_type=%s target=%s task_id=%s", TaskType.SESSION_BUILD, id, task_id
     )
@@ -157,16 +162,18 @@ def trigger_analyze(
         db.commit()
 
     priority = session.analysis_priority or "hot"
-    try:
-        task_id = orchestrator.dispatch_analyze_session(
-            db,
-            AnalyzeSessionCommand(session_id=session_id, priority=priority),
-        )
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        logger.exception("Failed to enqueue analyze task for session_id=%s", session_id)
-        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    with pending_deliveries() as deliveries:
+        try:
+            task_id = orchestrator.dispatch_analyze_session(
+                db,
+                AnalyzeSessionCommand(session_id=session_id, priority=priority),
+            )
+            db.commit()
+            flush_task_deliveries(db, deliveries)
+        except OperationalError as e:
+            db.rollback()
+            logger.exception("Failed to enqueue analyze task for session_id=%s", session_id)
+            return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     logger.info(
         "dispatched task task_type=%s target=%s task_id=%s",
         TaskType.SESSION_ANALYSIS,
@@ -185,16 +192,18 @@ def trigger_summarize(
     target_date: str | None = None,
 ) -> Any:
     """Trigger daily summary generation. Date format: YYYY-MM-DD"""
-    try:
-        task_id = orchestrator.dispatch_generate_daily_summary(
-            db,
-            GenerateDailySummaryCommand(target_date_str=target_date),
-        )
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        logger.exception("Failed to enqueue summarize task for target_date=%s", target_date)
-        return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
+    with pending_deliveries() as deliveries:
+        try:
+            task_id = orchestrator.dispatch_generate_daily_summary(
+                db,
+                GenerateDailySummaryCommand(target_date_str=target_date),
+            )
+            db.commit()
+            flush_task_deliveries(db, deliveries)
+        except OperationalError as e:
+            db.rollback()
+            logger.exception("Failed to enqueue summarize task for target_date=%s", target_date)
+            return BaseResponse(code=5001, message=t("task.queue_unavailable", locale, error=e))
     logger.info(
         "dispatched task task_type=%s target=%s task_id=%s",
         TaskType.DAILY_SUMMARY_GENERATION,

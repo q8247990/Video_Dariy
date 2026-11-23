@@ -26,6 +26,7 @@ from src.application.container_holder import get_container
 from src.db.session import task_db_session
 from src.services.dispatch.outbox import (
     flush_task_deliveries,
+    pending_deliveries,
     replay_retired_outbox,
     retry_failed_deliveries,
 )
@@ -75,40 +76,40 @@ def run_heartbeat() -> dict[str, int]:
     the policy module itself (a single bad source cannot poison the
     hot-build sweep, for example).
     """
-    with task_db_session() as db:
-        settled = 0
-        try:
-            now = datetime.now(timezone.utc)
-            dispatcher = get_container().dispatcher
-            dispatched_hot = dispatch_hot_builds(db, dispatcher=dispatcher)
-            leases_recovered = recover_timed_out_tasks(db, now, dispatcher=dispatcher)
-            pending_recovered = recover_orphan_pending_tasks(db, now, dispatcher=dispatcher)
-            redelivered = _redeliver(db)
+    with pending_deliveries() as staged:
+        with task_db_session() as db:
+            settled = 0
+            try:
+                now = datetime.now(timezone.utc)
+                dispatcher = get_container().dispatcher
+                dispatched_hot = dispatch_hot_builds(db, dispatcher=dispatcher)
+                leases_recovered = recover_timed_out_tasks(db, now, dispatcher=dispatcher)
+                pending_recovered = recover_orphan_pending_tasks(db, now, dispatcher=dispatcher)
+                redelivered = _redeliver(db)
 
-            logs_deleted = 0
-            missing_marked = 0
-            if now.minute == 0:
-                logs_deleted = cleanup_old_task_logs(db, now)
-                missing_marked = mark_missing_video_files(db)
+                logs_deleted = 0
+                missing_marked = 0
+                if now.minute == 0:
+                    logs_deleted = cleanup_old_task_logs(db, now)
+                    missing_marked = mark_missing_video_files(db)
 
-            counters: dict[str, int] = {
-                "dispatched_hot": len(dispatched_hot),
-                "timed_out": leases_recovered,
-                "pending_recovered": pending_recovered,
-                "redelivered": redelivered,
-                "logs_deleted": logs_deleted,
-                "missing_marked": missing_marked,
-            }
-            _persist_heartbeat_counters(db, counters)
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Heartbeat failed")
-            raise
-        # Intents collected during this sweep must reach the broker only after
-        # the TaskLog/TaskDelivery rows above are committed.
-        staged: list[Any] = list(getattr(dispatcher, "pop_pending", lambda: [])())
-        settled = flush_task_deliveries(db, staged)
+                counters: dict[str, int] = {
+                    "dispatched_hot": len(dispatched_hot),
+                    "timed_out": leases_recovered,
+                    "pending_recovered": pending_recovered,
+                    "redelivered": redelivered,
+                    "logs_deleted": logs_deleted,
+                    "missing_marked": missing_marked,
+                }
+                _persist_heartbeat_counters(db, counters)
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("Heartbeat failed")
+                raise
+            # Intents collected during this sweep must reach the broker only
+            # after the TaskLog/TaskDelivery rows above are committed.
+            settled = flush_task_deliveries(db, staged)
     counters["redelivered"] += settled
     return counters
 
