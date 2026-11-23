@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from src.db.metrics import (
     checkpoint_progress,
     delivery_metrics,
+    pending_backlog_metrics,
     task_recovery_metrics,
 )
 from src.models.app_runtime_state import AppRuntimeState
@@ -176,3 +177,32 @@ def test_checkpoint_progress_reports_running_analysis(engine) -> None:
     assert entry["session_id"] == video_session_id
     assert entry["completed_sub_chunks"] == 2
     assert entry["total_sub_chunks"] == 3
+
+
+def test_pending_backlog_flags_stale_analysis(engine) -> None:
+    """Analyzer rows past the grace are reported, never auto-recovered."""
+    now = _now()
+    with Session(bind=engine) as session:
+        old_analysis = TaskLog(task_type="session_analysis", status="pending")
+        old_analysis.created_at = now - timedelta(hours=2)
+        fresh_analysis = TaskLog(task_type="session_analysis", status="pending")
+        fresh_analysis.created_at = now - timedelta(seconds=60)
+        fresh_build = TaskLog(task_type="session_build", status="pending")
+        fresh_build.created_at = now - timedelta(seconds=100)
+        session.add_all([old_analysis, fresh_analysis, fresh_build])
+        session.commit()
+
+    payload = pending_backlog_metrics(engine, now=now)
+
+    assert payload["total_pending"] == 3
+    assert payload["stale_pending"] == 1
+    assert payload["oldest_pending_seconds"] is not None
+    assert payload["oldest_pending_seconds"] >= 7199
+    assert payload["thresholds_seconds"]["session_analysis"] == 1800
+    assert payload["thresholds_seconds"]["default"] == 300
+
+    by_type = {item["task_type"]: item for item in payload["by_task_type"]}
+    assert by_type["session_analysis"]["pending_count"] == 2
+    assert by_type["session_analysis"]["stale_count"] == 1
+    assert by_type["session_analysis"]["stale"] is True
+    assert by_type["session_build"]["stale"] is False

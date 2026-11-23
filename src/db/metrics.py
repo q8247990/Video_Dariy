@@ -32,12 +32,13 @@ JSON (no Prometheus dependency) and is unit- and PG-testable.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.engine import Engine
 
+from src.core.config import settings
 from src.core.pipeline_constants import TaskStatus, TaskType
 from src.models.app_runtime_state import AppRuntimeState
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
@@ -115,6 +116,88 @@ def task_recovery_metrics(engine: Engine) -> dict[str, Any]:
             "logs_deleted": int(last.get("logs_deleted", 0)),
             "missing_marked": int(last.get("missing_marked", 0)),
         },
+    }
+
+
+def pending_backlog_metrics(engine: Engine, *, now: datetime | None = None) -> dict[str, Any]:
+    """Return PENDING backlog gauges, including rows stuck past their grace.
+
+    Analysis ``TaskLog`` rows that sit PENDING with no lease are *not*
+    auto-recovered by the heartbeat any more (C-plan decision: a queued
+    broker message cannot be distinguished from a lost one by age).
+    They are surfaced here instead, so an operator can see a stalled
+    vision queue and retrigger ``POST /api/v1/tasks/analyze/{id}``.
+
+    A row is counted as ``stale`` when its age exceeds the per-type
+    grace: analyzer rows use ``ANALYSIS_PENDING_GRACE_SECONDS``; every
+    other type uses ``PENDING_UNLEASED_TIMEOUT_SECONDS`` (after which
+    the heartbeat times the row out on its own). All gauges are
+    read-only.
+    """
+
+    current = now or datetime.now(timezone.utc)
+    default_threshold = int(settings.PENDING_UNLEASED_TIMEOUT_SECONDS)
+    analysis_threshold = int(settings.ANALYSIS_PENDING_GRACE_SECONDS)
+    default_cutoff = current - timedelta(seconds=default_threshold)
+    analysis_cutoff = current - timedelta(seconds=analysis_threshold)
+    stale_cutoff = case(
+        (TaskLog.task_type == TaskType.SESSION_ANALYSIS, analysis_cutoff),
+        else_=default_cutoff,
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                TaskLog.task_type,
+                func.count(TaskLog.id),
+                func.min(TaskLog.created_at),
+            )
+            .where(TaskLog.status == TaskStatus.PENDING)
+            .group_by(TaskLog.task_type)
+        ).all()
+        stale_rows = conn.execute(
+            select(TaskLog.task_type, func.count(TaskLog.id))
+            .where(TaskLog.status == TaskStatus.PENDING, TaskLog.created_at <= stale_cutoff)
+            .group_by(TaskLog.task_type)
+        ).all()
+    stale_by_type = {task_type: int(count or 0) for task_type, count in stale_rows}
+
+    by_task_type: list[dict[str, Any]] = []
+    total_pending = 0
+    stale_pending = 0
+    oldest_pending_seconds: int | None = None
+    for task_type, count, oldest in rows:
+        pending_count = int(count or 0)
+        stale_count = stale_by_type.get(task_type, 0)
+        oldest_age: int | None = None
+        if oldest is not None:
+            oldest_age = int(max(0, (current - _as_utc(oldest)).total_seconds()))
+            if oldest_pending_seconds is None or oldest_age > oldest_pending_seconds:
+                oldest_pending_seconds = oldest_age
+        threshold = (
+            analysis_threshold if task_type == TaskType.SESSION_ANALYSIS else default_threshold
+        )
+        total_pending += pending_count
+        stale_pending += stale_count
+        by_task_type.append(
+            {
+                "task_type": task_type,
+                "pending_count": pending_count,
+                "stale_count": stale_count,
+                "stale": stale_count > 0,
+                "stale_threshold_seconds": threshold,
+                "oldest_pending_seconds": oldest_age,
+            }
+        )
+    by_task_type.sort(key=lambda item: str(item["task_type"]))
+    return {
+        "total_pending": total_pending,
+        "stale_pending": stale_pending,
+        "oldest_pending_seconds": oldest_pending_seconds,
+        "thresholds_seconds": {
+            TaskType.SESSION_ANALYSIS: analysis_threshold,
+            "default": default_threshold,
+        },
+        "by_task_type": by_task_type,
     }
 
 
@@ -258,6 +341,7 @@ def metrics_snapshot(engine: Engine) -> dict[str, Any]:
     return {
         "delivery": delivery_metrics(engine),
         "task_recovery": task_recovery_metrics(engine),
+        "pending_backlog": pending_backlog_metrics(engine),
         "analysis_checkpoint": checkpoint_progress(engine),
         "frame_sampling": frame_sampling_metrics(engine),
     }
@@ -272,5 +356,6 @@ __all__ = [
     "frame_sampling_metrics",
     "metrics_snapshot",
     "delivery_metrics",
+    "pending_backlog_metrics",
     "task_recovery_metrics",
 ]

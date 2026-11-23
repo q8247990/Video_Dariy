@@ -345,6 +345,7 @@ def test_frame_sampling_counters_survive_success_and_failure_on_postgres(
     assert set(body) == {
         "delivery",
         "task_recovery",
+        "pending_backlog",
         "analysis_checkpoint",
         "frame_sampling",
     }
@@ -404,6 +405,7 @@ def test_frame_sampling_metrics_empty_before_any_image_analysis(
     assert set(body) == {
         "delivery",
         "task_recovery",
+        "pending_backlog",
         "analysis_checkpoint",
         "frame_sampling",
     }
