@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from app.select import (
     FrameSelectionError,
+    _small_gray,
     hamming,
     phash,
     select_frames,
@@ -104,6 +105,27 @@ def make_far_apart_frames(count: int = 20) -> list[ExtractedFrame]:
     return [
         ExtractedFrame(t_seconds=0.5 * i, jpeg_bytes=_jpeg(_noise(i + 1))) for i in range(count)
     ]
+
+
+def _faint_patch(base: np.ndarray) -> np.ndarray:
+    """``base`` with a faint 8x8 brightening patch: sub-threshold change."""
+    array = base.copy()
+    patch = array[16:24, 16:24].astype(np.float64) * 0.8 + 20.0
+    array[16:24, 16:24] = np.clip(patch, 0, 255).astype(np.uint8)
+    return array
+
+
+def _make_mixed_clip(
+    change_at: dict[int, np.ndarray], count: int = 40, base: np.ndarray | None = None
+) -> list[ExtractedFrame]:
+    """``count`` byte-identical frames at 0.5 s spacing (t = 0.0 ..), solid red
+    unless a ``base`` array is given, with the frames at the given indices
+    replaced by the given arrays."""
+    base_jpeg = _jpeg(_solid((255, 0, 0)) if base is None else base)
+    frames = [ExtractedFrame(t_seconds=0.5 * i, jpeg_bytes=base_jpeg) for i in range(count)]
+    for idx, array in change_at.items():
+        frames[idx] = ExtractedFrame(t_seconds=0.5 * idx, jpeg_bytes=_jpeg(array))
+    return frames
 
 
 def _timestamps(frames: list[ExtractedFrame]) -> list[float]:
@@ -269,6 +291,130 @@ def test_event_without_candidates_matches_uniform() -> None:
     event_sel = _timestamps(select_frames(frames, [], budget=10, min_frames=1, mode="event"))
     uniform_sel = _timestamps(select_frames(frames, [], budget=10, min_frames=1, mode="uniform"))
     assert event_sel == uniform_sel
+
+
+# ---------------------------------------------------------------------------
+# keyframe mode
+# ---------------------------------------------------------------------------
+
+
+def test_keyframe_selects_abrupt_changes_over_static_frames() -> None:
+    # Static solid-red clip with two abrupt changes: noise at t=4.0 and a
+    # checkerboard at t=11.0 (both far from the 8 s / 16 s anchor grid).
+    clip = _make_mixed_clip({8: _noise(101), 22: _checkerboard()})
+    selected = select_frames(clip, [], budget=8, min_frames=1, mode="keyframe")
+    ts = _timestamps(selected)
+
+    assert len(ts) == 8
+    assert 4.0 in ts  # the noise jump is selected
+    assert 11.0 in ts  # the checkerboard jump is selected
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+    assert ts[0] == 0.0
+    assert ts[-1] == 19.5
+
+
+def test_keyframe_static_clip_uses_anchors_and_even_fill() -> None:
+    # All-static clip: no change points, so the 8 s / 16 s periodic anchors
+    # plus the even-spacing targets make up the exact budget.
+    frames = make_identical_frames(40)
+    selected = select_frames(frames, [], budget=8, min_frames=1, mode="keyframe")
+    ts = _timestamps(selected)
+
+    assert ts == [0.0, 3.0, 5.5, 8.0, 8.5, 11.0, 16.0, 19.5]
+    assert 8.0 in ts and 16.0 in ts  # periodic anchors present
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+
+
+def test_keyframe_represents_two_separate_change_bursts() -> None:
+    # Two 5-frame bursts of distinct noise at t=15..17 and t=23..25: the
+    # duration/budget spread constraint lets at most one frame per burst
+    # through, but both bursts must be represented.
+    changes: dict[int, np.ndarray] = {}
+    for j in range(5):
+        changes[30 + j] = _noise(200 + j)
+        changes[46 + j] = _noise(300 + j)
+    clip = _make_mixed_clip(changes, count=80)
+    selected = select_frames(clip, [], budget=8, min_frames=1, mode="keyframe")
+    ts = _timestamps(selected)
+
+    assert len(ts) == 8
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+    assert ts[0] == 0.0
+    assert ts[-1] == 39.5
+    assert any(14.5 <= t <= 17.5 for t in ts), f"burst A missing: {ts}"
+    assert any(22.5 <= t <= 25.5 for t in ts), f"burst B missing: {ts}"
+
+
+def test_keyframe_is_deterministic_across_calls() -> None:
+    clip = _make_mixed_clip({8: _noise(101), 22: _checkerboard()})
+    ts_a = _timestamps(select_frames(clip, [], budget=8, min_frames=1, mode="keyframe"))
+    ts_b = _timestamps(select_frames(clip, [], budget=8, min_frames=1, mode="keyframe"))
+    ts_c = _timestamps(
+        select_frames(list(reversed(clip)), [], budget=8, min_frames=1, mode="keyframe")
+    )
+    assert ts_a == ts_b == ts_c
+
+
+def test_keyframe_budget_one_returns_first_frame_only() -> None:
+    clip = _make_mixed_clip({8: _noise(101), 22: _checkerboard()})
+    single = select_frames(clip, [], budget=1, min_frames=1, mode="keyframe")
+    assert _timestamps(single) == [0.0]
+
+
+def test_keyframe_budget_above_frame_count_returns_all() -> None:
+    clip = _make_mixed_clip({8: _noise(101)}, count=12)
+    selected = select_frames(clip, [], budget=20, min_frames=1, mode="keyframe")
+    assert _timestamps(selected) == [0.5 * i for i in range(12)]
+
+
+def test_keyframe_threshold_skips_low_difference_frame() -> None:
+    # Static fixed-seed noise clip (rich, stable pHash spectrum) with a faint
+    # patch at t=5.0 under both change thresholds and a checkerboard at
+    # t=12.0 as a clear change point.
+    base = _noise(42)
+    clip = _make_mixed_clip({10: _faint_patch(base), 24: _checkerboard()}, count=40, base=base)
+    weak_mad = float(
+        np.mean(
+            np.abs(
+                _small_gray(clip[10].jpeg_bytes).astype(np.float64)
+                - _small_gray(clip[9].jpeg_bytes).astype(np.float64)
+            )
+        )
+    )
+    weak_phd = hamming(phash(clip[10].jpeg_bytes), phash(clip[9].jpeg_bytes))
+    assert weak_mad < 1.0, "fixture must stay under the default MAD threshold"
+    assert weak_phd <= 6, "fixture must stay under the default pHash threshold"
+
+    default_ts = _timestamps(select_frames(clip, [], budget=8, min_frames=1, mode="keyframe"))
+    assert 12.0 in default_ts
+    assert 5.0 not in default_ts
+
+    loose_ts = _timestamps(
+        select_frames(
+            clip,
+            [],
+            budget=8,
+            min_frames=1,
+            mode="keyframe",
+            dedupe_phash_distance=0,
+            mad_threshold=0.0,
+        )
+    )
+    assert 12.0 in loose_ts
+    assert 5.0 in loose_ts  # relaxed thresholds turn the faint frame into a change point
+
+
+def test_keyframe_zero_period_still_returns_exact_budget() -> None:
+    # periodic_anchor_seconds <= 0 disables anchors; on an all-static clip the
+    # budget then comes purely from endpoints plus even-spacing fill.
+    frames = make_identical_frames(40)
+    selected = select_frames(
+        frames, [], budget=8, min_frames=1, mode="keyframe", periodic_anchor_seconds=0.0
+    )
+    ts = _timestamps(selected)
+
+    assert ts == [0.0, 3.0, 5.5, 8.5, 11.0, 14.0, 16.5, 19.5]
+    assert len(ts) == 8
 
 
 # ---------------------------------------------------------------------------

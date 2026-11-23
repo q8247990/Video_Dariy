@@ -1,7 +1,7 @@
 """Frame selection within a budget (todo 18).
 
 Selects a bounded number of frames from an extracted frame sequence using one
-of three deterministic strategies:
+of four deterministic strategies:
 
 - ``uniform``  — index-proportional even spacing over the whole clip
 - ``dedupe``   — perceptual-hash (pHash) walk keeping frames that are
@@ -12,6 +12,11 @@ of three deterministic strategies:
   (proportional to window duration, at least one frame per non-empty window),
   then even-spacing fill for the remainder; identical to ``uniform`` when
   there are no candidates
+- ``keyframe`` — change-point detection on 160x90 grayscale thumbnails
+  (consecutive-frame MAD and pHash Hamming distance), scored ``mad + phd``,
+  plus periodic time anchors; change points are accepted under a
+  ``duration / budget`` minimum-gap spread constraint and the remainder is
+  even-spaced filled
 
 The module is deliberately structural: it works with any object exposing
 ``t_seconds`` / ``jpeg_bytes`` (frames) and ``t_start`` / ``t_end`` /
@@ -39,7 +44,11 @@ PHASH_DEFAULT_DISTANCE = 6
 #: Fraction of the budget that ``event`` mode may allocate to candidate windows.
 EVENT_WINDOW_BUDGET_FRACTION = 0.7
 
-_VALID_MODES = ("uniform", "dedupe", "event")
+#: Grayscale thumbnail size (width x height) used by ``keyframe`` mode for
+#: consecutive-frame MAD, reviving the deleted backend keyframe pipeline.
+KEYFRAME_SMALL_SIZE = (160, 90)
+
+_VALID_MODES = ("uniform", "dedupe", "event", "keyframe")
 
 
 class ExtractedFrameLike(Protocol):
@@ -103,6 +112,16 @@ def phash(jpeg_bytes: bytes) -> int:
 def hamming(a: int, b: int) -> int:
     """Hamming distance between two integer hashes (popcount of the XOR)."""
     return (a ^ b).bit_count()
+
+
+def _small_gray(jpeg_bytes: bytes) -> np.ndarray:
+    """Decode a JPEG into a deterministic 160x90 uint8 grayscale thumbnail."""
+    image = (
+        Image.open(io.BytesIO(jpeg_bytes))
+        .convert("L")
+        .resize(KEYFRAME_SMALL_SIZE, Image.Resampling.LANCZOS)
+    )
+    return np.asarray(image, dtype=np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +380,137 @@ def _event_selection(
     return [frames[i] for i in sorted(selected)]
 
 
+def _keyframe_change_scores(
+    small: Sequence[np.ndarray],
+    hashes: Sequence[int],
+    *,
+    mad_threshold: float,
+    phash_threshold: int,
+) -> tuple[list[bool], list[float]]:
+    """Per-frame change flags and ``mad + phd`` scores against the previous frame."""
+    n = len(small)
+    change = [False] * n
+    score = [0.0] * n
+    for i in range(1, n):
+        mad = float(np.mean(np.abs(small[i].astype(np.float64) - small[i - 1].astype(np.float64))))
+        phd = hamming(hashes[i - 1], hashes[i])
+        change[i] = mad > mad_threshold or phd > phash_threshold
+        score[i] = mad + phd
+    return change, score
+
+
+def _keyframe_anchors(
+    times: Sequence[float],
+    *,
+    duration: float,
+    budget: int,
+    periodic_anchor_seconds: float,
+) -> list[int]:
+    """Frame indices closest to each periodic time step after the clip start.
+
+    Never index 0 (the first frame is guaranteed separately); ties resolve to
+    the earlier index. More than ``max(2, budget // 4)`` anchors are evenly
+    down-sampled with both ends kept so coverage cannot crowd out content.
+    """
+    if periodic_anchor_seconds <= 0:
+        return []
+    anchors: list[int] = []
+    k = 1
+    while k * periodic_anchor_seconds <= duration:
+        target = times[0] + k * periodic_anchor_seconds
+        best = min(range(1, len(times)), key=lambda i: (abs(times[i] - target), i))
+        if not anchors or anchors[-1] != best:
+            anchors.append(best)
+        k += 1
+    anchor_cap = max(2, budget // 4)
+    if len(anchors) > anchor_cap:
+        anchors = _downsample_positions(anchors, anchor_cap)
+    return anchors
+
+
+def _keyframe_greedy_complete(
+    selected: set[int],
+    times: Sequence[float],
+    change: Sequence[bool],
+    score: Sequence[float],
+    budget: int,
+    min_gap: float,
+) -> None:
+    """Grow ``selected`` to exactly ``budget`` entries, in place.
+
+    Unselected change points are accepted in ``(-score, index)`` order while
+    each sits at least ``min_gap`` seconds from every already-selected frame;
+    anything the budget still lacks comes from the uniform-spacing targets in
+    ascending order (they always exist in enough quantity: the ``budget``
+    targets are distinct when ``budget < len(times)``, and the endpoints they
+    repeat are already selected).
+    """
+    n = len(times)
+    candidates = [(-score[i], i) for i in range(1, n) if change[i] and i not in selected]
+    candidates.sort()
+    for _, i in candidates:
+        if len(selected) >= budget:
+            return
+        if all(abs(times[i] - times[j]) >= min_gap for j in selected):
+            selected.add(i)
+    for j in range(budget):
+        if len(selected) >= budget:
+            return
+        idx = round(j * (n - 1) / (budget - 1))
+        if idx not in selected:
+            selected.add(idx)
+
+
+def _keyframe_selection(
+    frames: list[ExtractedFrameLike],
+    budget: int,
+    *,
+    mad_threshold: float,
+    phash_threshold: int,
+    periodic_anchor_seconds: float,
+) -> list[ExtractedFrameLike]:
+    """Select exactly ``budget`` frames by change-point detection plus anchors.
+
+    Revives the deleted backend keyframe pipeline as a selection strategy
+    (caller guarantees ``1 <= budget < len(frames)``). Consecutive frames are
+    compared on 160x90 grayscale thumbnails: a frame is a *change point* when
+    its mean absolute grayscale difference (MAD) to the previous frame exceeds
+    ``mad_threshold`` **or** its pHash Hamming distance exceeds
+    ``phash_threshold``; its score is ``mad + phd``.
+
+    Selection order: the first and last frames are always kept (``budget == 1``
+    keeps only the first). Periodic coverage anchors bypass the gap check and
+    are added first, then change points under a ``duration / budget``
+    minimum-gap spread constraint, then the even-spacing fill. Fully
+    deterministic for identical inputs.
+    """
+    small = [_small_gray(frame.jpeg_bytes) for frame in frames]
+    hashes = [phash(frame.jpeg_bytes) for frame in frames]
+    change, score = _keyframe_change_scores(
+        small, hashes, mad_threshold=mad_threshold, phash_threshold=phash_threshold
+    )
+
+    if budget == 1:
+        return [frames[0]]
+
+    times = [frame.t_seconds for frame in frames]
+    duration = times[-1] - times[0]
+    selected: set[int] = {0, len(frames) - 1}
+    for idx in _keyframe_anchors(
+        times, duration=duration, budget=budget, periodic_anchor_seconds=periodic_anchor_seconds
+    ):
+        if len(selected) >= budget:
+            break
+        selected.add(idx)
+
+    _keyframe_greedy_complete(
+        selected, times, change, score, budget, duration / budget if duration > 0 else 0.0
+    )
+
+    assert len(selected) == budget
+    return [frames[i] for i in sorted(selected)]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -374,6 +524,8 @@ def select_frames(
     min_frames: int,
     mode: str,
     dedupe_phash_distance: int | None = None,
+    mad_threshold: float = 1.0,
+    periodic_anchor_seconds: float = 8.0,
     head_seconds: float = 5.0,
     tail_seconds: float = 10.0,
 ) -> list[ExtractedFrameLike]:
@@ -388,12 +540,17 @@ def select_frames(
         budget: maximum number of frames to return. Must be at least
             ``max(1, min_frames)`` or :class:`FrameSelectionError` is raised.
         min_frames: floor used by the budget check.
-        mode: one of ``"uniform"``, ``"dedupe"``, ``"event"``; anything else
-            raises ``ValueError``.
+        mode: one of ``"uniform"``, ``"dedupe"``, ``"event"``, ``"keyframe"``;
+            anything else raises ``ValueError``.
         dedupe_phash_distance: ``dedupe`` preference threshold; frames above
-            it are kept first. ``None`` means
-            :data:`PHASH_DEFAULT_DISTANCE` (6). It is relaxed only when it
-            would keep the selection off the budget.
+            it are kept first. For ``keyframe`` it is the pHash change-point
+            threshold. ``None`` means :data:`PHASH_DEFAULT_DISTANCE` (6). It
+            is relaxed only when it would keep the selection off the budget.
+        mad_threshold: ``keyframe`` mean-absolute-difference change threshold
+            on 160x90 grayscale thumbnails. Ignored by the other modes.
+        periodic_anchor_seconds: ``keyframe`` periodic coverage anchor every
+            this many seconds (``<= 0`` disables anchors). Ignored by the
+            other modes.
         head_seconds: size of the clip head zone (see notes).
         tail_seconds: size of the clip tail zone (see notes).
 
@@ -439,8 +596,21 @@ def select_frames(
             PHASH_DEFAULT_DISTANCE if dedupe_phash_distance is None else dedupe_phash_distance
         )
         selected = _dedupe_selection(ordered, budget, threshold)
-    else:
+    elif mode == "event":
         selected = _event_selection(ordered, candidates, budget)
+    elif mode == "keyframe":
+        threshold = (
+            PHASH_DEFAULT_DISTANCE if dedupe_phash_distance is None else dedupe_phash_distance
+        )
+        selected = _keyframe_selection(
+            ordered,
+            budget,
+            mad_threshold=mad_threshold,
+            phash_threshold=threshold,
+            periodic_anchor_seconds=periodic_anchor_seconds,
+        )
+    else:
+        raise ValueError(f"invalid mode {mode!r}; expected one of: {', '.join(_VALID_MODES)}")
 
     logger.debug(
         "select_frames: mode=%s budget=%d frames_in=%d frames_out=%d "

@@ -58,8 +58,10 @@ class SampleRequest(BaseModel):
     max_frames: int = Field(default=120, ge=1)
     max_edge: int | None = Field(default=640, ge=1)
     jpeg_quality: int = Field(default=85, ge=1, le=100)
-    mode: Literal["uniform", "dedupe", "event"] = "uniform"
+    mode: Literal["uniform", "dedupe", "event", "keyframe"] = "uniform"
     dedupe_phash_distance: int | None = Field(default=None, ge=0)
+    mad_threshold: float = Field(default=1.0, ge=0)
+    periodic_anchor_seconds: float = Field(default=8.0, ge=0)
     window_pre_seconds: float = Field(default=5.0, ge=0)
     window_post_seconds: float = Field(default=10.0, ge=0)
     max_event_windows: int = Field(default=4, ge=1)
@@ -142,6 +144,8 @@ def sample(request: SampleRequest) -> SampleResponse:
             min_frames=request.min_frames,
             mode=request.mode,
             dedupe_phash_distance=request.dedupe_phash_distance,
+            mad_threshold=request.mad_threshold,
+            periodic_anchor_seconds=request.periodic_anchor_seconds,
         )
     except FrameSelectionError as exc:
         logger.warning("Frame selection rejected for %s: %s", request.video_path, exc)

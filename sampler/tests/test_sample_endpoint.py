@@ -144,6 +144,8 @@ def _payload(path: Path, **overrides: object) -> dict[str, object]:
         "jpeg_quality": 85,
         "mode": "uniform",
         "dedupe_phash_distance": None,
+        "mad_threshold": 1.0,
+        "periodic_anchor_seconds": 8.0,
         "window_pre_seconds": 5.0,
         "window_post_seconds": 10.0,
         "max_event_windows": 4,
@@ -360,6 +362,42 @@ def test_sample_event_mode_selects_frames_near_scene_cut(
 # ---------------------------------------------------------------------------
 # Budget enforcement
 # ---------------------------------------------------------------------------
+
+
+def test_sample_keyframe_mode_200(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """keyframe mode over the black->white scene cut: exact budget, ascending
+    unique timestamps, unchanged FrameOut shape."""
+    root = tmp_path / "allowed"
+    root.mkdir()
+    video = _make_scene_cut(root / "cut.mp4")
+    monkeypatch.setenv("SAMPLER_ALLOWED_ROOTS", str(root))
+
+    with TestClient(main.app) as client:
+        response = _post(
+            client,
+            _payload(
+                video,
+                mode="keyframe",
+                max_frames=10,
+                mad_threshold=1.0,
+                periodic_anchor_seconds=4.0,
+            ),
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"frames", "elapsed_ms"}
+    assert "candidates" not in body
+
+    frames = body["frames"]
+    assert len(frames) == 10
+    times = [frame["t_seconds"] for frame in frames]
+    assert times == sorted(set(times))
+    for frame in frames:
+        assert set(frame.keys()) == {"t_seconds", "jpeg_base64"}
+        jpeg = base64.b64decode(frame["jpeg_base64"])
+        assert jpeg[:2] == b"\xff\xd8", "jpeg_base64 must decode to JPEG bytes"
+    # The white half of the clip (the scene change region) must be represented.
+    assert any(t >= 10.0 for t in times)
 
 
 def test_sample_max_frames_budget_respected(
