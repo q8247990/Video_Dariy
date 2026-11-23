@@ -50,7 +50,7 @@ from src.models.daily_summary import DailySummary
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
 from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
-from src.services.dispatch.outbox import flush_task_deliveries
+from src.services.dispatch.outbox import DeliveryIntent, flush_task_deliveries
 
 pytestmark = pytest.mark.postgres
 
@@ -409,8 +409,11 @@ def test_publish_round_trip_then_delivery_flush(
         )
         db.commit()
         expected_event_ids = {str(eid) for eid in outcome.webhook_event_ids}
-        deliveries = db.query(TaskDelivery).all()
-        assert len(deliveries) == 2
+        recorded_task_log_ids = [int(row.task_log_id) for row in db.query(TaskDelivery).all()]
+        assert len(recorded_task_log_ids) == 2
+        deliveries = [
+            DeliveryIntent(task_log_id=task_log_id) for task_log_id in recorded_task_log_ids
+        ]
         with patch("src.core.celery_app.celery_app.send_task", side_effect=_record_send):
             assert flush_task_deliveries(db, deliveries) == 2
     finally:
