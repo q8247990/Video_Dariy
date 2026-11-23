@@ -377,6 +377,7 @@
     "frame_policy_mode_uniform": "uniform（均匀抽帧）",
     "frame_policy_mode_dedupe": "dedupe（相似帧去重）",
     "frame_policy_mode_event": "event（事件感知，默认）",
+    "frame_policy_mode_keyframe": "关键帧（变化点）",
     "frame_policy_target_context_ratio": "上下文占比",
     "frame_policy_max_edge": "最大边长",
     "frame_policy_probe_fps": "探测帧率(FPS)",

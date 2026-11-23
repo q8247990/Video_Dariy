@@ -377,6 +377,7 @@
     "frame_policy_mode_uniform": "uniform (even sampling)",
     "frame_policy_mode_dedupe": "dedupe (drop similar frames)",
     "frame_policy_mode_event": "event (event-aware, default)",
+    "frame_policy_mode_keyframe": "Keyframe (change points)",
     "frame_policy_target_context_ratio": "Context ratio",
     "frame_policy_max_edge": "Max edge",
     "frame_policy_probe_fps": "Probe FPS",

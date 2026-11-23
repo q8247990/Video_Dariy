@@ -21,6 +21,17 @@ describe('framePolicy 模式默认值填充', () => {
     expect(draft.target_context_ratio).toBe('')
   })
 
+  it('keyframe 模式只填充其提供的默认键', () => {
+    const draft = applyMode(emptyFramePolicyDraft(), 'keyframe')
+    expect(draft.mode).toBe('keyframe')
+    expect(draft.probe_fps).toBe('2.0')
+    expect(draft.max_frames).toBe('48')
+    expect(draft.dedupe_phash_distance).toBe('6')
+    expect(draft.min_frames).toBe('')
+    expect(draft.max_edge).toBe('')
+    expect(draft.target_context_ratio).toBe('')
+  })
+
   it('uniform / event 模式不填充任何默认键', () => {
     for (const mode of ['uniform', 'event'] as const) {
       const draft = applyMode(emptyFramePolicyDraft(), mode)
@@ -59,6 +70,14 @@ describe('framePolicy 旧 preset 键映射', () => {
   it('mode 键优先于旧 preset 键', () => {
     const draft = draftFromExtraConfig({ mode: 'uniform', preset: 'dedupe' })
     expect(draft.mode).toBe('uniform')
+  })
+
+  it('已知 mode 白名单（uniform / dedupe / event / keyframe）读取与序列化往返不降级', () => {
+    for (const mode of ['uniform', 'dedupe', 'event', 'keyframe'] as const) {
+      const draft = draftFromExtraConfig({ mode, enabled: true })
+      expect(draft.mode).toBe(mode)
+      expect(buildFrameSamplingExtraConfig(draft)?.mode).toBe(mode)
+    }
   })
 
   it('mode / preset 均缺失或未知时回落到 event', () => {

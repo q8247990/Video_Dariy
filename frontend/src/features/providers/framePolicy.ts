@@ -6,7 +6,7 @@
 //   jpeg_quality / dedupe_phash_distance / window_pre_seconds / window_post_seconds /
 //   max_event_windows / max_output_tokens / enabled
 //
-// 模式（uniform / dedupe / event）只提供默认值包，显式填写的键优先（与后端一致）。
+// 模式（uniform / dedupe / event / keyframe）只提供默认值包，显式填写的键优先（与后端一致）。
 // 旧配置使用 `preset` 键（baseline / dedupe / event）：读取时映射到对应模式
 // （baseline→uniform）以便展示；序列化时只写 `mode` 键，旧 `preset` 键不再回写。
 // 帧数 / token 预览不再在前端估算（公式以后端为准）：预览只显示「测试连接」
@@ -15,7 +15,7 @@
 // 序列化沿用仓库既有 parseInt 纪律：解析 -> 校验 -> 非法 / 超范围值直接省略（不写出）；
 // dedupe_phash_distance 空串写 null（表示不去重）。未知键（unknown）原样保留，保证往返。
 
-export type FrameMode = 'uniform' | 'dedupe' | 'event'
+export type FrameMode = 'uniform' | 'dedupe' | 'event' | 'keyframe'
 
 /** 旧 `preset` 键取值到 `mode` 的展示映射（baseline 即均匀抽帧参考基线）。 */
 const LEGACY_PRESET_TO_MODE: Record<string, FrameMode> = {
@@ -67,6 +67,7 @@ export const FRAME_MODE_DEFAULTS: Record<FrameMode, Partial<Record<FramePolicyNu
   uniform: {},
   dedupe: { dedupe_phash_distance: '6', probe_fps: '1.0', max_frames: '60' },
   event: {},
+  keyframe: { probe_fps: '2.0', max_frames: '48', dedupe_phash_distance: '6' },
 }
 
 const FRAME_POLICY_NUMERIC_KEYS: readonly FramePolicyNumericKey[] = [
@@ -121,7 +122,7 @@ function readDraftValue(value: unknown): string {
 /** 解析已存储配置的 mode：优先 `mode` 键，回退旧 `preset` 键映射，均缺失 / 未知回落到 'event'。 */
 function readMode(extra: Record<string, unknown>): FrameMode {
   const mode = extra.mode
-  if (mode === 'uniform' || mode === 'dedupe' || mode === 'event') {
+  if (mode === 'uniform' || mode === 'dedupe' || mode === 'event' || mode === 'keyframe') {
     return mode
   }
   const preset = extra.preset

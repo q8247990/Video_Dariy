@@ -412,6 +412,7 @@ export function ProviderForm({ initialValue, pending, onCancel, onSubmit }: Prov
               <option value="uniform">{t('providers.frame_policy_mode_uniform')}</option>
               <option value="dedupe">{t('providers.frame_policy_mode_dedupe')}</option>
               <option value="event">{t('providers.frame_policy_mode_event')}</option>
+              <option value="keyframe">{t('providers.frame_policy_mode_keyframe')}</option>
             </select>
           </label>
 
