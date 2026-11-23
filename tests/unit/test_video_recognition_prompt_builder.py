@@ -12,6 +12,9 @@ def test_build_strategy_note_for_xiaomi_nas() -> None:
 
     assert "变化触发型存储片段" in note
     assert "语义归纳" in note
+    assert "空 events" in note
+    assert "no_significant_event" in note
+    assert "不要因短暂静止忽略整段价值" not in note
 
 
 def test_build_video_recognition_prompt_contains_four_layers() -> None:

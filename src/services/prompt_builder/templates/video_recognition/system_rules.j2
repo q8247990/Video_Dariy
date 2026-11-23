@@ -16,19 +16,21 @@
 8. 输出约束：仅输出 JSON 对象，不要输出额外文字。
 9. 干扰排除：注意电视反光、玻璃反射、走廊远处小目标等误判风险。
 10. 语言统一：所有自然语言字段（title、summary、detail、summary_text、main_subjects、observed_actions、interpreted_state、display_name、analysis_notes.note）一律使用简体中文；禁止英文单词、英文枚举名与拼音。
-11. 取值规范：observed_actions 只填可观察的中文动作短词（如“站立”“走动”“嗅探”），interpreted_state 只填可观察的中文状态短词（如“静止”“警觉”“在场”），二者不得输出英文 token。
+11. 取值规范：observed_actions 只填可观察的中文动作短词（如“站立”“走动”“嗅探”），interpreted_state 只填可观察的中文状态短词（如“在场”“警觉”“靠近”），二者不得输出英文 token。
 12. 名称规范：display_name 必须是可读中文称谓（成员用档案名或“爸爸/妈妈”等角色名，宠物用档案名或“猫/狗”等，陌生人用“陌生人”“未识别人员”），禁止输出 unknown_person、unknown_pet、unknown、suspected_cat 等英文占位符，也不要添加“疑似”前缀。
 13. 档案匹配：matched_profile_name 仅当对象与家庭档案中某个姓名一致时填写，且必须与档案中文姓名逐字相同；禁止拼音、英文翻译或别名（如 Feifei、Mom、Lizi）。无法逐字匹配时填 null。
 14. 关注项打标：若事件命中家庭关注项，将其 key 填入 focus_matches；只能使用家庭上下文列出的 key，无匹配时填 []，禁止自造 key。
+15. 变化判定：比较相邻帧/连续画面中主体的位置、姿态、数量与进出；只有出现可观察变化时才生成事件。若主体在本段内首次出现/离开，或姿态发生明显变化（如站立→趴卧），仍应记录对应事件；整段无任何可观察变化时，events 必须为空数组，并在 analysis_notes 中以 no_significant_event 说明，禁止为了填满示例结构而编造事件。
+16. 摘要规范：summary_text 只客观陈述可观察事实（谁、在哪、做了什么或处于什么状态），不要写氛围、情绪或叙事性描写；无实质变化时写“画面无明显变化”。
 {% if input_mode == "image" %}
-15. 事件数量上限：每个文件最多输出 8 个事件；候选事件超过 8 个时按重要性取舍，被舍弃的事件在 analysis_notes 中以 no_significant_event 说明。
+17. 事件数量上限：每个文件最多输出 8 个事件；候选事件超过 8 个时按重要性取舍，被舍弃的事件在 analysis_notes 中以 no_significant_event 说明。
 {% endif %}
 
 输出 schema（示例仅示范字段格式与中文写法，实际内容按视频填写；字段结构必须严格遵守）:
 {
   "session_summary": {
-    "summary_text": "客厅内一名成员在厨房区域停留整理物品，随后离开。",
-    "activity_level": "low",
+    "summary_text": "客厅内一名成员在厨房区域整理物品，随后离开。",
+    "activity_level": "medium",
     "main_subjects": ["妈妈"]
   },
   "events": [
@@ -36,8 +38,8 @@
       "offset_start_sec": 0,
       "offset_end_sec": 12,
       "event_type": "member_stay",
-      "title": "妈妈在厨房区域停留",
-      "summary": "妈妈在画面右侧厨房区域停留，整理物品。",
+      "title": "妈妈在厨房区域整理物品",
+      "summary": "妈妈在画面右侧厨房区域整理物品。",
       "detail": "画面右侧，一名女性（妈妈）站在冰箱和橱柜前，大部分时间保持站立，偶尔有手部动作。",
       "related_entities": [
         {
@@ -49,10 +51,21 @@
         }
       ],
       "observed_actions": ["站立", "整理物品"],
-      "interpreted_state": ["静止"],
+      "interpreted_state": ["在场"],
       "focus_matches": ["member_inout"],
       "confidence": 0.9
     }
   ],
   "analysis_notes": [{"type": "identity_uncertain", "note": "距离较远，无法确认身份。"}]
+}
+
+空结果示例（整段无实质变化时；events 必须为空，不要编造事件）:
+{
+  "session_summary": {
+    "summary_text": "画面无明显变化。",
+    "activity_level": "low",
+    "main_subjects": []
+  },
+  "events": [],
+  "analysis_notes": [{"type": "no_significant_event", "note": "相邻帧中主体的位置、姿态与数量无明显变化。"}]
 }

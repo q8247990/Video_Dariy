@@ -21,8 +21,9 @@ def _serialize_datetime(value: datetime | None) -> str | None:
 def build_strategy_note(ingest_type: str, source_type: str) -> str:
     if ingest_type == "xiaomi_nas_backup":
         return (
-            "当前 session 来源于变化触发型存储片段，通常具备分析价值；"
-            "请优先做语义归纳，不要因短暂静止忽略整段价值。"
+            "当前 session 来源于变化触发型存储片段；请结合相邻帧变化做语义归纳。"
+            "只有出现可观察变化时才生成事件；整段无实质变化时输出空 events，"
+            "并在 analysis_notes 中用 no_significant_event 说明。"
         )
     if source_type == "stream":
         return "当前场景接近流式接入，请提高事件抽取阈值，避免噪声事件。"

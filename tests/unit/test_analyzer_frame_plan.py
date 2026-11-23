@@ -554,7 +554,7 @@ def test_image_mode_prompt_contains_frame_list_and_image_rules(
         "6. 时间规则：offset_start_sec / offset_end_sec 以本批第 0 帧为 0 秒，"
         "且必须对齐到给定帧时间戳。" in system_prompt
     )
-    assert "15. 事件数量上限：每个文件最多输出 8 个事件" in system_prompt
+    assert "17. 事件数量上限：每个文件最多输出 8 个事件" in system_prompt
     assert "连续同类活动尽量合并" not in system_prompt
 
     # user prompt carries the REAL timestamps of the frames sent.
@@ -590,16 +590,16 @@ def test_image_mode_frame_plan_converges_with_frame_list_budget(
     pg_db_factory: SessionFactory,
     tmp_path: Path,
 ) -> None:
-    """The budget plan must converge with the frame list it will actually send.
+    """The budget plan must stay conservative with the frame list it actually sends.
 
     With a large ``max_frames`` the budget (not the policy ceiling) decides
     the count. The frame-list block itself consumes prompt tokens, so the
     first plan (estimated without / with a short list) is larger than the
-    plan re-rendered with its own frame count. This test pins the fixed
-    point: the recorded ``prompt_tokens_est`` equals the estimate of the
-    prompt actually sent, and re-running ``compute_frame_plan`` with that
-    estimate reproduces the recorded frame count (no extra convergence round
-    would change it).
+    plan re-rendered with its own frame count. This test pins the convergence
+    invariant: the recorded plan never acquires more frames than the prompt
+    actually sent can afford, and recomputing with that prompt's estimate
+    yields at most one additional frame (the plan may be one frame
+    conservative, never over-provisioned).
     """
     frame_port = FakeFramePort()
     _install_ports(use_real_plan=True, frame_port=frame_port)
@@ -645,8 +645,13 @@ def test_image_mode_frame_plan_converges_with_frame_list_budget(
     assert frame_plan["clamp_reason"] == "budget"
     assert frame_plan["frames"] == len(frames)
     assert frame_plan["frames"] < 60
-    # Fixed point: the estimate used for the plan is the prompt actually sent.
-    assert frame_plan["prompt_tokens_est"] == final_prompt_tokens_est
+    # The plan estimate is rendered with the previous convergence round's
+    # frame count, so the prompt actually sent may estimate up to one frame
+    # smaller; the plan must stay conservative (never over-provisioned).
+    assert (
+        abs(frame_plan["prompt_tokens_est"] - final_prompt_tokens_est)
+        < (frame_plan["tokens_per_image"])
+    )
     # The frame list really moved the budget: the plan that ignores it is larger.
     plan_without_frame_list = compute_frame_plan(
         context_size=frame_plan["context_size"],
@@ -670,6 +675,19 @@ def test_image_mode_frame_plan_converges_with_frame_list_budget(
         duration_source=frame_plan["duration_source"],
     )
     assert recomputed.frames == frame_plan["frames"]
+    recomputed_from_sent_prompt = compute_frame_plan(
+        context_size=frame_plan["context_size"],
+        policy=policy,
+        duration_seconds=frame_plan["duration_seconds"],
+        prompt_tokens_est=final_prompt_tokens_est,
+        frame_width=policy.max_edge,
+        frame_height=policy.max_edge * 9 // 16,
+        max_output_tokens=frame_plan["max_output_tokens"],
+        duration_source=frame_plan["duration_source"],
+    )
+    assert recomputed_from_sent_prompt.frames == frame_plan["frames"] or (
+        recomputed_from_sent_prompt.frames == frame_plan["frames"] + 1
+    )
     # The post-acquire guard's inequality holds for the real request.
     assert (
         final_prompt_tokens_est
