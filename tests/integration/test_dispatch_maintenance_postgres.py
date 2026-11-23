@@ -412,6 +412,54 @@ def test_revoke_failure_does_not_corrupt_lease_state(
 
 
 # ===========================================================================
+# Maintenance — unleased analyzer backlog (C-plan)
+# ===========================================================================
+
+
+def test_unleased_pending_analysis_is_not_age_recovered(
+    postgres_migrated_engine: Engine,
+) -> None:
+    """A queued analyzer row is never re-dispatched on wall-clock age alone.
+
+    C-plan decision: a PENDING analyzer with no lease may still be a broker
+    message waiting behind the single-concurrency vision queue, so the
+    heartbeat must not mark it TIMEOUT nor dispatch a duplicate.
+    """
+    now = datetime.now(timezone.utc)
+    with Session(postgres_migrated_engine) as db:
+        row = TaskLog(
+            task_type=TaskType.SESSION_ANALYSIS,
+            task_target_id=901,
+            status=TaskStatus.PENDING,
+            detail_json={"priority": "full"},
+            queue_task_id=f"queued-analysis-{int(now.timestamp() * 1000)}",
+        )
+        row.created_at = now - timedelta(hours=2)
+        db.add(row)
+        db.commit()
+        row_id = row.id
+
+    with Session(postgres_migrated_engine) as db:
+        assert recover_unleased_pending_tasks(db, now) == 0
+        db.commit()
+
+    with Session(postgres_migrated_engine) as db:
+        refreshed = db.query(TaskLog).filter(TaskLog.id == row_id).one()
+        assert refreshed.status == TaskStatus.PENDING
+        assert refreshed.recovery_attempt == 0
+        assert refreshed.finished_at is None
+        sibling_count = (
+            db.query(TaskLog)
+            .filter(
+                TaskLog.task_type == TaskType.SESSION_ANALYSIS,
+                TaskLog.task_target_id == 901,
+            )
+            .count()
+        )
+        assert sibling_count == 1
+
+
+# ===========================================================================
 # Maintenance — orphan recovery atomic dispatch
 # ===========================================================================
 

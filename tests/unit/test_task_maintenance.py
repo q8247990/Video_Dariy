@@ -196,7 +196,7 @@ def test_unleased_analysis_within_vision_grace_is_not_touched(
         db.close()
 
 
-def test_unleased_analysis_past_grace_is_requeued(
+def test_unleased_analysis_past_grace_is_not_requeued(
     pg_db_factory: SessionFactory,
 ) -> None:
     session_factory = pg_db_factory
@@ -236,11 +236,14 @@ def test_unleased_analysis_past_grace_is_requeued(
         count = recover_orphan_pending_tasks(db, now, dispatcher=dispatcher)
         db.commit()
 
-        assert count == 1
-        assert [item.session_id for item in dispatcher.dispatched_analyze_session] == [session.id]
+        # C-plan: a queued analyzer row may still sit in the broker queue, so
+        # wall-clock age alone must never time it out nor re-dispatch it.
+        assert count == 0
+        assert dispatcher.dispatched_analyze_session == []
         db.refresh(pending)
-        assert pending.status == TaskStatus.TIMEOUT
-        assert pending.recovery_attempt == 1
+        assert pending.status == TaskStatus.PENDING
+        assert pending.recovery_attempt == 0
+        assert pending.finished_at is None
         assert recover_orphan_pending_tasks(db, now, dispatcher=dispatcher) == 0
     finally:
         db.close()

@@ -11,9 +11,13 @@ The two policies:
 * :func:`recover_unleased_pending_tasks` — sweep PENDING rows whose
   ``lease_expires_at IS NULL`` (no worker ever leased them) and whose
   ``created_at`` is older than
-  ``PENDING_UNLEASED_TIMEOUT_SECONDS``; the analyzer task type is
-  excluded (its dedicated queue may legitimately hold pending rows
-  for long stretches on the single-concurrency vision worker).
+  ``PENDING_UNLEASED_TIMEOUT_SECONDS``; **analyzer rows are never
+  touched here**. A pending analyzer row is indistinguishable from a
+  broker message still sitting in the single-concurrency vision queue,
+  so wall-clock age is not evidence of message loss. Age alone never
+  re-dispatches analysis work; stale rows are surfaced by
+  :func:`src.db.metrics.pending_backlog_metrics` for operator action
+  (manual ``POST /api/v1/tasks/analyze/{session_id}``).
 * :func:`recover_orphan_pending_tasks` — sweep PENDING rows whose
   lease *did* expire (the worker held a lease, then crashed); the
   analyzer lease-expiry path delegates to
@@ -59,27 +63,28 @@ def _as_utc(value: datetime) -> datetime:
 def recover_unleased_pending_tasks(
     db: Session,
     now: datetime,
-    *,
-    dispatcher: TaskDispatcherPort | None = None,
 ) -> int:
-    """Time out PENDING tasks that were never leased by any worker.
+    """Time out non-analysis PENDING tasks that were never leased by a worker.
 
-    Covers broker message loss / worker outage. Without this, such a
-    task stays pending forever and, for session builds, keeps
-    deferring hot scans.
+    Covers broker message loss / worker outage for the low-latency
+    queues. Without this, such a task stays pending forever and, for
+    session builds, keeps deferring hot scans.
 
-    Analysis tasks get a longer grace
-    (``ANALYSIS_PENDING_GRACE_SECONDS``) because the single-concurrency
-    vision queue legitimately holds PENDING rows for a long time. Once
-    that grace also elapses the broker message is gone — Redis without
-    AOF, or a ``publish`` racing a flush — and the row would otherwise
-    stay pending forever, so it is re-queued through
-    :func:`~src.services.maintenance.analysis_recovery.resume_lost_analysis`
-    instead of being timed out.
+    **Analysis rows are deliberately excluded** (C-plan decision): a
+    pending analyzer row with ``lease_expires_at IS NULL`` may simply
+    be a broker message still waiting behind a long backlog on the
+    single-concurrency vision worker. Age is not proof that the
+    message was lost, so re-dispatching on age would duplicate the
+    still-queued work. Published-but-lost messages are accepted as an
+    outage case (Redis is AOF-backed); stale pending rows are exposed
+    via :func:`src.db.metrics.pending_backlog_metrics` and recovered
+    by an operator, or by the lease-based policies once a worker has
+    actually taken the task.
 
-    The broker-side revoke (``celery_app.control.revoke``) is issued
-    when ``queue_task_id`` is set so a late broker delivery cannot
-    re-bind and resurrect the timed-out row via
+    For the remaining task types the broker-side revoke
+    (``celery_app.control.revoke``) is issued when ``queue_task_id``
+    is set so a late broker delivery cannot re-bind and resurrect the
+    timed-out row via
     :func:`src.services.dispatch.worker_bind.bind_or_create_running_task_log`'s
     queue_task_id path.
 
@@ -97,16 +102,14 @@ def recover_unleased_pending_tasks(
         .with_for_update()
         .all()
     )
-    analysis_stale_before = now - timedelta(seconds=settings.ANALYSIS_PENDING_GRACE_SECONDS)
 
     recovered = 0
     for item in pending_tasks:
         if item.cancel_requested:
             continue
         if item.task_type == TaskType.SESSION_ANALYSIS:
-            if dispatcher is not None and _as_utc(item.created_at) <= analysis_stale_before:
-                if resume_lost_analysis(db, item, now, dispatcher=dispatcher):
-                    recovered += 1
+            # Never age-recover a queued analyzer: the message may still
+            # be in the broker. Surface it via /metrics instead.
             continue
         if item.queue_task_id:
             try:
@@ -138,7 +141,8 @@ def recover_orphan_pending_tasks(
     Sweeps the two disjoint PENDING populations:
 
     * never-leased (``lease_expires_at IS NULL``) — delegates to
-      :func:`recover_unleased_pending_tasks`.
+      :func:`recover_unleased_pending_tasks` (which skips analyzer
+      rows: they may still be queued).
     * lease-expired (``lease_expires_at <= now``) — the analyzer
       branch delegates to
       :func:`~src.services.maintenance.analysis_recovery.resume_lost_analysis`,
@@ -148,7 +152,7 @@ def recover_orphan_pending_tasks(
     terminal status in this call (the heartbeat aggregator reports
     it as ``pending_recovered``).
     """
-    recovered = recover_unleased_pending_tasks(db, now, dispatcher=dispatcher)
+    recovered = recover_unleased_pending_tasks(db, now)
     stale_before = now - timedelta(seconds=settings.ANALYSIS_PENDING_GRACE_SECONDS)
     pending_tasks = (
         db.query(TaskLog)
