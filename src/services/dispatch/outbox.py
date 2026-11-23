@@ -7,6 +7,13 @@ broker ``task_id`` to ``TaskLog.queue_task_id``. After the caller commits,
 retries rows whose last attempt failed via
 :func:`retry_failed_deliveries`.
 
+Pending intents are collected as :class:`DeliveryIntent` handles (just the
+``task_log_id``), not as ORM instances: a ``TaskDelivery`` is bound to the
+session that recorded it, and task handlers routinely commit and close that
+session before flushing in a fresh one. The flush re-loads each intent row
+from the session it is given, so a collected handle stays valid across the
+session boundary.
+
 Delivery semantics stay **at-least-once**: a crash between commit and
 ``send_task`` leaves the intent row behind, and the retry sweep re-sends it
 with the same ``task_id`` so the consumer-side
@@ -17,9 +24,10 @@ duplicate.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -47,12 +55,28 @@ RETIRED_OUTBOX_TASK_NAMES = frozenset(
 )
 
 
-_PENDING: "ContextVar[list[TaskDelivery] | None]" = ContextVar("pending_deliveries", default=None)
+@dataclass(frozen=True, slots=True)
+class DeliveryIntent:
+    """Session-independent handle for an intent staged in the caller's tx.
+
+    ``record_delivery`` binds the ``TaskDelivery`` row to the session that
+    recorded it. A handler that commits and closes that session before
+    flushing must not touch the instance (commit expires it and ``close``
+    detaches it, so attribute access raises ``DetachedInstanceError``). The
+    handle keeps only the unique ``task_log_id`` so
+    :func:`flush_task_deliveries` can re-load the row from whichever session
+    it runs in.
+    """
+
+    task_log_id: int
+
+
+_PENDING: "ContextVar[list[DeliveryIntent] | None]" = ContextVar("pending_deliveries", default=None)
 
 
 @contextmanager
-def _pending_deliveries_impl() -> Iterator[list[TaskDelivery]]:
-    deliveries: list[TaskDelivery] = []
+def _pending_deliveries_impl() -> Iterator[list[DeliveryIntent]]:
+    deliveries: list[DeliveryIntent] = []
     token = _PENDING.set(deliveries)
     try:
         yield deliveries
@@ -60,12 +84,13 @@ def _pending_deliveries_impl() -> Iterator[list[TaskDelivery]]:
         _PENDING.reset(token)
 
 
-def pending_deliveries() -> AbstractContextManager[list[TaskDelivery]]:
-    """Collect the intents recorded inside a ``with`` block.
+def pending_deliveries() -> AbstractContextManager[list[DeliveryIntent]]:
+    """Collect the intent handles recorded inside a ``with`` block.
 
     Used by task handlers: ``with pending_deliveries() as recorded:`` gathers
-    every intent the dispatcher staged during the block so the handler can
-    flush them after its own commit.
+    one session-independent :class:`DeliveryIntent` per intent the dispatcher
+    staged during the block, so the handler can flush them from any session
+    after its own commit.
     """
     return _pending_deliveries_impl()
 
@@ -74,7 +99,7 @@ def track_delivery(delivery: TaskDelivery) -> None:
     """Register ``delivery`` with the active :func:`pending_deliveries` block."""
     active = _PENDING.get()
     if active is not None:
-        active.append(delivery)
+        active.append(DeliveryIntent(task_log_id=int(delivery.task_log_id)))
 
 
 def new_task_id() -> str:
@@ -130,17 +155,34 @@ def _failure_result(delivery: TaskDelivery, exc: Exception) -> bool:
     return False
 
 
-def flush_task_deliveries(db: Session, deliveries: list[TaskDelivery]) -> int:
-    """Send ``deliveries`` and drop the ones that reached the broker.
+def flush_task_deliveries(db: Session, deliveries: Iterable[DeliveryIntent]) -> int:
+    """Send ``deliveries`` and drop the intent rows the broker accepted.
 
-    Call **after** the caller committed the surrounding transaction. Returns
-    the number of intents the broker accepted; the failures stay in
-    ``task_delivery`` for :func:`retry_failed_deliveries`.
+    Call **after** the caller committed the surrounding transaction. Each
+    intent is re-loaded from ``db`` by ``task_log_id`` (``FOR UPDATE SKIP
+    LOCKED``, matching :func:`retry_failed_deliveries`), so a handle recorded
+    in an already closed session stays usable and a concurrent heartbeat
+    sweep is never raced into a stale delete. An intent whose row is already
+    gone (published by the sweep, or rolled back with its transaction) is
+    skipped. Returns the number of intents the broker accepted; the failures
+    stay in ``task_delivery`` for :func:`retry_failed_deliveries`.
     """
-    if not deliveries:
+    pending = list(deliveries)
+    if not pending:
         return 0
     sent = 0
-    for delivery in deliveries:
+    for intent in pending:
+        delivery = (
+            db.execute(
+                select(TaskDelivery)
+                .where(TaskDelivery.task_log_id == intent.task_log_id)
+                .with_for_update(skip_locked=True)
+            )
+            .scalars()
+            .one_or_none()
+        )
+        if delivery is None:
+            continue
         task_log = db.get(TaskLog, delivery.task_log_id)
         task_id = str(task_log.queue_task_id) if task_log is not None else None
         if task_id is None:
@@ -278,6 +320,7 @@ def as_uuid(value: str) -> UUID:
 
 
 __all__ = [
+    "DeliveryIntent",
     "MAX_DELIVERY_ATTEMPTS",
     "RETIRED_OUTBOX_TASK_NAMES",
     "TaskCommand",

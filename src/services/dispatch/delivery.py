@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from src.services.dispatch.outbox import (
     MAX_DELIVERY_ATTEMPTS,
+    DeliveryIntent,
     flush_task_deliveries,
     new_task_id,
     record_delivery,
@@ -21,6 +22,7 @@ from src.services.dispatch.outbox import (
 )
 
 __all__ = [
+    "DeliveryIntent",
     "MAX_DELIVERY_ATTEMPTS",
     "flush_task_deliveries",
     "new_task_id",
