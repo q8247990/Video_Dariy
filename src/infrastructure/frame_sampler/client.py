@@ -74,7 +74,7 @@ _MAX_ATTEMPTS: Final[int] = 3
 _RETRY_BACKOFF_SECONDS: Final[tuple[float, ...]] = (0.2, 0.4)
 
 #: Sampler sampling modes accepted in the request body (frozen contract).
-_VALID_MODES: Final[tuple[str, ...]] = ("uniform", "dedupe", "event")
+_VALID_MODES: Final[tuple[str, ...]] = ("uniform", "dedupe", "event", "keyframe")
 
 #: Sampler 4xx detail text is surfaced truncated to this many characters.
 _DETAIL_MAX_CHARS: Final[int] = 300
@@ -303,9 +303,17 @@ class FrameSamplerClient:
     ) -> dict[str, Any]:
         """Map ``policy`` + ``plan`` + ``mode`` onto the frozen request contract.
 
+        Request fields: ``video_path`` / ``probe_fps`` / ``min_frames`` /
+        ``max_frames`` / ``max_edge`` / ``jpeg_quality`` / ``mode`` /
+        ``dedupe_phash_distance`` / ``window_pre_seconds`` /
+        ``window_post_seconds`` / ``max_event_windows`` / ``mad_threshold`` /
+        ``periodic_anchor_seconds``.
+
         ``max_frames`` is the budgeted frame count (``plan.frames``); the
         plan's client-side ``timestamps`` are intentionally not sent — the
-        sampler spreads its own samples across the full clip.
+        sampler spreads its own samples across the full clip. The keyframe
+        tunables (``mad_threshold`` / ``periodic_anchor_seconds``) are sent
+        for every mode; the sampler only consults them in ``keyframe`` mode.
         """
         return {
             "video_path": video_path,
@@ -319,6 +327,8 @@ class FrameSamplerClient:
             "window_pre_seconds": policy.window_pre_seconds,
             "window_post_seconds": policy.window_post_seconds,
             "max_event_windows": policy.max_event_windows,
+            "mad_threshold": policy.mad_threshold,
+            "periodic_anchor_seconds": policy.periodic_anchor_seconds,
         }
 
     @staticmethod

@@ -9,7 +9,7 @@ without a schema migration:
     {"frame_sampling": {"mode": "dedupe", "max_edge": 960, "min_frames": 8}}
 
 The ``mode`` key selects the sampling strategy (``uniform`` / ``dedupe`` /
-``event``); the per-mode numeric bundles (:data:`PRESETS`) only supply
+``event`` / ``keyframe``); the per-mode numeric bundles (:data:`PRESETS`) only supply
 *defaults* for the numeric keys — an explicit key always wins, and a key
 missing from both falls back to the built-in default. The legacy ``preset``
 key (``baseline`` / ``dedupe`` / ``event``) is still accepted and mapped to
@@ -22,7 +22,7 @@ A clamped/ignored value is always logged via ``logging``.
 Numeric bounds (clamped; ``max_edge`` additionally snapped down to a
 multiple of 32) and their built-in defaults:
 
-- ``mode``: ``uniform`` / ``dedupe`` / ``event`` (default ``event``)
+- ``mode``: ``uniform`` / ``dedupe`` / ``event`` / ``keyframe`` (default ``event``)
 - ``target_context_ratio``: ``[0.5, 1.0]`` (default ``0.9``)
 - ``max_edge``: ``[320, 2560]`` (default ``2560``)
 - ``probe_fps``: ``[0.25, 10.0]`` (default ``2.0``)
@@ -33,6 +33,8 @@ multiple of 32) and their built-in defaults:
 - ``window_pre_seconds``: ``[0.0, 60.0]`` (default ``5.0``)
 - ``window_post_seconds``: ``[0.0, 120.0]`` (default ``10.0``)
 - ``max_event_windows``: ``[1, 10]`` (default ``4``)
+- ``mad_threshold``: ``[0.0, 50.0]`` (default ``1.0``; keyframe-mode MAD gate)
+- ``periodic_anchor_seconds``: ``[0.0, 60.0]`` (default ``8.0``; keyframe periodic anchor)
 - ``max_output_tokens``: positive int (default ``2048``)
 - ``enabled``: strict bool (default ``True``)
 
@@ -56,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 FRAME_SAMPLING_KEY = "frame_sampling"
 
-SamplingMode = Literal["uniform", "dedupe", "event"]
+SamplingMode = Literal["uniform", "dedupe", "event", "keyframe"]
 
 DEFAULT_MODE: Final[SamplingMode] = "event"
 
@@ -69,6 +71,14 @@ PRESETS: Final[dict[str, dict[str, object]]] = {
     # pHash dedupe enabled, lower probe rate and smaller frame budget.
     "dedupe": {"dedupe_phash_distance": 6, "probe_fps": 1.0, "max_frames": 60},
     "event": {},
+    # MAD/periodic-anchor keyframe selection with its two tunables bundled.
+    "keyframe": {
+        "probe_fps": 2.0,
+        "max_frames": 48,
+        "dedupe_phash_distance": 6,
+        "mad_threshold": 1.0,
+        "periodic_anchor_seconds": 8.0,
+    },
 }
 
 #: Legacy ``preset`` key values mapped to their sampling mode.
@@ -100,6 +110,8 @@ class FramePolicy:
     max_event_windows: int = 4
     max_output_tokens: int = 2048
     enabled: bool = True
+    mad_threshold: float = 1.0
+    periodic_anchor_seconds: float = 8.0
 
 
 _BUILTIN: FramePolicy = FramePolicy()
@@ -412,6 +424,20 @@ def parse_frame_policy(provider: Any) -> FramePolicy:
             low=1,
             high=10,
             default=_BUILTIN.max_event_windows,
+        ),
+        mad_threshold=_bounded_float(
+            "mad_threshold",
+            pick("mad_threshold"),
+            low=0.0,
+            high=50.0,
+            default=_BUILTIN.mad_threshold,
+        ),
+        periodic_anchor_seconds=_bounded_float(
+            "periodic_anchor_seconds",
+            pick("periodic_anchor_seconds"),
+            low=0.0,
+            high=60.0,
+            default=_BUILTIN.periodic_anchor_seconds,
         ),
         max_output_tokens=_resolve_max_output_tokens(pick),
         enabled=_resolve_enabled(pick),

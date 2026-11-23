@@ -4,6 +4,8 @@ Covers the frozen sampler contract end-to-end against an in-process
 ``httpx.MockTransport`` (no network):
 
 - the exact request body mapping from ``FramePolicy`` / ``FramePlan`` / mode;
+- mode validation (all four contract modes accepted, unknown modes rejected
+  with ``ValueError`` and zero HTTP calls);
 - retry semantics (5xx / connect / timeout retried twice, deterministic
   backoff, ``attempts`` recorded);
 - 4xx handling (never retried, sampler ``detail`` surfaced, truncated);
@@ -77,6 +79,8 @@ def _policy(**overrides: Any) -> FramePolicy:
         "max_event_windows": 4,
         "max_output_tokens": 2048,
         "enabled": True,
+        "mad_threshold": 1.0,
+        "periodic_anchor_seconds": 8.0,
     }
     base.update(overrides)
     return FramePolicy(**base)
@@ -187,6 +191,8 @@ def test_success_request_body_matches_contract_exactly() -> None:
         "window_pre_seconds": 5.0,
         "window_post_seconds": 10.0,
         "max_event_windows": 4,
+        "mad_threshold": 1.0,
+        "periodic_anchor_seconds": 8.0,
     }
     assert result.elapsed_ms == 123
 
@@ -259,6 +265,71 @@ def test_legacy_payload_keys_candidates_and_duration_are_ignored() -> None:
     assert result.elapsed_ms == 123
     assert not hasattr(result, "candidates")
     assert not hasattr(result, "duration_seconds")
+
+
+# ---------------------------------------------------------------------------
+# Mode contract
+# ---------------------------------------------------------------------------
+
+
+def test_keyframe_mode_is_accepted_in_request_body() -> None:
+    """``keyframe`` is a valid contract mode and carries its two tunables."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_payload())
+
+    client, recorder = _client(handler)
+    result = client.sample(
+        video_path="/abs/path.mp4",
+        policy=_policy(
+            mode="keyframe",
+            dedupe_phash_distance=6,
+            mad_threshold=2.0,
+            periodic_anchor_seconds=12.0,
+        ),
+        plan=_plan(frames=10),
+        mode="keyframe",
+    )
+
+    assert recorder.count == 1
+    body = recorder.requests[0]["body"]
+    assert body["mode"] == "keyframe"
+    assert body["mad_threshold"] == 2.0
+    assert body["periodic_anchor_seconds"] == 12.0
+    assert result.source == "sampler"
+
+
+def test_two_new_tunables_sent_for_non_keyframe_modes() -> None:
+    """``mad_threshold`` / ``periodic_anchor_seconds`` are sent for every mode."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_payload())
+
+    client, recorder = _client(handler)
+    client.sample(
+        video_path="/abs/path.mp4",
+        policy=_policy(),
+        plan=_plan(frames=8),
+        mode="dedupe",
+    )
+
+    body = recorder.requests[0]["body"]
+    assert body["mad_threshold"] == 1.0
+    assert body["periodic_anchor_seconds"] == 8.0
+
+
+@pytest.mark.parametrize("mode", ["bogus", "", "UNIFORM", "keyframes"])
+def test_unknown_mode_raises_value_error_without_requests(mode: str) -> None:
+    """An unknown mode is a programming error: ValueError, zero HTTP calls."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_payload())
+
+    client, recorder = _client(handler)
+    with pytest.raises(ValueError, match="unknown sampling mode"):
+        client.sample(video_path="/abs/path.mp4", policy=_policy(), plan=_plan(), mode=mode)
+
+    assert recorder.count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +575,7 @@ class _FakeClient:
         ({"frame_sampling": {"mode": "uniform"}}, "uniform"),
         ({"frame_sampling": {"mode": "dedupe"}}, "dedupe"),
         ({"frame_sampling": {"mode": "event"}}, "event"),
+        ({"frame_sampling": {"mode": "keyframe"}}, "keyframe"),
         ({"frame_sampling": {"mode": "nope"}}, "event"),
         # legacy ``preset`` key: mapped to a mode by ``parse_frame_policy``
         ({"frame_sampling": {"preset": "baseline"}}, "uniform"),

@@ -65,6 +65,8 @@ def test_default_value_table() -> None:
     assert policy.max_event_windows == 4
     assert policy.max_output_tokens == 2048
     assert policy.enabled is True
+    assert policy.mad_threshold == 1.0
+    assert policy.periodic_anchor_seconds == 8.0
 
 
 def test_empty_frame_sampling_subdict_is_all_defaults() -> None:
@@ -74,7 +76,7 @@ def test_empty_frame_sampling_subdict_is_all_defaults() -> None:
 # --------------------------------------------------------------------- modes
 
 
-@pytest.mark.parametrize("name", ["uniform", "dedupe", "event"])
+@pytest.mark.parametrize("name", ["uniform", "dedupe", "event", "keyframe"])
 def test_known_modes_are_registered(name: str) -> None:
     assert name in PRESETS
     assert isinstance(PRESETS[name], dict)
@@ -103,6 +105,36 @@ def test_explicit_null_disables_mode_default() -> None:
     # mode bundle's value of 6.
     policy = _policy(_fs(("mode", "dedupe"), ("dedupe_phash_distance", None)))
     assert policy.dedupe_phash_distance is None
+
+
+def test_keyframe_bundle_supplies_defaults_when_keys_absent() -> None:
+    policy = _policy(_fs(("mode", "keyframe")))
+    assert policy.mode == "keyframe"
+    assert policy.probe_fps == 2.0
+    assert policy.max_frames == 48
+    assert policy.dedupe_phash_distance == 6
+    assert policy.mad_threshold == 1.0
+    assert policy.periodic_anchor_seconds == 8.0
+    for key, value in PRESETS["keyframe"].items():
+        assert getattr(policy, key) == value
+
+
+def test_explicit_keys_override_keyframe_bundle() -> None:
+    policy = _policy(
+        _fs(
+            ("mode", "keyframe"),
+            ("probe_fps", 1.0),
+            ("max_frames", 24),
+            ("dedupe_phash_distance", 12),
+            ("mad_threshold", 2.5),
+            ("periodic_anchor_seconds", 16.0),
+        )
+    )
+    assert policy.probe_fps == 1.0
+    assert policy.max_frames == 24
+    assert policy.dedupe_phash_distance == 12
+    assert policy.mad_threshold == 2.5
+    assert policy.periodic_anchor_seconds == 16.0
 
 
 @pytest.mark.parametrize("mode", ["nope", 3, None, ["dedupe"]])
@@ -173,6 +205,8 @@ def test_invalid_mode_emits_warning(caplog: pytest.LogCaptureFixture) -> None:
         ("max_event_windows", 6),
         ("max_output_tokens", 4096),
         ("enabled", False),
+        ("mad_threshold", 2.0),
+        ("periodic_anchor_seconds", 16.0),
     ],
 )
 def test_per_key_override(key: str, value: object) -> None:
@@ -232,6 +266,10 @@ def test_explicit_null_falls_back_to_default_without_raising() -> None:
         ("max_output_tokens", -3, 2048),
         ("dedupe_phash_distance", 0, 1),
         ("dedupe_phash_distance", 100, 32),
+        ("mad_threshold", -1, 0.0),
+        ("mad_threshold", 999, 50.0),
+        ("periodic_anchor_seconds", -0.5, 0.0),
+        ("periodic_anchor_seconds", 999, 60.0),
     ],
 )
 def test_out_of_range_values_are_clamped(key: str, value: Any, expected: object) -> None:
@@ -269,6 +307,10 @@ def test_min_frames_clamped_down_to_max_frames() -> None:
         ("max_output_tokens", "lots", 2048),
         ("enabled", "yes", True),
         ("enabled", 1, True),
+        ("mad_threshold", "abc", 1.0),
+        ("mad_threshold", None, 1.0),
+        ("periodic_anchor_seconds", "soon", 8.0),
+        ("periodic_anchor_seconds", None, 8.0),
     ],
 )
 def test_malformed_values_clamp_or_ignore_without_raising(
