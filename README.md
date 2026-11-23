@@ -135,20 +135,23 @@ bash scripts/package_release.sh --tag v1.0.0
 - **视频模式（raw_mp4，默认）**：未配置抽帧的 provider 保持现状，整段 mp4 交给视频能力模型。
 - **图像模式（frame sampling）**：面向只支持图像输入的后端（如 Strata）。在 provider 的
   `extra_config_json.frame_sampling` 中配置抽帧策略：`mode` 键选择采样模式
-  （`uniform` / `dedupe` / `event`，各自的数值只是默认值包；旧 `preset` 键
+  （`uniform` / `dedupe` / `event` / `keyframe`，各自的数值只是默认值包；旧 `preset` 键
   `baseline` / `dedupe` / `event` 仍被接受并映射到对应模式），键可单独覆盖：
   `target_context_ratio` / `max_edge` / `probe_fps` /
   `min_frames` / `max_frames` / `jpeg_quality` / `dedupe_phash_distance` /
   `window_pre_seconds` / `window_post_seconds` / `max_event_windows` /
-  `max_output_tokens` / `enabled`）。帧数不是固定档位，而是由上下文预算推导：
+  `mad_threshold` / `periodic_anchor_seconds` / `max_output_tokens` / `enabled`）。帧数不是固定档位，而是由上下文预算推导：
   （上下文 × 比例 − prompt − 输出预算）÷ 单图 token，四道闸门夹紧（预算、`min_frames`、
   `max_frames`、时长上限），时间戳全段等间隔；预算装不下 `min_frames` 时保存 / 测试即
   拒绝（fail fast，不静默降质）。
 
 图像模式由进程外采样器服务完成抽帧：ffmpeg 解码 → 在帧预算内选帧（`uniform` / `dedupe` /
-`event` 三种策略）→ 返回带时间戳的 JPEG 帧；后端把图文交错（每帧一个 `t=X.Xs` 时间戳标签）
+`event` / `keyframe` 四种策略）→ 返回带时间戳的 JPEG 帧；后端把图文交错（每帧一个 `t=X.Xs` 时间戳标签）
 发给图像 LLM，输出仍解析为与视频模式同构的 `EventRecord`（offset 对齐到帧时刻，绝对时间
-公式与日报 / 问答 / MCP 契约不变）。文件粒度两条路径一致：一文件 = 一 sub-chunk =
+公式与日报 / 问答 / MCP 契约不变）。`keyframe` 模式复刻已删除的关键帧选择算法：按 `probe_fps`
+采样、160×90 灰度 MAD 或 pHash 距离识别变化点、每 `periodic_anchor_seconds`（默认 8s）补周期
+锚点，再按变化量 top-N 并约束最小时间间隔，把有限的帧预算花在“变化”而不是重复的静止帧上。
+文件粒度两条路径一致：一文件 = 一 sub-chunk =
 一次 LLM 调用。注意：`/sample` 的候选窗口来自 ffmpeg 场景检测；ONNX 人检测器已移除
 （无消费方，如需再引入）。
 

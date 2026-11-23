@@ -52,7 +52,9 @@ else is rejected with `400` before any bytes are read.
   "dedupe_phash_distance": null,
   "window_pre_seconds": 5.0,
   "window_post_seconds": 10.0,
-  "max_event_windows": 4
+  "max_event_windows": 4,
+  "mad_threshold": 1.0,
+  "periodic_anchor_seconds": 8.0
 }
 ```
 
@@ -64,15 +66,30 @@ else is rejected with `400` before any bytes are read.
 | `max_frames` | int | `120` | `>= 1` | frame **budget** passed to `select_frames(budget=...)` |
 | `max_edge` | int \| null | `640` | `>= 1` (or `null`) | explicit downscale opt-in: when `< 2560`, frames are scaled in ffmpeg so the long edge `<= max_edge` (never upscaled, even dimensions); `null` / `>= 2560` keeps in-box sources at source resolution |
 | `jpeg_quality` | int | `85` | `1..100` | JPEG quality of the returned frames (re-encode when resized) |
-| `mode` | string | `"uniform"` | `uniform` \| `dedupe` \| `event` | selection strategy (todo 18) |
-| `dedupe_phash_distance` | int \| null | `null` | `>= 0` | pHash Hamming threshold for `dedupe` (`null` = 6) |
+| `mode` | string | `"uniform"` | `uniform` \| `dedupe` \| `event` \| `keyframe` | selection strategy |
+| `dedupe_phash_distance` | int \| null | `null` | `>= 0` | pHash Hamming threshold for `dedupe` / the pHash change threshold for `keyframe` (`null` = 6) |
 | `window_pre_seconds` | number | `5.0` | `>= 0` | candidate window context before a scene trigger |
 | `window_post_seconds` | number | `10.0` | `>= 0` | candidate window context after a scene trigger |
 | `max_event_windows` | int | `4` | `>= 1` | cap on candidate windows (highest scene scores kept) |
+| `mad_threshold` | number | `1.0` | `>= 0` | `keyframe` change detector: mean absolute difference on the 160x90 grayscale probe frame vs the previous one |
+| `periodic_anchor_seconds` | number | `8.0` | `>= 0` | `keyframe` periodic anchor interval (`0` disables anchors) |
 
 Unknown fields are ignored. The whole request is bounded by a 120 s
 per-ffmpeg-invocation timeout; extraction failures surface as `422` with
 the ffmpeg stderr tail.
+
+### Selection modes
+
+- `uniform` — index-proportional even spacing over the whole clip.
+- `dedupe` — pHash-diverse frames (greedy dissimilarity walk, then budget fill).
+- `event` — up to 70% of the budget on scene-change candidate windows.
+- `keyframe` — revives the deleted backend keyframe pipeline as a selection layer:
+  each probe frame is compared to the previous one by MAD (160x90 grayscale) or
+  pHash Hamming distance; a frame is a change point when `mad > mad_threshold` or
+  `phd > dedupe_phash_distance`. Every `periodic_anchor_seconds` forces a periodic
+  anchor. Change points are ranked by `mad + phd` and accepted with a minimum
+  temporal gap of `duration / budget`; anchors and even-spacing fill guarantee
+  whole-clip coverage and exactly `budget` frames. No second ffmpeg pass is made.
 
 ### Supported resolution box (1440p)
 
