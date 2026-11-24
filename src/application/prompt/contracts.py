@@ -40,6 +40,7 @@ class VideoRecognitionPromptInput:
     event_type_list: list[str] = field(default_factory=list)
     input_mode: str = "video"
     frame_timestamps: list[float] = field(default_factory=list)
+    previous_subjects: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # 与编译器校验保持一致：image 模式必须有非空帧时间戳，防止绕过编译器静默渲染空区段。

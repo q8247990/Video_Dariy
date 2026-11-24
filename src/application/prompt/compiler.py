@@ -35,6 +35,7 @@ def compile_video_recognition_prompt(input_data: VideoRecognitionPromptInput) ->
             "event_type_list": input_data.event_type_list,
             "input_mode": input_data.input_mode,
             "frame_timestamps": input_data.frame_timestamps,
+            "previous_subjects": list(input_data.previous_subjects),
         }
     )
 

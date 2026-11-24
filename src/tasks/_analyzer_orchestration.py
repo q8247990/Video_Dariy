@@ -61,6 +61,7 @@ from src.services.analysis import (
     write_token_usage,
 )
 from src.services.analysis.claim import handle_deadlock_retry_exhausted
+from src.services.analysis.continuity import load_previous_session_subjects
 from src.services.analysis.contracts import DEADLOCK_MAX_RETRIES, AnalysisPorts, RawResponseCapture
 from src.services.analysis.execute import build_provider_client, enforce_fencing, execute_sub_chunk
 from src.services.analysis.finalize import (
@@ -122,6 +123,7 @@ def _build_prompts(
     *,
     input_mode: str = INPUT_MODE_VIDEO,
     frame_timestamps: Sequence[float] = (),
+    previous_subjects: Sequence[str] = (),
 ) -> tuple[str, str]:
     """Assemble the recognition prompts for one sub-chunk work item.
 
@@ -165,6 +167,7 @@ def _build_prompts(
             event_type_list=sorted(VIDEO_EVENT_TYPES),
             input_mode=input_mode,
             frame_timestamps=list(frame_timestamps),
+            previous_subjects=list(previous_subjects),
         )
     )
 
@@ -233,6 +236,8 @@ def _build_image_prompts(
     session: Any,
     sub_chunk: SubChunkPlan,
     frame_timestamps: Sequence[float],
+    *,
+    previous_subjects: Sequence[str] = (),
 ) -> tuple[str, str]:
     """Render the recognition prompts in the ``input_mode="image"`` branch."""
     return _build_prompts(
@@ -242,6 +247,7 @@ def _build_image_prompts(
         sub_chunk,
         input_mode=INPUT_MODE_IMAGE,
         frame_timestamps=frame_timestamps,
+        previous_subjects=previous_subjects,
     )
 
 
@@ -252,6 +258,7 @@ def _plan_image_prompts(
     source: VideoSource,
     home_context: dict[str, Any],
     session: Any,
+    previous_subjects: Sequence[str] = (),
 ) -> tuple[FramePolicy, FramePlan, dict[str, Any], str, str]:
     """Converge the frame plan with the image prompt's frame-list block.
 
@@ -282,6 +289,7 @@ def _plan_image_prompts(
             session,
             plan_item,
             _synthetic_frame_timestamps(plan_item.duration_seconds, frame_count),
+            previous_subjects=previous_subjects,
         )
 
     def _plan(frame_count: int) -> tuple[FramePlan, dict[str, Any]]:
@@ -456,6 +464,7 @@ def run_session_analysis(
             )
             raise
         success_return: dict[str, Any]
+        previous_subjects = load_previous_session_subjects(db, claim.session)
 
         try:
             loop_result = _run_sub_chunk_loop(
@@ -468,6 +477,7 @@ def run_session_analysis(
                 provider=provider,
                 priority=priority,
                 ports=ports,
+                previous_subjects=previous_subjects,
             )
             if isinstance(loop_result, dict):
                 return loop_result
@@ -542,6 +552,7 @@ def _run_sub_chunk_loop(
     provider: Any,
     priority: str,
     ports: AnalysisPorts,
+    previous_subjects: Sequence[str] = (),
 ) -> tuple[int, list[str], bool] | dict[str, Any]:
     """Iterate over the file-level plan; one short txn per sub-chunk stage.
 
@@ -606,6 +617,7 @@ def _run_sub_chunk_loop(
                 home_context,
                 claim.session,
                 plan_item,
+                previous_subjects=previous_subjects,
             )
             last_prompt_text = user_prompt
             if input_mode == INPUT_MODE_IMAGE:
@@ -622,6 +634,7 @@ def _run_sub_chunk_loop(
                     source=claim.source,
                     home_context=home_context,
                     session=claim.session,
+                    previous_subjects=previous_subjects,
                 )
                 last_prompt_text = user_prompt
                 planned_total = frames_acquired + frame_plan.frames
@@ -695,6 +708,7 @@ def _run_sub_chunk_loop(
                     claim.session,
                     plan_item,
                     tuple(frame.t_seconds for frame in frame_set.frames),
+                    previous_subjects=previous_subjects,
                 )
                 last_prompt_text = user_prompt
                 _check_image_prompt_budget(
