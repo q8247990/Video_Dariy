@@ -140,7 +140,8 @@ bash scripts/package_release.sh --tag v1.0.0
   `target_context_ratio` / `max_edge` / `probe_fps` /
   `min_frames` / `max_frames` / `jpeg_quality` / `dedupe_phash_distance` /
   `window_pre_seconds` / `window_post_seconds` / `max_event_windows` /
-  `mad_threshold` / `periodic_anchor_seconds` / `max_output_tokens` / `enabled`）。帧数不是固定档位，而是由上下文预算推导：
+  `mad_threshold` / `periodic_anchor_seconds` / `max_output_tokens` /
+  `activity_gate` / `static_change_ratio` / `static_max_frames` / `enabled`）。帧数不是固定档位，而是由上下文预算推导：
   （上下文 × 比例 − prompt − 输出预算）÷ 单图 token，四道闸门夹紧（预算、`min_frames`、
   `max_frames`、时长上限），时间戳全段等间隔；预算装不下 `min_frames` 时保存 / 测试即
   拒绝（fail fast，不静默降质）。
@@ -154,6 +155,11 @@ bash scripts/package_release.sh --tag v1.0.0
 文件粒度两条路径一致：一文件 = 一 sub-chunk =
 一次 LLM 调用。注意：`/sample` 的候选窗口来自 ffmpeg 场景检测；ONNX 人检测器已移除
 （无消费方，如需再引入）。
+
+静止片段自适应帧预算（ADR 0016）：采样器在解码时顺带计算逐帧 `MAD + pHash` 变化占比，
+若 `change_ratio <= static_change_ratio`（默认 0.05）且无 scene 触发，则视为静止片段，
+只返回「峰值对帧」（变化最剧烈的一帧 + 其邻居，默认 `static_max_frames=2`）；否则维持原有
+选择逻辑与预算。一文件仍然只调用一次 LLM，活跃文件的选择结果逐字节不变。
 
 配置分两层（零迁移）：
 

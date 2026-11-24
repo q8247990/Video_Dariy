@@ -37,6 +37,12 @@ multiple of 32) and their built-in defaults:
 - ``periodic_anchor_seconds``: ``[0.0, 60.0]`` (default ``8.0``; keyframe periodic anchor)
 - ``max_output_tokens``: positive int (default ``2048``)
 - ``enabled``: strict bool (default ``True``)
+- ``activity_gate``: strict bool (default ``True``; sampler shrinks mostly-static
+  files to the single most-changed frame plus its better neighbour)
+- ``static_change_ratio``: ``[0.0, 1.0]`` (default ``0.05``; share of changed
+  consecutive-frame transitions at or below which a clip counts as static)
+- ``static_max_frames``: ``[1, 60]`` (default ``2``; additionally clamped so it
+  never exceeds ``max_frames``)
 
 ``max_edge`` semantics (ADR 0014): the sampler supports sources up to the
 ``2560 x 1440`` box and does **not** scale inside it — a source at or below
@@ -112,6 +118,9 @@ class FramePolicy:
     enabled: bool = True
     mad_threshold: float = 1.0
     periodic_anchor_seconds: float = 8.0
+    activity_gate: bool = True
+    static_change_ratio: float = 0.05
+    static_max_frames: int = 2
 
 
 _BUILTIN: FramePolicy = FramePolicy()
@@ -321,6 +330,36 @@ def _resolve_enabled(pick: PickFn) -> bool:
     return parsed
 
 
+def _resolve_activity_gate(pick: PickFn) -> bool:
+    """Strict-bool ``activity_gate`` (malformed → default ``True``)."""
+    raw = pick("activity_gate")
+    parsed = _coerce_bool(raw)
+    if parsed is None:
+        logger.warning("frame_sampling.activity_gate=%r is not a bool; using default True", raw)
+        return True
+    return parsed
+
+
+def _resolve_static_max_frames(pick: PickFn, max_frames: int) -> int:
+    """``static_max_frames`` clamped to ``[1, 60]`` and never above ``max_frames``."""
+    static_max_frames = _bounded_int(
+        "static_max_frames",
+        pick("static_max_frames"),
+        low=1,
+        high=60,
+        default=_BUILTIN.static_max_frames,
+    )
+    if static_max_frames > max_frames:
+        logger.warning(
+            "frame_sampling.static_max_frames=%d > max_frames=%d; clamped to %d",
+            static_max_frames,
+            max_frames,
+            max_frames,
+        )
+        return max_frames
+    return static_max_frames
+
+
 def _resolve_frame_bounds(pick: PickFn) -> tuple[int, int]:
     """Clamped ``(min_frames, max_frames)`` with ``min_frames <= max_frames``."""
     min_frames = _bounded_int(
@@ -441,6 +480,15 @@ def parse_frame_policy(provider: Any) -> FramePolicy:
         ),
         max_output_tokens=_resolve_max_output_tokens(pick),
         enabled=_resolve_enabled(pick),
+        activity_gate=_resolve_activity_gate(pick),
+        static_change_ratio=_bounded_float(
+            "static_change_ratio",
+            pick("static_change_ratio"),
+            low=0.0,
+            high=1.0,
+            default=_BUILTIN.static_change_ratio,
+        ),
+        static_max_frames=_resolve_static_max_frames(pick, max_frames),
     )
 
 

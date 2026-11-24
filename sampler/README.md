@@ -54,7 +54,10 @@ else is rejected with `400` before any bytes are read.
   "window_post_seconds": 10.0,
   "max_event_windows": 4,
   "mad_threshold": 1.0,
-  "periodic_anchor_seconds": 8.0
+  "periodic_anchor_seconds": 8.0,
+  "activity_gate": true,
+  "static_change_ratio": 0.05,
+  "static_max_frames": 2
 }
 ```
 
@@ -73,6 +76,9 @@ else is rejected with `400` before any bytes are read.
 | `max_event_windows` | int | `4` | `>= 1` | cap on candidate windows (highest scene scores kept) |
 | `mad_threshold` | number | `1.0` | `>= 0` | `keyframe` change detector: mean absolute difference on the 160x90 grayscale probe frame vs the previous one |
 | `periodic_anchor_seconds` | number | `8.0` | `>= 0` | `keyframe` periodic anchor interval (`0` disables anchors) |
+| `activity_gate` | bool | `true` | — | enable the static-clip shrink (see "Activity gate") |
+| `static_change_ratio` | number | `0.05` | `0..1` | share of changed consecutive-frame transitions at or below which a clip counts as static |
+| `static_max_frames` | int | `2` | `1..60` | frame count a static clip is shrunk to (capped by `max_frames`; `1` returns the peak frame alone) |
 
 Unknown fields are ignored. The whole request is bounded by a 120 s
 per-ffmpeg-invocation timeout; extraction failures surface as `422` with
@@ -90,6 +96,29 @@ the ffmpeg stderr tail.
   anchor. Change points are ranked by `mad + phd` and accepted with a minimum
   temporal gap of `duration / budget`; anchors and even-spacing fill guarantee
   whole-clip coverage and exactly `budget` frames. No second ffmpeg pass is made.
+
+### Activity gate (static-clip frame shrink, ADR 0016)
+
+After extraction (no second decode: the probe stream and its scene scores are
+already in hand), the sampler profiles the clip: `change_ratio` is the share
+of consecutive-frame transitions that cross the `keyframe` change test
+(`mad > mad_threshold` or pHash Hamming > threshold), reusing the same
+measurement. A clip is **static** when
+
+```text
+activity_gate AND change_ratio <= static_change_ratio AND max(scene_score) < 0.3 (SCENE_THRESHOLD)
+```
+
+A static clip returns the **peak pair** instead of the selection mode's
+output: the most-changed frame (`argmax` of the `mad + phd` transition
+scores) plus its better neighbour — the "before → after" of the clip's single
+significant change. The budget is `max(1, min(static_max_frames, max_frames))`
+and the path deliberately bypasses `select_frames` (first/last-frame
+guarantees and the `min_frames` floor: 2 frames < the default floor of 4 is
+exactly the point). Active clips — and everything when `activity_gate=false`
+— keep byte-identical `select_frames` behaviour. One INFO line per request
+reports the decision (`activity static=… change_ratio=… max_score=…
+planned=… selected=…`); the response schema is unchanged.
 
 ### Supported resolution box (1440p)
 
@@ -135,7 +164,7 @@ they are not part of the HTTP response.
 |---|---|---|
 | `400` | `video_path` outside `SAMPLER_ALLOWED_ROOTS`, relative or `..`-unnormalised path, symlink target outside the roots, or not a regular file | the specific path-safety violation (refers only to the path the request sent) |
 | `400` | any schema/validation error (bad type, out-of-range, unknown `mode`, missing field) | list of validation errors |
-| `400` | `FrameSelectionError` — `max_frames` below the `min_frames` floor | message containing the minimum frame count |
+| `400` | `FrameSelectionError` — `max_frames` below the `min_frames` floor (active path only; the static gate path may return fewer frames than the floor) | message containing the minimum frame count |
 | `422` | video cannot be decoded (`ExtractionFailed`: corrupt file, decode error, ffmpeg timeout) **or** source outside the supported 2560x1440 box without an explicit `max_edge` downscale opt-in | `ExtractionFailed` message with the ffmpeg stderr tail, or the source size + box + remedy |
 | `500` | any unexpected server error | generic `internal error` (traceback logged server-side, never leaked) |
 

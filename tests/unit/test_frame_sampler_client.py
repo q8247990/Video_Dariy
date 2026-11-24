@@ -193,8 +193,35 @@ def test_success_request_body_matches_contract_exactly() -> None:
         "max_event_windows": 4,
         "mad_threshold": 1.0,
         "periodic_anchor_seconds": 8.0,
+        "activity_gate": True,
+        "static_change_ratio": 0.05,
+        "static_max_frames": 2,
     }
     assert result.elapsed_ms == 123
+
+
+def test_activity_gate_keys_are_sent() -> None:
+    """The three activity-gate keys carry the policy's resolved values."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_payload())
+
+    client, recorder = _client(handler)
+    client.sample(
+        video_path="/abs/path.mp4",
+        policy=_policy(
+            activity_gate=False,
+            static_change_ratio=0.2,
+            static_max_frames=4,
+        ),
+        plan=_plan(frames=12),
+        mode="dedupe",
+    )
+
+    body = recorder.requests[0]["body"]
+    assert body["activity_gate"] is False
+    assert body["static_change_ratio"] == 0.2
+    assert body["static_max_frames"] == 4
 
 
 def test_success_body_omits_dedupe_distance_as_null() -> None:

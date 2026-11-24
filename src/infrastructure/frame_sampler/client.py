@@ -307,7 +307,10 @@ class FrameSamplerClient:
         ``max_frames`` / ``max_edge`` / ``jpeg_quality`` / ``mode`` /
         ``dedupe_phash_distance`` / ``window_pre_seconds`` /
         ``window_post_seconds`` / ``max_event_windows`` / ``mad_threshold`` /
-        ``periodic_anchor_seconds``.
+        ``periodic_anchor_seconds`` / ``activity_gate`` /
+        ``static_change_ratio`` / ``static_max_frames``. Older samplers
+        ignore unknown keys (``extra="ignore"``), so the three activity-gate
+        keys are always sent.
 
         ``max_frames`` is the budgeted frame count (``plan.frames``); the
         plan's client-side ``timestamps`` are intentionally not sent — the
@@ -329,6 +332,9 @@ class FrameSamplerClient:
             "max_event_windows": policy.max_event_windows,
             "mad_threshold": policy.mad_threshold,
             "periodic_anchor_seconds": policy.periodic_anchor_seconds,
+            "activity_gate": policy.activity_gate,
+            "static_change_ratio": policy.static_change_ratio,
+            "static_max_frames": policy.static_max_frames,
         }
 
     @staticmethod

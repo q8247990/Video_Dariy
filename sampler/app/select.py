@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import dataclass
 from typing import Protocol, Sequence
 
 import numpy as np
@@ -397,6 +398,100 @@ def _keyframe_change_scores(
         change[i] = mad > mad_threshold or phd > phash_threshold
         score[i] = mad + phd
     return change, score
+
+
+# ---------------------------------------------------------------------------
+# Activity gate (static-clip frame shrink)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ActivityProfile:
+    """How much happens in an already-extracted probe stream.
+
+    - ``change_ratio``: fraction of frames ``i >= 1`` flagged as changed by
+      :func:`_keyframe_change_scores` (``0.0`` for a stream shorter than 2).
+    - ``max_score``: the largest ``mad + phd`` consecutive-frame score
+      (``0.0`` for a stream shorter than 2).
+    - ``peak_index``: index of the argmax of ``score`` — the frame whose
+      transition from its predecessor is the single most significant change
+      in the clip (``0`` when the stream has fewer than 2 frames).
+    """
+
+    change_ratio: float
+    max_score: float
+    peak_index: int
+
+
+def activity_profile(
+    small: Sequence[np.ndarray],
+    hashes: Sequence[int],
+    *,
+    mad_threshold: float,
+    phash_threshold: int,
+) -> ActivityProfile:
+    """Profile a stream's activity from its thumbnails and perceptual hashes.
+
+    Reuses :func:`_keyframe_change_scores`, so the gate's notion of "change"
+    is exactly the ``keyframe`` mode's: a frame counts as changed when its
+    grayscale MAD to the previous frame exceeds ``mad_threshold`` **or** its
+    pHash Hamming distance exceeds ``phash_threshold``.
+    """
+    n = len(small)
+    if n < 2:
+        return ActivityProfile(change_ratio=0.0, max_score=0.0, peak_index=0)
+    change, score = _keyframe_change_scores(
+        small, hashes, mad_threshold=mad_threshold, phash_threshold=phash_threshold
+    )
+    change_ratio = sum(1 for flag in change[1:] if flag) / float(n - 1)
+    max_score = max(score)
+    peak_index = score.index(max_score)
+    return ActivityProfile(change_ratio=change_ratio, max_score=max_score, peak_index=peak_index)
+
+
+def select_static_pair(
+    frames: Sequence[ExtractedFrameLike],
+    score: Sequence[float],
+    *,
+    budget: int,
+) -> list[ExtractedFrameLike]:
+    """Shrink a static clip to the single "before -> after" transition.
+
+    Returns the frames at ``{peak, partner}`` in timestamp order, where
+    ``peak = argmax(score[1:]) + 1`` is the most-changed frame and
+    ``partner`` is the neighbour whose own transition score is higher
+    (``score[peak - 1] >= score[peak + 1]`` picks the predecessor), clamped
+    to ``[0, n - 1]``; when the peak sits at either end only one neighbour
+    exists and it wins. ``budget >= n`` returns all frames (a selection
+    cannot invent frames) and ``budget == 1`` returns only the peak frame.
+
+    The caller must pass ``frames`` in ascending ``t_seconds`` order — the
+    same order ``score`` was computed on.
+
+    This deliberately does **not** honour ``select_frames``'s "first frame
+    always included" guarantee or the ``min_frames`` floor: the whole point
+    is that a mostly-static file spends two frames, not the budget floor.
+    Two frames (or one) let the model compare the clip's single significant
+    change — which is what the event prompt's before/after rule asks for —
+    and nothing else in a static clip adds evidence.
+    """
+    ordered = list(frames)
+    n = len(ordered)
+    if n == 0:
+        return []
+    if budget >= n:
+        return ordered
+    peak = max(range(1, n), key=lambda i: score[i])
+    if budget <= 1:
+        return [ordered[peak]]
+    if peak <= 0:
+        partner = 1
+    elif peak >= n - 1:
+        partner = peak - 1
+    else:
+        partner = peak - 1 if score[peak - 1] >= score[peak + 1] else peak + 1
+    partner = max(0, min(n - 1, partner))
+    return [ordered[i] for i in sorted({peak, partner})]
 
 
 def _keyframe_anchors(

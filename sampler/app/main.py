@@ -27,9 +27,21 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import allowed_roots, get_settings
-from app.extract import ExtractionFailed, extract_frames
+from app.extract import SCENE_THRESHOLD, ExtractionFailed, extract_frames
+from app.models import ExtractedFrame
 from app.security import PathSecurityError, resolve_allowed_path
-from app.select import FrameSelectionError, select_frames
+from app.select import (
+    PHASH_DEFAULT_DISTANCE,
+    ActivityProfile,
+    FrameSelectionError,
+    _keyframe_change_scores,
+    _small_gray,
+    _unique_sorted_frames,
+    activity_profile,
+    phash,
+    select_frames,
+    select_static_pair,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +77,9 @@ class SampleRequest(BaseModel):
     window_pre_seconds: float = Field(default=5.0, ge=0)
     window_post_seconds: float = Field(default=10.0, ge=0)
     max_event_windows: int = Field(default=4, ge=1)
+    activity_gate: bool = True
+    static_change_ratio: float = Field(default=0.05, ge=0, le=1)
+    static_max_frames: int = Field(default=2, ge=1, le=60)
 
 
 class FrameOut(BaseModel):
@@ -83,6 +98,57 @@ class SampleResponse(BaseModel):
 
     frames: list[FrameOut]
     elapsed_ms: int
+
+
+# ---------------------------------------------------------------------------
+# Activity gate
+# ---------------------------------------------------------------------------
+
+
+def _assess_activity(
+    request: SampleRequest,
+    frames: list[ExtractedFrame],
+    scene_scores: tuple[float, ...],
+) -> tuple[bool, ActivityProfile, list[float] | None]:
+    """Run the activity gate over the ordered probe stream.
+
+    Returns ``(static, profile, scores)``:
+
+    - ``static``: ``gate_enabled and change_ratio <= static_change_ratio
+      and max(scene_scores) < SCENE_THRESHOLD`` — a clip where essentially
+      nothing moves and ffmpeg saw no scene cut;
+    - ``profile``: the measured activity (neutral zeros when the gate is
+      disabled, so the per-request info log stays uniform);
+    - ``scores``: per-frame ``mad + phd`` transition scores for
+      :func:`select_static_pair`, computed only when the clip is judged
+      static — the active path never reads them.
+    """
+    if not request.activity_gate:
+        return False, ActivityProfile(change_ratio=0.0, max_score=0.0, peak_index=0), None
+    phash_threshold = (
+        PHASH_DEFAULT_DISTANCE
+        if request.dedupe_phash_distance is None
+        else request.dedupe_phash_distance
+    )
+    small = [_small_gray(frame.jpeg_bytes) for frame in frames]
+    hashes = [phash(frame.jpeg_bytes) for frame in frames]
+    profile = activity_profile(
+        small,
+        hashes,
+        mad_threshold=request.mad_threshold,
+        phash_threshold=phash_threshold,
+    )
+    max_scene = max(scene_scores, default=0.0)
+    static = profile.change_ratio <= request.static_change_ratio and max_scene < SCENE_THRESHOLD
+    if not static:
+        return False, profile, None
+    _change, scores = _keyframe_change_scores(
+        small,
+        hashes,
+        mad_threshold=request.mad_threshold,
+        phash_threshold=phash_threshold,
+    )
+    return True, profile, scores
 
 
 # ---------------------------------------------------------------------------
@@ -136,20 +202,29 @@ def sample(request: SampleRequest) -> SampleResponse:
         logger.warning("Extraction failed for %s: %s", request.video_path, exc)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    try:
-        selected = select_frames(
-            result.frames,
-            result.candidates,
-            budget=request.max_frames,
-            min_frames=request.min_frames,
-            mode=request.mode,
-            dedupe_phash_distance=request.dedupe_phash_distance,
-            mad_threshold=request.mad_threshold,
-            periodic_anchor_seconds=request.periodic_anchor_seconds,
-        )
-    except FrameSelectionError as exc:
-        logger.warning("Frame selection rejected for %s: %s", request.video_path, exc)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ordered = _unique_sorted_frames(result.frames)
+    static, profile, scores = _assess_activity(request, ordered, result.scene_scores)
+
+    if static and scores is not None:
+        # Static path: bypass select_frames (and its min_frames floor) so the
+        # clip can shrink below the request's frame floor.
+        budget = max(1, min(request.static_max_frames, request.max_frames))
+        selected = select_static_pair(ordered, scores, budget=budget)
+    else:
+        try:
+            selected = select_frames(
+                result.frames,
+                result.candidates,
+                budget=request.max_frames,
+                min_frames=request.min_frames,
+                mode=request.mode,
+                dedupe_phash_distance=request.dedupe_phash_distance,
+                mad_threshold=request.mad_threshold,
+                periodic_anchor_seconds=request.periodic_anchor_seconds,
+            )
+        except FrameSelectionError as exc:
+            logger.warning("Frame selection rejected for %s: %s", request.video_path, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # The JPEGs are already final-size: extract_frames scaled them in ffmpeg to
     # the max_edge budget (never upscaled), so we only base64-encode here.
@@ -161,11 +236,12 @@ def sample(request: SampleRequest) -> SampleResponse:
         for frame in selected
     ]
     logger.info(
-        "Sampled %d frames (%d candidates) from %s in %d ms",
+        "activity static=%s change_ratio=%.3f max_score=%.2f planned=%d selected=%d",
+        static,
+        profile.change_ratio,
+        profile.max_score,
+        request.max_frames,
         len(frames),
-        len(result.candidates),
-        request.video_path,
-        result.elapsed_ms,
     )
     return SampleResponse(
         frames=frames,

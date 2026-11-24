@@ -451,6 +451,7 @@ def extract_frames(
         scene_scores, frames = _extract_pass(
             path, probe_fps, qv, scale_box, timeout_seconds, tmp_dir
         )
+        scene_score_values = tuple(score for _t, score in scene_scores)
         if not frames:
             # Zero decodable frames: empty result, not an error.
             elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -461,6 +462,7 @@ def extract_frames(
                 duration_seconds=0.0,
                 source_width=result_width,
                 source_height=result_height,
+                scene_scores=scene_score_values,
             )
         if duration <= 0.0 and frames:
             # Fallback: last sampled frame plus one frame period.
@@ -483,4 +485,5 @@ def extract_frames(
         duration_seconds=duration,
         source_width=result_width,
         source_height=result_height,
+        scene_scores=scene_score_values,
     )

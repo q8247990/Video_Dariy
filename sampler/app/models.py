@@ -44,7 +44,10 @@ class ExtractionResult:
     scene-gated event windows. An empty/zero-frame video yields empty tuples
     (not an error). ``elapsed_ms`` covers both ffmpeg passes.
     ``source_width`` / ``source_height`` report the probed source resolution
-    (0 when the probe could not determine it).
+    (0 when the probe could not determine it). ``scene_scores`` are the raw
+    ffmpeg ``lavfi.scene_score`` values (one per sampled frame that carried
+    the metadata) consumed by the activity gate; empty when nothing was
+    detected.
     """
 
     frames: tuple[ExtractedFrame, ...]
@@ -53,3 +56,4 @@ class ExtractionResult:
     duration_seconds: float
     source_width: int = 0
     source_height: int = 0
+    scene_scores: tuple[float, ...] = ()

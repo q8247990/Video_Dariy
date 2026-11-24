@@ -67,6 +67,9 @@ def test_default_value_table() -> None:
     assert policy.enabled is True
     assert policy.mad_threshold == 1.0
     assert policy.periodic_anchor_seconds == 8.0
+    assert policy.activity_gate is True
+    assert policy.static_change_ratio == 0.05
+    assert policy.static_max_frames == 2
 
 
 def test_empty_frame_sampling_subdict_is_all_defaults() -> None:
@@ -207,6 +210,9 @@ def test_invalid_mode_emits_warning(caplog: pytest.LogCaptureFixture) -> None:
         ("enabled", False),
         ("mad_threshold", 2.0),
         ("periodic_anchor_seconds", 16.0),
+        ("activity_gate", False),
+        ("static_change_ratio", 0.2),
+        ("static_max_frames", 4),
     ],
 )
 def test_per_key_override(key: str, value: object) -> None:
@@ -270,6 +276,11 @@ def test_explicit_null_falls_back_to_default_without_raising() -> None:
         ("mad_threshold", 999, 50.0),
         ("periodic_anchor_seconds", -0.5, 0.0),
         ("periodic_anchor_seconds", 999, 60.0),
+        ("static_change_ratio", -0.5, 0.0),
+        ("static_change_ratio", 2, 1.0),
+        ("static_max_frames", 0, 1),
+        # within [1, 60]; the default max_frames (120) leaves it untouched
+        ("static_max_frames", 99, 60),
     ],
 )
 def test_out_of_range_values_are_clamped(key: str, value: Any, expected: object) -> None:
@@ -280,6 +291,21 @@ def test_min_frames_clamped_down_to_max_frames() -> None:
     policy = _policy(_fs(("min_frames", 100), ("max_frames", 10)))
     assert policy.max_frames == 10
     assert policy.min_frames == 10
+
+
+def test_static_max_frames_clamped_down_to_max_frames() -> None:
+    # The static shrink must never exceed the clip's overall frame budget:
+    # clamped, never raised, never an error.
+    policy = _policy(_fs(("max_frames", 5), ("static_max_frames", 10)))
+    assert policy.max_frames == 5
+    assert policy.static_max_frames == 5
+
+
+def test_static_max_frames_clamp_emits_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="src.services.frame_sampling.policy"):
+        _policy(_fs(("max_frames", 5), ("static_max_frames", 10)))
+    messages = [record.message for record in caplog.records]
+    assert any("static_max_frames" in message for message in messages)
 
 
 # -------------------------------------------------------------- malformed input
@@ -311,6 +337,14 @@ def test_min_frames_clamped_down_to_max_frames() -> None:
         ("mad_threshold", None, 1.0),
         ("periodic_anchor_seconds", "soon", 8.0),
         ("periodic_anchor_seconds", None, 8.0),
+        ("activity_gate", "yes", True),
+        ("activity_gate", 1, True),
+        ("static_change_ratio", "abc", 0.05),
+        ("static_change_ratio", float("nan"), 0.05),
+        ("static_change_ratio", None, 0.05),
+        ("static_max_frames", "many", 2),
+        ("static_max_frames", True, 2),
+        ("static_max_frames", None, 2),
     ],
 )
 def test_malformed_values_clamp_or_ignore_without_raising(
