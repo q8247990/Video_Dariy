@@ -6,6 +6,7 @@ const EMPTY: RelatedEntity = {
   entity_type: null,
   display_name: null,
   matched_profile_name: null,
+  candidate_profile_names: [],
   recognition_status: null,
   confidence: null,
 }
@@ -23,9 +24,18 @@ describe('parseRelatedEntity', () => {
       entity_type: 'member',
       display_name: '爸爸',
       matched_profile_name: 'father',
+      candidate_profile_names: [],
       recognition_status: 'matched',
       confidence: 0.92,
     })
+  })
+
+  it('候选身份数组保留有效姓名并丢弃非字符串与空值', () => {
+    const parsed = parseRelatedEntity({
+      display_name: '深色猫',
+      candidate_profile_names: ['墨墨', '', 42, ' 嘟嘟 ', '墨墨'],
+    })
+    expect(parsed.candidate_profile_names).toEqual(['墨墨', '嘟嘟'])
   })
 
   it('畸形载荷中的非字符串/非数字字段安全置空', () => {

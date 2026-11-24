@@ -226,6 +226,7 @@
     "detail_field_session_id": "Clip ID: ",
     "detail_field_tags": "Tags: ",
     "unnamed_entity": "Unnamed entity",
+    "entity_candidates": "candidates {{names}}?",
     "none": "None",
     "loading_detail": "Loading event details",
     "error_invalid_id": "Event not found",

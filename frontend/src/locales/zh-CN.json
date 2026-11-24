@@ -226,6 +226,7 @@
     "detail_field_session_id": "片段编号：",
     "detail_field_tags": "标签：",
     "unnamed_entity": "未命名对象",
+    "entity_candidates": "候选 {{names}}？",
     "none": "无",
     "loading_detail": "正在加载事件详情",
     "error_invalid_id": "事件不存在",

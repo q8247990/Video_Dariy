@@ -153,6 +153,7 @@ export type RelatedEntity = {
   entity_type: string | null
   display_name: string | null
   matched_profile_name: string | null
+  candidate_profile_names: string[]
   recognition_status: string | null
   confidence: number | null
 }
@@ -165,10 +166,28 @@ function toNullableNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      continue
+    }
+    const trimmed = item.trim()
+    if (trimmed.length > 0 && !result.includes(trimmed)) {
+      result.push(trimmed)
+    }
+  }
+  return result
+}
+
 const EMPTY_RELATED_ENTITY: RelatedEntity = {
   entity_type: null,
   display_name: null,
   matched_profile_name: null,
+  candidate_profile_names: [],
   recognition_status: null,
   confidence: null,
 }
@@ -182,6 +201,7 @@ export function parseRelatedEntity(value: unknown): RelatedEntity {
     entity_type: toNullableString(record.entity_type),
     display_name: toNullableString(record.display_name),
     matched_profile_name: toNullableString(record.matched_profile_name),
+    candidate_profile_names: toStringArray(record.candidate_profile_names),
     recognition_status: toNullableString(record.recognition_status),
     confidence: toNullableNumber(record.confidence),
   }

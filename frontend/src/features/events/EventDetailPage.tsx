@@ -134,9 +134,15 @@ export function EventDetailPage() {
             ? relatedEntities
                 .map((item) => {
                   const name =
-                    item.display_name ?? item.matched_profile_name ?? t('events.unnamed_entity')
+                    item.matched_profile_name ?? item.display_name ?? t('events.unnamed_entity')
                   const status = item.recognition_status ?? 'unknown'
-                  return `${name}(${status})`
+                  const candidates =
+                    item.candidate_profile_names.length > 0
+                      ? `；${t('events.entity_candidates', {
+                          names: item.candidate_profile_names.join(' / '),
+                        })}`
+                      : ''
+                  return `${name}(${status}${candidates})`
                 })
                 .join('、')
             : '-'}
