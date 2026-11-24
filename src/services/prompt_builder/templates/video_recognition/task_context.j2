@@ -1,0 +1,9 @@
+任务上下文：
+会话上下文: session_id={{ session_context.session_id }}; source_id={{ session_context.source_id }}; start={{ session_start_time_iso }}; end={{ session_end_time_iso }}; duration={{ session_context.total_duration_seconds }}; segment_index={{ session_context.segment_index }}; segment_start_offset_sec={{ session_context.segment_start_offset_sec }}; segment_duration_seconds={{ session_context.segment_duration_seconds }}.
+策略上下文: ingest_type={{ strategy_context.ingest_type | compact_text }}; source_type={{ strategy_context.source_type | compact_text }}; strategy_note={{ strategy_context.strategy_note | compact_text }}.
+{% if input_mode == "image" %}
+本批帧时间戳：
+{% for ts in frame_timestamps %}
+帧 {{ loop.index }}/{{ frame_total }} — t={{ "%.1f" | format(ts) }}s
+{% endfor %}
+{% endif %}

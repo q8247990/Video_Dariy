@@ -87,8 +87,24 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
     session_start_iso = _serialize_datetime(session_context.get("session_start_time"))
     session_end_iso = _serialize_datetime(session_context.get("session_end_time"))
 
-    system_prompt = render_template("video_recognition/system_rules.j2", input_mode=input_mode)
+    # Byte-stable prefix: the provider checkpoints the end of this message and
+    # shares it across conversations, so no per-call value may enter it.
+    task_rules_prompt = render_template(
+        "video_recognition/task_rules.j2",
+        event_type_definitions=event_type_definitions,
+        note_type_list=sorted(ANALYSIS_NOTE_TYPES),
+        interpreted_state_values=INTERPRETED_STATES,
+        input_mode=input_mode,
+    )
+    system_prompt = "\n\n".join(
+        [
+            render_template("video_recognition/system_rules.j2", input_mode=input_mode),
+            task_rules_prompt,
+        ]
+    )
 
+    # Per-call values only: rendered after the image/video payload, never
+    # before it, so the shared prefix above stays intact.
     continuity_prompt = render_template(
         "video_recognition/continuity.j2",
         previous_subjects=previous_subjects,
@@ -112,20 +128,17 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
         prompt_chunks.append(continuity_prompt)
     prompt_chunks.append(
         render_template(
-            "video_recognition/task.j2",
+            "video_recognition/task_context.j2",
             session_context=session_context,
             session_start_time_iso=session_start_iso,
             session_end_time_iso=session_end_iso,
             strategy_context=strategy_context,
-            event_type_definitions=event_type_definitions,
-            note_type_list=sorted(ANALYSIS_NOTE_TYPES),
-            interpreted_state_values=INTERPRETED_STATES,
             input_mode=input_mode,
             frame_timestamps=frame_timestamps,
             frame_total=frame_total,
         )
     )
 
-    user_prompt = "\n\n".join(prompt_chunks)
+    user_prompt = "\n\n".join(prompt_chunks).rstrip()
 
     return system_prompt, user_prompt

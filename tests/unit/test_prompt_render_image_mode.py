@@ -143,10 +143,57 @@ VIDEO_MODE_SNAPSHOT = base64.b64decode(
     "IFsKICAgIHsKICAgICAgInR5cGUiOiAiaWRlbnRpdHlfdW5jZXJ0YWluIiwKICAgICAgImVudGl0"
     "eV9pbmRleCI6IDEsCiAgICAgICJjYW5kaWRhdGVzIjogWyLloqjloqgiLCAi5Zif5ZifIl0sCiAg"
     "ICAgICJub3RlIjogIuWPs+WQjuaWuea3seiJsueMq+WboOWFiee6v+S4jui3neemu+aXoOazleeh"
-    "ruiupOaYr+WiqOWiqOi/mOaYr+WYn+WYn+OAgiIKICAgIH0KICBdCn0="
+    "ruiupOaYr+WiqOWiqOi/mOaYr+WYn+WYn+OAgiIKICAgIH0KICBdCn0KCuS7u+WKoee6pyBQcm9t"
+    "cHTvvJoK5Lu75Yqh55uu5qCHOiDlr7nlvZPliY0gc2Vzc2lvbiDlgZrnu5PmnoTljJbor4bliKvv"
+    "vIzovpPlh7rlj6/lhaXlupPkuovku7bjgIIK5LqL5Lu25oq95Y+W6KeE5YiZOgpldmVudF90eXBl"
+    "IOWumuS5ie+8iOW/hemhu+S7juS4remAieaLqe+8jOemgeatouiHqumAoOaIlui+k+WHuuiLseaW"
+    "h+WIq+WQje+8iToKLSBtZW1iZXJfYXBwZWFyOiDlrrbluq3miJDlkZjlh7rnjrDlnKjnlLvpnaLk"
+    "uK3vvIjpppbmrKHlh7rnjrDmiJbnn63mmoLnu4/ov4fvvIzml6DmmI7noa7ov5vlh7rliqjkvZzv"
+    "vIkKLSBtZW1iZXJfZW50ZXI6IOaIkOWRmOi/m+WFpeeUu+mdouaIluafkOS4quWMuuWfn++8iOac"
+    "ieaYjuehrueahOi/m+WFpeWKqOS9nOS4juaWueWQke+8iQotIG1lbWJlcl9sZWF2ZTog5oiQ5ZGY"
+    "56a75byA55S76Z2i5oiW5p+Q5Liq5Yy65Z+f77yI5pyJ5piO56Gu55qE56a75byA5Yqo5L2c5LiO"
+    "5pa55ZCR77yJCi0gbWVtYmVyX3N0YXk6IOaIkOWRmOWcqOeUu+mdouWGheaMgee7reWBnOeVme+8"
+    "iOWcqOWcuuaXtumXtOi+g+mVv+S4lOaXoOaYjuehrui/m+WHuuWKqOS9nO+8iQotIHVua25vd25f"
+    "cGVyc29uX2FwcGVhcjog6ZmM55Sf5Lq6L+acquefpeS6uuWRmOWHuueOsO+8iOaXoOazleWMuemF"
+    "jeWutuW6reaho+ahiOeahOS6uuWRmO+8iQotIHBldF9hcHBlYXI6IOWuoOeJqeWHuueOsOWcqOeU"
+    "u+mdouS4re+8iOmmluasoeWHuueOsOaIluefreaague7j+i/h++8iQotIHBldF9lbnRlcjog5a6g"
+    "54mp6L+b5YWl55S76Z2i5oiW5p+Q5Liq5Yy65Z+f77yI5pyJ5piO56Gu55qE6L+b5YWl5Yqo5L2c"
+    "77yJCi0gcGV0X2xlYXZlOiDlrqDniannprvlvIDnlLvpnaLmiJbmn5DkuKrljLrln5/vvIjmnInm"
+    "mI7noa7nmoTnprvlvIDliqjkvZzvvIkKLSBwZXRfc3RheTog5a6g54mp5Zyo55S76Z2i5YaF5oyB"
+    "57ut5YGc55WZ77yI5peg5piO5pi+6L+b5Ye65Yqo5L2c44CB5Lmf5Yik5a6a5LiN5Ye65rS75Yqo"
+    "5oiW5LyR5oGv77yJCi0gcGV0X2FjdGl2aXR5OiDlrqDnianmtLvliqjvvIjotbDliqjjgIHlpZTo"
+    "t5HjgIHnjqnogI3jgIHll4XmjqLnrYnmmI7noa7mtLvliqjvvIkKLSBwZXRfcmVzdDog5a6g54mp"
+    "5LyR5oGv5oiW6Z2Z5q2i77yI6La05Y2n44CB552h6KeJ44CB6ZW/5pe26Ze05LiN5Yqo77yJCi0g"
+    "bWVtYmVyX3BldF9pbnRlcmFjdGlvbjog5oiQ5ZGY5LiO5a6g54mp5LqS5YqoCi0gbXVsdGlfZW50"
+    "aXR5X2ludGVyYWN0aW9uOiDlpJrkuKrlr7nosaHkuYvpl7TkupLliqgKLSBhYm5vcm1hbF9zdGF5"
+    "OiDlvILluLjlgZznlZnvvIjplb/ml7bpl7TkuI3liqjjgIHlvILluLjkvY3nva7nrYnvvIkKLSBz"
+    "Y2VuZV9hdHRlbnRpb25fbmVlZGVkOiDlnLrmma/pnIDopoHlhbPms6jvvIjlvILluLjlhYnnur/j"
+    "gIHnianlk4Hnp7vliqjnrYnvvIkKLSBvdGhlcjog5peg5rOV5b2S5YWl5Lul5LiK5Lu75L2V5YW3"
+    "5L2T57G75Z6L5pe25omN5L2/55So77yM56aB5q2i55So5a6D5YWc5bqV5bi46KeB5Zy65pmvCuex"
+    "u+Wei+i+ueeVjO+8iOmBv+WFjea3t+eUqO+8iToKLSBhcHBlYXIvZW50ZXIvbGVhdmUg5L6n6YeN"
+    "4oCc5Ye6546wL+i/m+WFpS/nprvlvIDnmoTliqjkvZzkuI7mlrnlkJHigJ3vvJtzdGF5IOS+p+mH"
+    "jeKAnOWcqOWcuuWBnOeVmeKAneOAggotIHBldF9hY3Rpdml0eSDmjIfmnInmmI7noa7mtLvliqjv"
+    "vIjotbDliqgv5aWU6LeRL+eOqeiAjS/ll4XmjqLvvInvvJtwZXRfcmVzdCDmjIfkvJHmga/miJbp"
+    "nZnmraLvvIjotrTljacv552h6KeJ77yJ77yb5LuF5Zyo5Zy65L2G5peg5piO5pi+5rS75Yqo5pe2"
+    "55SoIHBldF9zdGF544CCCi0gbWVtYmVyX2FwcGVhciDnlKjkuo7pppbmrKHlh7rnjrDmiJbnn63m"
+    "moLnu4/ov4fvvJvmjIHnu63lnKjlnLrkuJTml6Dov5vlh7rliqjkvZznlKggbWVtYmVyX3N0YXnj"
+    "gIIKLSDku4XlvZPml6Dms5XlvZLlhaXku7vkvZXlhbfkvZPnsbvlnovml7bmiY3nlKggb3RoZXLv"
+    "vIznpoHmraLnlKggb3RoZXIg5YWc5bqV5bi46KeB5Zy65pmv44CCCmFuYWx5c2lzX25vdGVfdHlw"
+    "ZSDmnprkuL49aWRlbnRpdHlfdW5jZXJ0YWlu44CBbG93X3Zpc2liaWxpdHnjgIFub19zaWduaWZp"
+    "Y2FudF9ldmVudOOAgW9jY2x1c2lvbuOAgXBvc3NpYmxlX2ZhbHNlX3Bvc2l0aXZl44CBc2NlbmVf"
+    "bm9pc2U7IG1lcmdlX3NpbWlsYXJfYWN0aW9ucz10cnVlOyBzcGxpdF9vbmx5X29uX3NpZ25pZmlj"
+    "YW50X2NoYW5nZT10cnVlLgppbnRlcnByZXRlZF9zdGF0ZSDlj5fmjqfor43ooajvvIjlv4Xpobvk"
+    "u47kuK3pgInmi6nvvIznpoHmraLoh6rpgKDov5HkuYnor43kuI7oi7HmlocgdG9rZW7vvIk6IOWc"
+    "qOWcui/mtLvliqgv56e75YqoL+S8keaBry/pnZnmraIv552h55ygL+itpuiniS/pnaDov5Ev56a7"
+    "5byALgrmnIDnu4jnuqbmnZ86IOWPquiDvei+k+WHuiBKU09OIOWvueixoTsg5omA5pyJIG9mZnNl"
+    "dCDlv4XpobvkuLrpnZ7otJ/mlbDkuJQgZW5kPj1zdGFydDsgb2Zmc2V0IOS7peW9k+WJjei+k+WF"
+    "peinhumikeeJh+autei1t+eCueS4uiAwIOenkjsgZXZlbnRfdHlwZSDlv4XpobvmnaXoh6rkuIrp"
+    "naLlrprkuYk7IGRldGFpbCDpnIDor6bnu4bmj4/ov7Dlj6/op4Llr5/kuovlrp47IOaJgOacieiH"
+    "queEtuivreiogOWtl+auteS9v+eUqOeugOS9k+S4reaWhy4="
 ).decode("utf-8")
 
-# 改动前模板渲染出的 video 模式 user prompt 全文（同样固定输入），逐字节相等。
+# 当前模板渲染出的 video 模式 user prompt 全文（同样固定输入），逐字节相等。
+# 固定指令已全部进入 system prompt；user prompt 只保留逐次变化的上下文。
 USER_MODE_SNAPSHOT = base64.b64decode(
     "5a625bqt5LiK5LiL5paH77yaCuWutuW6reamguWGtTog5a625bqt5ZCNPeaIkeeahOWutuW6rTsg"
     "5qCH562+PWhhc19wZXQ7IOWFs+azqOmhuTog5pegOyDpo47moLw9ZmFtaWx5X2NvbXBhbmlvbjsg"
@@ -155,57 +202,12 @@ USER_MODE_SNAPSHOT = base64.b64decode(
     "IOWutuW6reaho+ahiOS7heS9nOS4uui+heWKqeS4iuS4i+aWh++8jOS4jeiDveabv+S7o+inhumi"
     "keivgeaNri4KCuaRhOWDj+WktOS4iuS4i+aWh++8mgrmkYTlg4/lpLQ957Gz5a62TkFTOyDlkI3n"
     "p7A95a6i5Y6FOyDkvY3nva495a6i5Y6FOyDlpIfms6g955S16KeG5bGP5bmV5Lya5Y+N5YWJLgoK"
-    "5Lu75Yqh57qnIFByb21wdO+8mgrku7vliqHnm67moIc6IOWvueW9k+WJjSBzZXNzaW9uIOWBmue7"
-    "k+aehOWMluivhuWIq++8jOi+k+WHuuWPr+WFpeW6k+S6i+S7tuOAggrkvJror53kuIrkuIvmloc6"
-    "IHNlc3Npb25faWQ9MTAwOyBzb3VyY2VfaWQ9MTsgc3RhcnQ9MjAyNi0wMy0xM1QxMDowMDowMDsg"
-    "ZW5kPTIwMjYtMDMtMTNUMTA6MDE6MDA7IGR1cmF0aW9uPTYwOyBzZWdtZW50X2luZGV4PTA7IHNl"
-    "Z21lbnRfc3RhcnRfb2Zmc2V0X3NlYz0wOyBzZWdtZW50X2R1cmF0aW9uX3NlY29uZHM9NjAuCuet"
-    "lueVpeS4iuS4i+aWhzogaW5nZXN0X3R5cGU9eGlhb21pX25hc19iYWNrdXA7IHNvdXJjZV90eXBl"
-    "PWxvY2FsX2RpcmVjdG9yeTsgc3RyYXRlZ3lfbm90ZT3kvJjlhYjlvZLnurMuCuS6i+S7tuaKveWP"
-    "luinhOWImToKZXZlbnRfdHlwZSDlrprkuYnvvIjlv4Xpobvku47kuK3pgInmi6nvvIznpoHmraLo"
-    "h6rpgKDmiJbovpPlh7roi7HmlofliKvlkI3vvIk6Ci0gbWVtYmVyX2FwcGVhcjog5a625bqt5oiQ"
-    "5ZGY5Ye6546w5Zyo55S76Z2i5Lit77yI6aaW5qyh5Ye6546w5oiW55+t5pqC57uP6L+H77yM5peg"
-    "5piO56Gu6L+b5Ye65Yqo5L2c77yJCi0gbWVtYmVyX2VudGVyOiDmiJDlkZjov5vlhaXnlLvpnaLm"
-    "iJbmn5DkuKrljLrln5/vvIjmnInmmI7noa7nmoTov5vlhaXliqjkvZzkuI7mlrnlkJHvvIkKLSBt"
-    "ZW1iZXJfbGVhdmU6IOaIkOWRmOemu+W8gOeUu+mdouaIluafkOS4quWMuuWfn++8iOacieaYjueh"
-    "rueahOemu+W8gOWKqOS9nOS4juaWueWQke+8iQotIG1lbWJlcl9zdGF5OiDmiJDlkZjlnKjnlLvp"
-    "naLlhoXmjIHnu63lgZznlZnvvIjlnKjlnLrml7bpl7TovoPplb/kuJTml6DmmI7noa7ov5vlh7rl"
-    "iqjkvZzvvIkKLSB1bmtub3duX3BlcnNvbl9hcHBlYXI6IOmZjOeUn+S6ui/mnKrnn6XkurrlkZjl"
-    "h7rnjrDvvIjml6Dms5XljLnphY3lrrbluq3moaPmoYjnmoTkurrlkZjvvIkKLSBwZXRfYXBwZWFy"
-    "OiDlrqDnianlh7rnjrDlnKjnlLvpnaLkuK3vvIjpppbmrKHlh7rnjrDmiJbnn63mmoLnu4/ov4fv"
-    "vIkKLSBwZXRfZW50ZXI6IOWuoOeJqei/m+WFpeeUu+mdouaIluafkOS4quWMuuWfn++8iOacieaY"
-    "juehrueahOi/m+WFpeWKqOS9nO+8iQotIHBldF9sZWF2ZTog5a6g54mp56a75byA55S76Z2i5oiW"
-    "5p+Q5Liq5Yy65Z+f77yI5pyJ5piO56Gu55qE56a75byA5Yqo5L2c77yJCi0gcGV0X3N0YXk6IOWu"
-    "oOeJqeWcqOeUu+mdouWGheaMgee7reWBnOeVme+8iOaXoOaYjuaYvui/m+WHuuWKqOS9nOOAgeS5"
-    "n+WIpOWumuS4jeWHuua0u+WKqOaIluS8keaBr++8iQotIHBldF9hY3Rpdml0eTog5a6g54mp5rS7"
-    "5Yqo77yI6LWw5Yqo44CB5aWU6LeR44CB546p6ICN44CB5ZeF5o6i562J5piO56Gu5rS75Yqo77yJ"
-    "Ci0gcGV0X3Jlc3Q6IOWuoOeJqeS8keaBr+aIlumdmeatou+8iOi2tOWNp+OAgeedoeinieOAgemV"
-    "v+aXtumXtOS4jeWKqO+8iQotIG1lbWJlcl9wZXRfaW50ZXJhY3Rpb246IOaIkOWRmOS4juWuoOeJ"
-    "qeS6kuWKqAotIG11bHRpX2VudGl0eV9pbnRlcmFjdGlvbjog5aSa5Liq5a+56LGh5LmL6Ze05LqS"
-    "5YqoCi0gYWJub3JtYWxfc3RheTog5byC5bi45YGc55WZ77yI6ZW/5pe26Ze05LiN5Yqo44CB5byC"
-    "5bi45L2N572u562J77yJCi0gc2NlbmVfYXR0ZW50aW9uX25lZWRlZDog5Zy65pmv6ZyA6KaB5YWz"
-    "5rOo77yI5byC5bi45YWJ57q/44CB54mp5ZOB56e75Yqo562J77yJCi0gb3RoZXI6IOaXoOazleW9"
-    "kuWFpeS7peS4iuS7u+S9leWFt+S9k+exu+Wei+aXtuaJjeS9v+eUqO+8jOemgeatoueUqOWug+WF"
-    "nOW6leW4uOingeWcuuaZrwrnsbvlnovovrnnlYzvvIjpgb/lhY3mt7fnlKjvvIk6Ci0gYXBwZWFy"
-    "L2VudGVyL2xlYXZlIOS+p+mHjeKAnOWHuueOsC/ov5vlhaUv56a75byA55qE5Yqo5L2c5LiO5pa5"
-    "5ZCR4oCd77ybc3RheSDkvqfph43igJzlnKjlnLrlgZznlZnigJ3jgIIKLSBwZXRfYWN0aXZpdHkg"
-    "5oyH5pyJ5piO56Gu5rS75Yqo77yI6LWw5YqoL+WllOi3kS/njqnogI0v5ZeF5o6i77yJ77ybcGV0"
-    "X3Jlc3Qg5oyH5LyR5oGv5oiW6Z2Z5q2i77yI6La05Y2nL+edoeinie+8ie+8m+S7heWcqOWcuuS9"
-    "huaXoOaYjuaYvua0u+WKqOaXtueUqCBwZXRfc3RheeOAggotIG1lbWJlcl9hcHBlYXIg55So5LqO"
-    "6aaW5qyh5Ye6546w5oiW55+t5pqC57uP6L+H77yb5oyB57ut5Zyo5Zy65LiU5peg6L+b5Ye65Yqo"
-    "5L2c55SoIG1lbWJlcl9zdGF544CCCi0g5LuF5b2T5peg5rOV5b2S5YWl5Lu75L2V5YW35L2T57G7"
-    "5Z6L5pe25omN55SoIG90aGVy77yM56aB5q2i55SoIG90aGVyIOWFnOW6leW4uOingeWcuuaZr+OA"
-    "ggphbmFseXNpc19ub3RlX3R5cGUg5p6a5Li+PWlkZW50aXR5X3VuY2VydGFpbuOAgWxvd192aXNp"
-    "YmlsaXR544CBbm9fc2lnbmlmaWNhbnRfZXZlbnTjgIFvY2NsdXNpb27jgIFwb3NzaWJsZV9mYWxz"
-    "ZV9wb3NpdGl2ZeOAgXNjZW5lX25vaXNlOyBtZXJnZV9zaW1pbGFyX2FjdGlvbnM9dHJ1ZTsgc3Bs"
-    "aXRfb25seV9vbl9zaWduaWZpY2FudF9jaGFuZ2U9dHJ1ZS4KaW50ZXJwcmV0ZWRfc3RhdGUg5Y+X"
-    "5o6n6K+N6KGo77yI5b+F6aG75LuO5Lit6YCJ5oup77yM56aB5q2i6Ieq6YCg6L+R5LmJ6K+N5LiO"
-    "6Iux5paHIHRva2Vu77yJOiDlnKjlnLov5rS75YqoL+enu+WKqC/kvJHmga8v6Z2Z5q2iL+edoeec"
-    "oC/orabop4kv6Z2g6L+RL+emu+W8gC4K5pyA57uI57qm5p2fOiDlj6rog73ovpPlh7ogSlNPTiDl"
-    "r7nosaE7IOaJgOaciSBvZmZzZXQg5b+F6aG75Li66Z2e6LSf5pWw5LiUIGVuZD49c3RhcnQ7IG9m"
-    "ZnNldCDku6XlvZPliY3ovpPlhaXop4bpopHniYfmrrXotbfngrnkuLogMCDnp5I7IGV2ZW50X3R5"
-    "cGUg5b+F6aG75p2l6Ieq5LiK6Z2i5a6a5LmJOyBkZXRhaWwg6ZyA6K+m57uG5o+P6L+w5Y+v6KeC"
-    "5a+f5LqL5a6eOyDmiYDmnInoh6rnhLbor63oqIDlrZfmrrXkvb/nlKjnroDkvZPkuK3mlocu"
+    "5Lu75Yqh5LiK5LiL5paH77yaCuS8muivneS4iuS4i+aWhzogc2Vzc2lvbl9pZD0xMDA7IHNvdXJj"
+    "ZV9pZD0xOyBzdGFydD0yMDI2LTAzLTEzVDEwOjAwOjAwOyBlbmQ9MjAyNi0wMy0xM1QxMDowMTow"
+    "MDsgZHVyYXRpb249NjA7IHNlZ21lbnRfaW5kZXg9MDsgc2VnbWVudF9zdGFydF9vZmZzZXRfc2Vj"
+    "PTA7IHNlZ21lbnRfZHVyYXRpb25fc2Vjb25kcz02MC4K562W55Wl5LiK5LiL5paHOiBpbmdlc3Rf"
+    "dHlwZT14aWFvbWlfbmFzX2JhY2t1cDsgc291cmNlX3R5cGU9bG9jYWxfZGlyZWN0b3J5OyBzdHJh"
+    "dGVneV9ub3RlPeS8mOWFiOW9kue6sy4="
 ).decode("utf-8")
 
 ORIGINAL_RULE_5 = "5. 事件粒度：连续同类活动尽量合并，仅在明显变化时拆分。"
@@ -278,7 +280,7 @@ def test_video_mode_system_prompt_matches_snapshot() -> None:
     assert system_prompt == VIDEO_MODE_SNAPSHOT
 
 
-def test_video_mode_user_prompt_matches_pre_change_snapshot() -> None:
+def test_video_mode_user_prompt_matches_snapshot() -> None:
     _, user_prompt = build_video_recognition_prompt(_base_input())
 
     assert user_prompt == USER_MODE_SNAPSHOT
@@ -290,9 +292,9 @@ def test_video_mode_keeps_original_rule5_rule6_and_has_no_frame_header() -> None
     assert ORIGINAL_RULE_5 in system_prompt
     assert ORIGINAL_RULE_6 in system_prompt
     assert FRAME_LIST_HEADER not in user_prompt
-    # 最终约束中的 offset 子句保持 video 版，不出现 image 版。
-    assert VIDEO_OFFSET_CLAUSE in user_prompt
-    assert IMAGE_OFFSET_CLAUSE not in user_prompt
+    # 最终约束中的 offset 子句保持 video 版（位于固定前缀），不出现 image 版。
+    assert VIDEO_OFFSET_CLAUSE in system_prompt
+    assert IMAGE_OFFSET_CLAUSE not in system_prompt
 
 
 def test_video_mode_empty_timestamps_is_valid_and_matches_snapshot() -> None:
@@ -328,12 +330,15 @@ def test_image_mode_renders_three_frame_lines_in_order() -> None:
     assert "17. 事件数量上限" in system_prompt
     assert EVENT_CAP_SENTENCE in system_prompt
     # 最终约束中的 offset 子句换成 image 版，与系统提示规则 6 不再冲突。
-    assert IMAGE_OFFSET_CLAUSE in user_prompt
-    assert VIDEO_OFFSET_CLAUSE not in user_prompt
+    assert IMAGE_OFFSET_CLAUSE in system_prompt
+    assert VIDEO_OFFSET_CLAUSE not in system_prompt
 
-    # 16 个事件类型名必须全部保留。
+    # 16 个事件类型名必须全部保留在固定前缀（system prompt）中，且固定规则
+    # 不再重复出现在逐次变化的 user prompt 里（否则公共前缀会被变量切断）。
     for event_type in sorted(VIDEO_EVENT_TYPES):
-        assert event_type in user_prompt
+        assert event_type in system_prompt
+    assert "event_type 定义" not in user_prompt
+    assert "最终约束" not in user_prompt
 
 
 def test_change_detection_and_empty_result_guidance_are_rendered() -> None:
@@ -509,7 +514,7 @@ def test_interpreted_state_examples_stay_within_controlled_vocabulary() -> None:
     system_prompt, user_prompt = build_video_recognition_prompt(_base_input())
 
     for value in INTERPRETED_STATES:
-        assert value in user_prompt
+        assert value in system_prompt
 
     used: list[str] = []
     for example in _example_objects(system_prompt):

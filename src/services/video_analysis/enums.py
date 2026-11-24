@@ -50,7 +50,7 @@ EVENT_TYPE_DEFINITIONS: list[dict[str, str]] = [
 RECOGNITION_STATUSES = {"confirmed", "suspected", "unknown"}
 ACTIVITY_LEVELS = {"low", "medium", "high"}
 
-# 受控词表：prompt 从这里渲染（task.j2），落库前由 normalize_interpreted_state 归一化。
+# 受控词表：prompt 从这里渲染（task_rules.j2），落库前由 normalize_interpreted_state 归一化。
 INTERPRETED_STATES: list[str] = [
     "在场",
     "活动",
