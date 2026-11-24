@@ -226,9 +226,15 @@ def _chat(
     messages: list[dict[str, str]],
     temperature: float = 0,
     max_tokens: int = 8192,
+    extra_body: dict[str, Any] | None = None,
 ) -> str:
     """Single ``chat_completion`` call + token usage accounting."""
-    text = client.chat_completion(messages, temperature=temperature, max_tokens=max_tokens)
+    text = client.chat_completion(
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        extra_body=extra_body,
+    )
     _record_token(
         db,
         client=client,
@@ -250,6 +256,7 @@ def generate_single_pass_summary_payload(
     known_subjects: list[dict[str, str]],
     subject_sections_payload: list[dict[str, Any]],
     max_tokens: int = 8192,
+    request_extra_body: dict[str, Any] | None = None,
     locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the single-pass LLM path; return the final structured payload.
@@ -277,6 +284,7 @@ def generate_single_pass_summary_payload(
         provider_id=provider_id,
         provider_name_snapshot=provider_name_snapshot,
         max_tokens=max_tokens,
+        extra_body=request_extra_body,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -303,6 +311,7 @@ def generate_single_pass_summary_payload(
                 provider_id=provider_id,
                 provider_name_snapshot=provider_name_snapshot,
                 max_tokens=max_tokens,
+                extra_body=request_extra_body,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {
@@ -358,6 +367,7 @@ def generate_serial_summary_payload(
     missing_subjects: list[str],
     attention_candidates_payload: list[dict[str, Any]],
     max_tokens: int = 8192,
+    request_extra_body: dict[str, Any] | None = None,
     locale: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the per-subject + rollup serial LLM path.
@@ -441,6 +451,7 @@ def generate_serial_summary_payload(
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
             max_tokens=max_tokens,
+            extra_body=request_extra_body,
             messages=[
                 {"role": "system", "content": subject_system_prompt},
                 {"role": "user", "content": subject_user_prompt},
@@ -461,6 +472,7 @@ def generate_serial_summary_payload(
                 provider_id=provider_id,
                 provider_name_snapshot=provider_name_snapshot,
                 max_tokens=max_tokens,
+                extra_body=request_extra_body,
                 messages=[
                     {
                         "role": "system",
@@ -514,6 +526,7 @@ def generate_serial_summary_payload(
         provider_id=provider_id,
         provider_name_snapshot=provider_name_snapshot,
         max_tokens=max_tokens,
+        extra_body=request_extra_body,
         messages=[
             {"role": "system", "content": rollup_system_prompt},
             {"role": "user", "content": rollup_user_prompt},
@@ -530,6 +543,7 @@ def generate_serial_summary_payload(
             provider_id=provider_id,
             provider_name_snapshot=provider_name_snapshot,
             max_tokens=max_tokens,
+            extra_body=request_extra_body,
             messages=[
                 {"role": "system", "content": rollup_system_prompt},
                 {

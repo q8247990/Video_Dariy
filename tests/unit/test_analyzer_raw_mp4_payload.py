@@ -135,7 +135,9 @@ def test_schema_silently_ignores_legacy_keyframe_fields() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_provider_and_session(db: Session, *, image_mode: bool = False) -> tuple[LLMProvider, int]:
+def _seed_provider_and_session(
+    db: Session, *, image_mode: bool = False, extra: dict[str, Any] | None = None
+) -> tuple[LLMProvider, int]:
     """Seed the minimum the analyzer task needs to claim a session.
 
     The provider's input mode is made explicit through
@@ -168,6 +170,8 @@ def _seed_provider_and_session(db: Session, *, image_mode: bool = False) -> tupl
         # Video mode, made explicit: the key exists but WITHOUT the
         # frame_sampling entry.
         extra_config_json = {}
+    if extra:
+        extra_config_json = {**extra_config_json, **extra}
 
     provider = LLMProvider(
         provider_name="raw-mp4-test",
@@ -322,7 +326,9 @@ def test_analyzer_emits_image_payload_for_frame_sampling_provider(
 
     db = session_factory()
     try:
-        provider, session_id = _seed_provider_and_session(db, image_mode=True)
+        provider, session_id = _seed_provider_and_session(
+            db, image_mode=True, extra={"strata_checkpoint": False}
+        )
         # The seeded provider explicitly resolves to image mode: the
         # payload assertions below are the image-mode contract.
         assert resolve_input_mode(provider) == INPUT_MODE_IMAGE
@@ -375,6 +381,7 @@ def test_analyzer_emits_image_payload_for_frame_sampling_provider(
         if item["type"] == "image_url":
             assert item["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
-    # The video sampling hint must not leak into the image payload.
+    # The video sampling hint must not leak into the image payload; the
+    # provider's one-shot flag must survive the execute path unchanged.
     assert "media_io_kwargs" not in (call["extra_body"] or {})
-    assert call["extra_body"] == {}
+    assert call["extra_body"] == {"strata_checkpoint": False}

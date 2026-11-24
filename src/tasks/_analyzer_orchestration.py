@@ -101,6 +101,7 @@ from src.services.provider_generation_limits import (
     resolve_image_output_tokens,
     resolve_num_frames,
 )
+from src.services.provider_request_flags import resolve_one_shot_request_extras
 from src.services.system_config_registry import FRAME_SAMPLING_SESSION_FRAME_LIMIT, get_config
 from src.services.video_analysis.enums import VIDEO_EVENT_TYPES
 from src.services.video_analysis.mapper import validate_recognition_offsets_within_sub_chunk
@@ -734,7 +735,7 @@ def _run_sub_chunk_loop(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     video_data_url=None,
-                    extra_body={},
+                    extra_body=resolve_one_shot_request_extras(provider),
                     client=client,
                     provider=provider,
                     frames=frame_set.frames,
@@ -745,9 +746,12 @@ def _run_sub_chunk_loop(
                 files_analyzed += 1
             else:
                 video_data_url = ports.video_data_url(plan_item.file_paths[0])
-                extra_body = build_sub_chunk_extra_body(
-                    resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
-                )
+                extra_body = {
+                    **build_sub_chunk_extra_body(
+                        resolve_num_frames(provider, scene_default=RAW_MP4_NUM_FRAMES)
+                    ),
+                    **resolve_one_shot_request_extras(provider),
+                }
                 prepared, result = _run_one_sub_chunk(
                     db=db,
                     self=self,

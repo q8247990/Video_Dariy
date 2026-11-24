@@ -45,6 +45,7 @@ from src.services.dispatch import (
 )
 from src.services.llm_qos import enforce_token_quota, record_token_usage
 from src.services.provider_generation_limits import resolve_max_output_tokens
+from src.services.provider_request_flags import resolve_one_shot_request_extras
 from src.services.provider_selector import (
     PROVIDER_TYPE_QA,
     find_required_enabled_provider,
@@ -286,6 +287,9 @@ def _run_llm_phase(
     serial_split_prompt_threshold: int,
 ) -> tuple[str, list[Any], list[Any], int, bool, str]:
     """Pick the single/serial path, run the LLM, return the parsed payload."""
+    # One-shot calls: nothing resumes them, so a provider that supports
+    # strata_checkpoint may skip parking a snapshot for them.
+    request_extra_body = resolve_one_shot_request_extras(provider)
     if evidence.single_pass_user_prompt_chars > serial_split_prompt_threshold:
         summary_mode = "split_serial"
         result = generate_serial_summary_payload(
@@ -294,6 +298,7 @@ def _run_llm_phase(
             provider_id=provider.id,
             provider_name_snapshot=provider.provider_name,
             max_tokens=resolve_max_output_tokens(provider, scene_default=8192) or 8192,
+            request_extra_body=request_extra_body,
             target_date=target_date,
             time_range_start=evidence.time_range_start,
             time_range_end=evidence.time_range_end,
@@ -313,6 +318,7 @@ def _run_llm_phase(
             provider_id=provider.id,
             provider_name_snapshot=provider.provider_name,
             max_tokens=resolve_max_output_tokens(provider, scene_default=8192) or 8192,
+            request_extra_body=request_extra_body,
             events=evidence.events,
             prompt=evidence.prompt,
             known_subjects=evidence.known_subjects,

@@ -130,8 +130,8 @@ class SubChunkRunResult:
 
     ``payload_mode`` records which vision payload this call sent:
     ``"image"`` when the caller supplied sampled frames (interleaved
-    ``image_url`` parts, empty ``extra_body``) and ``"video"`` for the
-    raw_mp4 path (``video_url`` part + the ``num_frames`` hint).
+    ``image_url`` parts, no ``media_io_kwargs`` hint) and ``"video"`` for
+    the raw_mp4 path (``video_url`` part + the ``num_frames`` hint).
 
     ``frame_fingerprint`` is the namespaced checkpoint fingerprint this
     run used — the value the caller should pass to
@@ -275,10 +275,11 @@ def execute_sub_chunk(
 
     ``frames`` selects the payload mode: when a non-empty sequence of
     :class:`FrameSample` is supplied the call sends an interleaved image
-    payload (``payload_mode == "image"``) with an EMPTY ``extra_body``
-    (no ``media_io_kwargs``); when ``frames`` is ``None`` or empty the
-    raw_mp4 video payload is kept unchanged (``payload_mode == "video"``)
-    with the ``num_frames`` hint in ``extra_body``.
+    payload (``payload_mode == "image"``) with NO ``media_io_kwargs`` hint
+    (other caller extras such as ``strata_checkpoint`` are preserved);
+    when ``frames`` is ``None`` or empty the raw_mp4 video payload is kept
+    unchanged (``payload_mode == "video"``) with the ``num_frames`` hint in
+    ``extra_body``.
 
     ``frame_fingerprint`` is the namespaced checkpoint fingerprint to
     use: image mode passes ``"frames:" + frame_set_fingerprint(...)``
@@ -319,8 +320,9 @@ def execute_sub_chunk(
         frame_fingerprint = video_mode_frame_fingerprint(video_data_url)
 
     if has_frames:
-        # Image mode: frames are sent inline, so no video sampling hint.
-        extra_body = {}
+        # Image mode: frames are sent inline, so no video sampling hint;
+        # caller extras (e.g. strata_checkpoint) must survive.
+        extra_body = dict(extra_body or {})
         payload_mode = "image"
     elif extra_body is None:
         extra_body = build_sub_chunk_extra_body(

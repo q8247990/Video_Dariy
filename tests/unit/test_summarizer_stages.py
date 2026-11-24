@@ -84,9 +84,17 @@ class _StubGateway:
         messages: list[dict[str, Any]],
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> str:
         self.calls.append(
-            {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+            {
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "response_format": response_format,
+                "extra_body": extra_body,
+            }
         )
         if not self.replies:
             return ""
