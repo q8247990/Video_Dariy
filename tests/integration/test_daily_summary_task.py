@@ -69,6 +69,7 @@ from src.models.daily_summary import DailySummary
 from src.models.event_record import EventRecord
 from src.models.home_entity_profile import HomeEntityProfile
 from src.models.llm_provider import LLMProvider
+from src.models.llm_usage_log import LLMUsageLog
 from src.models.system_config import SystemConfig
 from src.models.task_delivery import TaskDelivery
 from src.models.task_log import TaskLog
@@ -301,14 +302,13 @@ def _install_branching_gateway(
 def test_generate_daily_summary_empty_events_fallback_and_no_webhook(
     pg_db_factory: SessionFactory,
 ) -> None:
-    """No events on the day → no LLM call returns a usable payload → fallback.
+    """No events on the day → the generators short-circuit before the LLM.
 
-    The gateway returns ``""`` (empty), the single-pass parser branch
-    skips and the orchestrator substitutes the stable empty-day
-    :func:`~src.core.i18n.locale_directive.get_fallback_summary` text;
-    no :class:`WebhookConfig` rows match the
-    ``daily_summary_generated`` subscription so the outbox writer
-    enrols zero webhook rows.
+    Zero-event days never reach the model: the orchestrator persists the
+    honest data-missing :func:`~src.core.i18n.locale_directive.get_fallback_summary`
+    text with zero gateway calls and zero ``LLMUsageLog`` rows; no
+    :class:`WebhookConfig` rows match the ``daily_summary_generated``
+    subscription so the outbox writer enrols zero webhook rows.
     """
 
     db = pg_db_factory()
@@ -324,7 +324,7 @@ def test_generate_daily_summary_empty_events_fallback_and_no_webhook(
 
     assert result["summary_date"] == "2026-03-13"
     assert result["event_count"] == 0
-    assert len(_latest_gateway().calls) == 1
+    assert len(_latest_gateway().calls) == 0
 
     verify_db = pg_db_factory()
     try:
@@ -334,9 +334,13 @@ def test_generate_daily_summary_empty_events_fallback_and_no_webhook(
             .first()
         )
         assert summary is not None
-        assert summary.overall_summary == "昨天家中整体较为平稳，未观测到明确的关键活动。"
+        assert summary.overall_summary == (
+            "当日没有可用的分析结果：可能未产生录像，或识别任务未执行/未成功。"
+        )
+        assert "安静" not in summary.overall_summary
         assert summary.subject_sections_json == []
         assert summary.attention_items_json == []
+        assert verify_db.query(LLMUsageLog).count() == 0
         assert verify_db.query(TaskDelivery).count() == 0
         dispatcher = _container.get_container().dispatcher
         assert isinstance(dispatcher, FakeTaskDispatcher)

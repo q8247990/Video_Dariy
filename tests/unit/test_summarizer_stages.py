@@ -36,6 +36,7 @@ from src.models.daily_summary import DailySummary
 from src.models.daily_summary_attempt import DailySummaryGenerationAttempt
 from src.models.event_record import EventRecord
 from src.models.home_entity_profile import HomeEntityProfile
+from src.models.llm_usage_log import LLMUsageLog
 from src.models.system_config import SystemConfig
 from src.models.task_log import TaskLog
 from src.models.video_session import VideoSession
@@ -532,6 +533,35 @@ def test_build_evidence_returns_half_open_event_range(pg_db: Session) -> None:
     assert evidence.prompt_chars > 0
 
 
+def test_build_evidence_feeds_local_time_range_to_prompt_input(pg_db: Session) -> None:
+    """The prompt input carries local wall-clock text, never UTC ISO instants."""
+    pg_db.add(SystemConfig(config_key="home_timezone", config_value="Asia/Shanghai"))
+    _seed_qa_provider(pg_db)
+    target = date(2026, 11, 22)
+
+    captured: dict[str, Any] = {}
+
+    def _capture(prompt_input: Any) -> tuple[str, str]:
+        captured["prompt_input"] = prompt_input
+        return ("SYSTEM", "USER")
+
+    evidence = build_evidence(
+        pg_db,
+        target_date=target,
+        zone=ZoneInfo("Asia/Shanghai"),
+        prompt_builder=_capture,
+        prompt_input_factory=lambda **kwargs: kwargs,
+    )
+    expected_range = "2026-11-22 00:00 ~ 2026-11-23 00:00（Asia/Shanghai）"
+    prompt_input = captured["prompt_input"]
+    assert prompt_input["time_range_start"] == expected_range
+    assert prompt_input["time_range_end"] == ""
+    assert "+00:00" not in prompt_input["time_range_start"]
+    assert "T16:00:00" not in prompt_input["time_range_start"]
+    assert evidence.time_range_start == expected_range
+    assert evidence.time_range_end == ""
+
+
 def test_build_evidence_trims_prompt_when_input_is_large(
     pg_db: Session,
 ) -> None:
@@ -632,6 +662,8 @@ def test_generate_single_pass_summary_payload_uses_known_subjects(
     assert [s["subject_name"] for s in sections] == ["爸爸", "妈妈"]
     assert attention == []
     assert parse_retried is False
+    # A day WITH events still spends exactly one chat call.
+    assert len(stub.calls) == 1
 
 
 def test_generate_serial_summary_payload_uses_rollup(
@@ -677,8 +709,8 @@ def test_generate_serial_summary_payload_uses_rollup(
         provider_id=1,
         provider_name_snapshot="qa-default",
         target_date=target,
-        start_dt=evidence.start_dt,
-        end_dt=evidence.end_dt,
+        time_range_start=evidence.time_range_start,
+        time_range_end=evidence.time_range_end,
         events=evidence.events,
         home_context=evidence.home_context,
         known_subjects=evidence.known_subjects,
@@ -738,8 +770,8 @@ def test_generate_serial_summary_payload_recovers_from_subject_parse_failure(
         provider_id=1,
         provider_name_snapshot="qa-default",
         target_date=target,
-        start_dt=evidence.start_dt,
-        end_dt=evidence.end_dt,
+        time_range_start=evidence.time_range_start,
+        time_range_end=evidence.time_range_end,
         events=evidence.events,
         home_context=evidence.home_context,
         known_subjects=evidence.known_subjects,
@@ -751,6 +783,128 @@ def test_generate_serial_summary_payload_recovers_from_subject_parse_failure(
     assert sections[0]["subject_name"] == "爸爸"
     assert sections[0]["summary"] == "在客厅活动。"
     assert parse_retried is True
+
+
+def test_generate_serial_summary_payload_renders_local_range_in_subject_prompt(
+    pg_db: Session,
+) -> None:
+    """Per-subject prompts carry the local range with the zone label, not UTC ISO."""
+    _seed_qa_provider(pg_db)
+    _seed_home_member(pg_db, name="爸爸")
+    target = date(2026, 3, 13)
+    _add_event(
+        pg_db,
+        target_date=target,
+        hour=9,
+        related_entities=[
+            {
+                "entity_type": "member",
+                "display_name": "爸爸",
+                "matched_profile_name": "爸爸",
+                "recognition_status": "confirmed",
+            }
+        ],
+    )
+
+    subject_reply = json.dumps(
+        {"summary": "在客厅活动。", "attention_needed": False},
+        ensure_ascii=False,
+    )
+    rollup_reply = json.dumps(
+        {"overall_summary": "昨天爸爸在客厅。", "attention_items": []},
+        ensure_ascii=False,
+    )
+    stub = _StubGateway([subject_reply, rollup_reply])
+    evidence = build_evidence(
+        pg_db,
+        target_date=target,
+        zone=ZoneInfo("Asia/Shanghai"),
+        prompt_builder=lambda payload: ("SYS", "USR"),
+        prompt_input_factory=lambda **kwargs: kwargs,
+    )
+    generate_serial_summary_payload(
+        db=pg_db,
+        client=stub,
+        provider_id=1,
+        provider_name_snapshot="qa-default",
+        target_date=target,
+        time_range_start=evidence.time_range_start,
+        time_range_end=evidence.time_range_end,
+        events=evidence.events,
+        home_context=evidence.home_context,
+        known_subjects=evidence.known_subjects,
+        subject_sections_payload=evidence.subject_sections,
+        missing_subjects=evidence.missing_subjects,
+        attention_candidates_payload=evidence.attention_candidates,
+    )
+
+    subject_user_prompt = str(stub.calls[0]["messages"][1]["content"])
+    assert "时间范围=2026-03-13 00:00 ~ 2026-03-14 00:00（Asia/Shanghai）" in subject_user_prompt
+    assert "+00:00" not in subject_user_prompt
+    assert "T16:00:00" not in subject_user_prompt
+
+
+def test_generate_single_pass_summary_payload_skips_llm_for_empty_day(pg_db: Session) -> None:
+    """Zero events → zero chat calls, zero usage rows, honest data-missing fallback."""
+    _seed_qa_provider(pg_db)
+    stub = _StubGateway([])
+
+    overall, sections, attention, prompt_chars, parse_retried = (
+        generate_single_pass_summary_payload(
+            db=pg_db,
+            client=stub,
+            provider_id=1,
+            provider_name_snapshot="qa-default",
+            events=[],
+            prompt=("SYS", "USR"),
+            known_subjects=[],
+            subject_sections_payload=[],
+        )
+    )
+
+    assert stub.calls == []
+    assert pg_db.query(LLMUsageLog).count() == 0
+    assert "分析结果" in overall
+    assert "未产生录像" in overall
+    assert "安静" not in overall
+    assert "平稳" not in overall
+    assert sections == []
+    assert attention == []
+    assert prompt_chars == 0
+    assert parse_retried is False
+
+
+def test_generate_serial_summary_payload_skips_llm_for_empty_day(pg_db: Session) -> None:
+    """Zero events → serial path short-circuits before any subject/rollup call."""
+    _seed_qa_provider(pg_db)
+    stub = _StubGateway([])
+
+    overall, sections, attention, prompt_chars, parse_retried = generate_serial_summary_payload(
+        db=pg_db,
+        client=stub,
+        provider_id=1,
+        provider_name_snapshot="qa-default",
+        target_date=date(2026, 3, 13),
+        time_range_start="2026-03-13 00:00 ~ 2026-03-14 00:00（UTC）",
+        time_range_end="",
+        events=[],
+        home_context={"home_profile": {}, "members": [], "pets": []},
+        known_subjects=[],
+        subject_sections_payload=[],
+        missing_subjects=[],
+        attention_candidates_payload=[],
+    )
+
+    assert stub.calls == []
+    assert pg_db.query(LLMUsageLog).count() == 0
+    assert "分析结果" in overall
+    assert "未产生录像" in overall
+    assert "安静" not in overall
+    assert "平稳" not in overall
+    assert sections == []
+    assert attention == []
+    assert prompt_chars == 0
+    assert parse_retried is False
 
 
 # ---------------------------------------------------------------------------

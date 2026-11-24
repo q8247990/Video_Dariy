@@ -19,8 +19,21 @@ def test_language_directive_switches_and_defaults_to_zh() -> None:
 
 def test_tone_and_fallback_switch_with_locale() -> None:
     assert get_tone_directive("en-US") != get_tone_directive("zh-CN")
-    assert "calm" in get_fallback_summary(False, "en-US").lower()
-    assert "平稳" in get_fallback_summary(False, "zh-CN")
+    assert get_fallback_summary(False, "en-US") != get_fallback_summary(False, "zh-CN")
+
+
+def test_no_events_fallback_describes_missing_data_not_a_calm_home() -> None:
+    zh_text = get_fallback_summary(False, "zh-CN")
+    assert zh_text == "当日没有可用的分析结果：可能未产生录像，或识别任务未执行/未成功。"
+    assert "分析结果" in zh_text
+    assert "未产生录像" in zh_text
+    assert "安静" not in zh_text
+    assert "平稳" not in zh_text
+
+    en_text = get_fallback_summary(False, "en-US").lower()
+    assert "calm" not in en_text
+    assert "quiet" not in en_text
+    assert "analysis results" in en_text
 
 
 def test_summary_title_and_mcp_descriptions_switch_with_locale() -> None:

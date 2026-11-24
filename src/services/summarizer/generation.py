@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from src.core.i18n.locale_directive import get_retry_json_instruction
@@ -256,7 +256,20 @@ def generate_single_pass_summary_payload(
 
     Returns ``(overall_summary, subject_sections, attention_items,
     prompt_chars, parse_retried)``.
+
+    An empty day never reaches the model: the honest data-missing fallback
+    is returned with zero LLM calls (and therefore no ``LLMUsageLog`` row),
+    so "the system collected nothing" is not reframed as "the home was calm".
     """
+    if not events:
+        return (
+            build_fallback_overall_summary(has_events=False, locale=locale),
+            [],
+            [],
+            0,
+            False,
+        )
+
     system_prompt, user_prompt = prompt
     response_text = _chat(
         db=db,
@@ -336,8 +349,8 @@ def generate_serial_summary_payload(
     provider_id: int,
     provider_name_snapshot: str | None,
     target_date: date,
-    start_dt: datetime,
-    end_dt: datetime,
+    time_range_start: str,
+    time_range_end: str,
     events: list[EventRecord],
     home_context: dict[str, Any],
     known_subjects: list[dict[str, str]],
@@ -349,11 +362,27 @@ def generate_serial_summary_payload(
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
     """Run the per-subject + rollup serial LLM path.
 
+    ``time_range_start`` / ``time_range_end`` carry the pre-formatted
+    LOCAL day-range text (``format_local_day_range`` output) rendered into
+    the per-subject prompts; raw UTC ISO instants must not reach the model.
+
     Returns ``(overall_summary, subject_sections, attention_items,
     prompt_chars_total, parse_retried)``. ``prompt_chars_total``
     accumulates the per-subject + rollup user-prompt lengths so the
     caller can write them to the ``task_log`` detail.
+
+    An empty day never reaches the model: the honest data-missing fallback
+    is returned with zero LLM calls (and therefore no ``LLMUsageLog`` row).
     """
+    if not events:
+        return (
+            build_fallback_overall_summary(has_events=False, locale=locale),
+            [],
+            [],
+            0,
+            False,
+        )
+
     compressed_input = compress_daily_input(
         subject_sections=subject_sections_payload,
         missing_subjects=missing_subjects,
@@ -396,8 +425,8 @@ def generate_serial_summary_payload(
         subject_prompt = build_subject_summary_prompt(
             home_context=home_context,
             summary_date=target_date,
-            time_range_start=start_dt.isoformat(),
-            time_range_end=end_dt.isoformat(),
+            time_range_start=time_range_start,
+            time_range_end=time_range_end,
             subject_section=subject_section,
             locale=locale,
         )

@@ -29,8 +29,11 @@ _TONE_DIRECTIVES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 _FALLBACK_SUMMARY_NO_EVENTS: dict[str, str] = {
-    "zh-CN": "昨天家中整体较为平稳，未观测到明确的关键活动。",
-    "en-US": "The home was generally calm yesterday with no notable activities observed.",
+    "zh-CN": "当日没有可用的分析结果：可能未产生录像，或识别任务未执行/未成功。",
+    "en-US": (
+        "No analysis results are available for this day: there may have been no recordings,"
+        " or the recognition tasks were not run or did not succeed."
+    ),
 }
 
 _FALLBACK_SUMMARY_HAS_EVENTS: dict[str, str] = {

@@ -26,7 +26,7 @@ from src.services.daily_summary.preprocess import (
 )
 from src.services.daily_summary.schemas import AttentionItem
 from src.services.home_profile import build_home_context
-from src.services.home_timezone import local_day_bounds
+from src.services.home_timezone import format_local_day_range, local_day_bounds
 
 
 # --- helpers.py ---
@@ -286,6 +286,14 @@ class Evidence:
         locale: Locale directive passed to the prompt builder.
         single_pass_user_prompt_chars: ``len(prompt[1])`` —
             duplicated for the orchestrator's split-decision logic.
+        time_range_start: Local-text day range (``format_local_day_range``
+            output, e.g. ``"2026-11-22 00:00 ~ 2026-11-23 00:00（Asia/Shanghai）"``)
+            fed to the prompt builders in place of the raw UTC ISO strings.
+            The whole range rides in this field so the templates keep the
+            ``time_range_start`` / ``time_range_end`` variable names; the end
+            text is embedded in the start text.
+        time_range_end: Kept for the two-string prompt contract; empty in
+            the current single-string rendering.
     """
 
     target_date: date
@@ -301,6 +309,8 @@ class Evidence:
     prompt_chars: int
     locale: str | None = None
     single_pass_user_prompt_chars: int = 0
+    time_range_start: str = ""
+    time_range_end: str = ""
 
 
 # --- evidence.py ---
@@ -356,11 +366,16 @@ def build_evidence(
     subject_sections_payload = [item.model_dump() for item in subject_sections]
     attention_candidates_payload = [item.model_dump() for item in attention_candidates]
 
+    # Prompts must carry the LOCAL wall-clock range with an explicit timezone
+    # label; raw UTC ISO strings get read as local time by the model.
+    time_range_start = format_local_day_range(start_dt, end_dt, zone)
+    time_range_end = ""
+
     prompt_input = prompt_input_factory(
         home_context=home_context,
         summary_date=target_date,
-        time_range_start=start_dt.isoformat(),
-        time_range_end=end_dt.isoformat(),
+        time_range_start=time_range_start,
+        time_range_end=time_range_end,
         subject_sections=subject_sections_payload,
         missing_subjects=missing_subjects,
         attention_candidates=attention_candidates_payload,
@@ -382,6 +397,8 @@ def build_evidence(
         prompt_chars=len(prompt[1]),
         locale=locale,
         single_pass_user_prompt_chars=len(prompt[1]),
+        time_range_start=time_range_start,
+        time_range_end=time_range_end,
     )
 
 

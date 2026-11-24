@@ -30,3 +30,27 @@ def local_day_bounds(zone: ZoneInfo, target_date: date) -> tuple[datetime, datet
         local_start.astimezone(timezone.utc),
         next_local_start.astimezone(timezone.utc),
     )
+
+
+def format_local_day_range(start_utc: datetime, end_utc: datetime, zone: ZoneInfo) -> str:
+    """Render UTC instants as human-readable LOCAL day-range text.
+
+    ``local_day_bounds`` returns UTC instants; feeding their ``isoformat()``
+    straight into a prompt makes the model read the UTC wall clock as local
+    time (e.g. "2026-11-21T16:00:00+00:00" rendered as "下午4点" instead of
+    the actual local midnight). This helper converts both instants back to
+    ``zone`` and renders ``"YYYY-MM-DD HH:MM ~ YYYY-MM-DD HH:MM（<zone.key>）"``
+    so prompts always carry the local clock plus an explicit timezone label.
+
+    Args:
+        start_utc: Timezone-aware instant for the range start (as returned
+            by :func:`local_day_bounds`).
+        end_utc: Timezone-aware instant for the range end (exclusive).
+        zone: Home timezone used for the conversion and the label.
+    """
+    start_local = start_utc.astimezone(zone)
+    end_local = end_utc.astimezone(zone)
+    return (
+        f"{start_local.strftime('%Y-%m-%d %H:%M')} ~ "
+        f"{end_local.strftime('%Y-%m-%d %H:%M')}（{zone.key}）"
+    )
