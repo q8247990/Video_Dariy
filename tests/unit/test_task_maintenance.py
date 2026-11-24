@@ -287,8 +287,19 @@ def test_cancelled_analysis_is_not_auto_resumed(
         db.commit()
         dispatcher = _bind_fake_dispatcher(monkeypatch)
 
-        assert recover_timed_out_tasks(db, datetime.now(timezone.utc), dispatcher=dispatcher) == 0
+        now = datetime.now(timezone.utc)
+        # Issue 5 contract update: a cancel-requested row whose lease has
+        # expired is no longer silently skipped — it is finalized as
+        # CANCELLED (count 1). The invariant this test actually guards
+        # still holds: a cancelled analysis run is NEVER auto-resumed,
+        # and the session is rolled back from ANALYZING.
+        assert recover_timed_out_tasks(db, now, dispatcher=dispatcher) == 1
         assert len(dispatcher.dispatched_analyze_session) == 0
+        db.commit()
+        db.refresh(task_log)
+        db.refresh(session)
+        assert task_log.status == TaskStatus.CANCELLED
+        assert session.analysis_status == SessionAnalysisStatus.SEALED
     finally:
         db.close()
 

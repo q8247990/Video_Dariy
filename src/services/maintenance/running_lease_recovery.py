@@ -7,7 +7,10 @@ window has elapsed, then either:
 
 * re-queues the analyzer lease-expiry case via the analysis
   recovery helper (:mod:`.analysis_recovery`), or
-* marks the row TIMEOUT with an operator-facing message.
+* marks the row TIMEOUT with an operator-facing message, or
+* finalizes a ``cancel_requested`` row whose lease expired as
+  CANCELLED (the zombie case: a worker killed out-of-band never
+  observes the flag).
 
 This loop issued a per-row SELECT for the
 ``SessionAnalysisCheckpoint`` count and the
@@ -30,7 +33,7 @@ from sqlalchemy.orm import Session
 from src.application.ports.task_dispatcher import TaskDispatcherPort
 from src.core.celery_app import celery_app
 from src.core.config import settings
-from src.core.pipeline_constants import TaskStatus, TaskType
+from src.core.pipeline_constants import SessionAnalysisStatus, TaskStatus, TaskType
 from src.models.session_analysis_checkpoint import SessionAnalysisCheckpoint
 from src.models.task_log import TaskLog
 from src.services.maintenance.analysis_recovery import resume_lost_analysis
@@ -41,7 +44,7 @@ from src.services.maintenance.constants import (
     FULL_BUILD_TIMEOUT_SECONDS,
     HOT_BUILD_TIMEOUT_SECONDS,
 )
-from src.services.pipeline_state import apply_task_status
+from src.services.pipeline_state import apply_task_status, transition_session
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,51 @@ def _is_lease_expired(item: TaskLog, now: datetime) -> bool:
     return item.lease_expires_at is not None and _as_utc(item.lease_expires_at) <= now
 
 
+def _finalize_cancelled_lease(db: Session, item: TaskLog, *, now: datetime) -> bool:
+    """Finalize a lease-expired, cancel-requested RUNNING row as CANCELLED.
+
+    A worker killed out-of-band (``docker compose down``) leaves a
+    RUNNING row that requested cancellation but never observed the flag
+    before dying. Once the lease is expired no live worker owns the row,
+    so the recovery loop finalizes it instead of re-dispatching: the
+    analyzer is **never** resumed for a cancelled run. For
+    ``SESSION_ANALYSIS`` the owning :class:`VideoSession` rolls back
+    ``ANALYZING -> SEALED`` (mirroring
+    :func:`src.services.analysis.finalize.cancel_session`) so the
+    session is not stranded in ``analyzing``.
+
+    Returns ``True`` so the caller counts the row as recovered.
+    """
+    if item.queue_task_id:
+        try:
+            celery_app.control.revoke(item.queue_task_id, terminate=True)
+        except Exception:
+            logger.exception("Failed to revoke cancelled task_id=%s", item.queue_task_id)
+
+    if item.task_type == TaskType.SESSION_ANALYSIS and item.task_target_id is not None:
+        transition_session(
+            db,
+            item.task_target_id,
+            SessionAnalysisStatus.ANALYZING,
+            SessionAnalysisStatus.SEALED,
+            reason="recover_cancelled_lease",
+            source="recover_timed_out_tasks",
+            task_log=item,
+            force=True,
+        )
+
+    apply_task_status(
+        db,
+        item,
+        TaskStatus.CANCELLED,
+        reason="recover_cancelled_lease",
+        source="recover_timed_out_tasks",
+    )
+    item.finished_at = now
+    item.message = "Task cancelled after lease expiry (worker lost)"
+    return True
+
+
 def _handle_running_item(
     db: Session,
     item: TaskLog,
@@ -157,8 +205,15 @@ def _handle_running_item(
     dispatcher: TaskDispatcherPort,
 ) -> bool:
     """One iteration of the lease-expiry loop. Returns ``True`` when the row was finalized."""
+    lease_expired = _is_lease_expired(item, now)
     if item.cancel_requested:
-        return False
+        # The worker still owns a fresh lease: let it observe the flag
+        # and finalize itself. Once the lease expires the worker is gone
+        # and the recovery loop finalizes the zombie row as CANCELLED.
+        if not lease_expired:
+            return False
+        return _finalize_cancelled_lease(db, item, now=now)
+
     started_at = _as_utc(item.started_at or item.created_at)
     timeout_seconds = _task_timeout_seconds_for(item, analysis_aggregates=analysis_aggregates)
     last_progress: datetime | None = None
@@ -167,7 +222,6 @@ def _handle_running_item(
         if last_progress is not None:
             last_progress = _as_utc(last_progress)
     timeout_anchor = _as_utc(last_progress or item.last_heartbeat_at or started_at)
-    lease_expired = _is_lease_expired(item, now)
     if timeout_anchor + timedelta(seconds=timeout_seconds) > now or not lease_expired:
         return False
 

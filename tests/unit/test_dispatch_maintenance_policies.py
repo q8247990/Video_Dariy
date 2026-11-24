@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
@@ -31,10 +32,13 @@ from src.application.bootstrap import bootstrap_for_tests
 from src.application.bootstrap_fakes import FakeTaskDispatcher
 from src.core.pipeline_constants import (
     ScanMode,
+    SessionAnalysisStatus,
     TaskStatus,
     TaskType,
 )
+from src.models.outbox import OutboxEvent
 from src.models.task_log import TaskLog
+from src.models.video_session import VideoSession
 from src.models.video_source import VideoSource
 from src.services.dispatch.cancel import (
     TaskCancellationRequested,
@@ -57,6 +61,7 @@ from src.services.dispatch.finalize import (
 from src.services.dispatch.lease import renew_task_lease
 from src.services.dispatch.worker_bind import bind_or_create_running_task_log
 from src.services.maintenance.hot_scheduling import dispatch_hot_builds
+from src.services.maintenance.retention import cleanup_old_task_logs
 from src.services.maintenance.running_lease_recovery import recover_timed_out_tasks
 from src.services.maintenance.unleased_recovery import recover_orphan_pending_tasks
 
@@ -580,6 +585,227 @@ def test_orphan_pending_recovery_returns_deterministic_count(
 
 
 # ===========================================================================
+# Maintenance — retention policy (Issue 3: outbox FK blocked the sweep)
+# ===========================================================================
+
+
+def _seed_outbox_row(
+    db: Session,
+    task_log_id: int | None,
+    created_at: datetime,
+    status: str = "published",
+) -> OutboxEvent:
+    """Insert one ``outbox_event`` row bound to ``task_log_id`` (or orphaned)."""
+    outbox = OutboxEvent(
+        event_id=uuid4(),
+        task_log_id=task_log_id,
+        task_name="src.tasks.session_build.hot_scan_source",
+        queue="analysis",
+        args_json=[],
+        kwargs_json={},
+        status=status,
+        next_attempt_at=created_at,
+        published_at=created_at if status == "published" else None,
+        created_at=created_at,
+    )
+    db.add(outbox)
+    return outbox
+
+
+def test_retention_deletes_old_outbox_and_task_log_without_fk_error(
+    db_session: Session,
+) -> None:
+    """``cleanup_old_task_logs`` prunes the old published outbox row, then the task_log.
+
+    Regression spec for Issue 3: the old ``ON DELETE RESTRICT`` FK made the
+    bulk ``DELETE`` raise ``ForeignKeyViolation`` on every hourly heartbeat.
+    After migration ``20261124_0029`` (SET NULL) + outbox pre-pruning, the
+    sweep succeeds, both rows are gone, and the return value counts only
+    the deleted ``task_log`` rows.
+    """
+    db = db_session
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=8)
+    task_log = TaskLog(
+        task_type=TaskType.SESSION_BUILD,
+        task_target_id=1,
+        status=TaskStatus.SUCCESS,
+        created_at=old,
+        finished_at=old,
+    )
+    db.add(task_log)
+    db.flush()
+    outbox = _seed_outbox_row(db, task_log.id, old)
+    db.commit()
+    task_log_id, outbox_id = task_log.id, outbox.id
+
+    deleted = cleanup_old_task_logs(db, now)
+    db.commit()
+
+    assert deleted == 1
+    assert db.query(TaskLog).filter_by(id=task_log_id).first() is None
+    assert db.query(OutboxEvent).filter_by(id=outbox_id).first() is None
+
+
+def test_retention_keeps_recent_outbox_rows(db_session: Session) -> None:
+    """A published outbox row inside the retention window survives the sweep."""
+    db = db_session
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=8)
+    recent = now - timedelta(hours=1)
+    stale_log = TaskLog(
+        task_type=TaskType.SESSION_BUILD,
+        task_target_id=1,
+        status=TaskStatus.FAILED,
+        created_at=old,
+        finished_at=old,
+    )
+    fresh_log = TaskLog(
+        task_type=TaskType.SESSION_BUILD,
+        task_target_id=2,
+        status=TaskStatus.SUCCESS,
+        created_at=recent,
+        finished_at=recent,
+    )
+    db.add_all([stale_log, fresh_log])
+    db.flush()
+    _seed_outbox_row(db, stale_log.id, old)
+    fresh_outbox = _seed_outbox_row(db, fresh_log.id, recent)
+    db.commit()
+
+    deleted = cleanup_old_task_logs(db, now)
+    db.commit()
+
+    assert deleted == 1
+    db.refresh(fresh_outbox)
+    assert fresh_outbox.task_log_id == fresh_log.id
+    assert db.query(OutboxEvent).filter_by(status="published").count() == 1
+
+
+def test_outbox_fk_nulls_task_log_link_on_run_delete(db_session: Session) -> None:
+    """Migration 20261124_0029: deleting the task_log NULLs ``outbox_event.task_log_id``.
+
+    The ledger row survives as a NULL-orphaned audit record instead of the
+    DELETE raising under the retired RESTRICT FK.
+    """
+    db = db_session
+    now = datetime.now(timezone.utc)
+    task_log = TaskLog(
+        task_type=TaskType.SESSION_BUILD,
+        task_target_id=1,
+        status=TaskStatus.SUCCESS,
+        created_at=now,
+        finished_at=now,
+    )
+    db.add(task_log)
+    db.flush()
+    outbox = _seed_outbox_row(db, task_log.id, now)
+    db.flush()
+    outbox_id = outbox.id
+
+    db.delete(task_log)
+    db.flush()
+    db.expire_all()
+
+    survivor = db.query(OutboxEvent).filter_by(id=outbox_id).one()
+    assert survivor.task_log_id is None
+
+
+# ===========================================================================
+# Maintenance — running-lease recovery: cancel_requested zombie rows (Issue 5)
+# ===========================================================================
+
+
+def test_recovery_finalizes_cancelled_expired_analysis_lease(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancel-requested RUNNING analysis row with an expired lease → CANCELLED + session SEALED.
+
+    Regression spec for Issue 5: a worker killed by ``docker compose down``
+    left the row RUNNING forever (the old early-return skipped every
+    ``cancel_requested`` row) and stranded the ``video_session`` in
+    ``analyzing``. The recovery loop must now revoke, finalize the row as
+    CANCELLED, roll the session ``ANALYZING -> SEALED`` and — critically —
+    never re-dispatch the analyzer.
+    """
+    db = db_session
+    now = datetime.now(timezone.utc)
+    source = VideoSource(
+        source_name="cam",
+        camera_name="cam",
+        location_name="home",
+        source_type="local_directory",
+        last_validate_status="success",
+    )
+    db.add(source)
+    db.flush()
+    session = VideoSession(
+        source_id=source.id,
+        session_start_time=now - timedelta(hours=3),
+        session_end_time=now - timedelta(hours=2),
+        analysis_status=SessionAnalysisStatus.ANALYZING,
+    )
+    db.add(session)
+    db.flush()
+    task_log = TaskLog(
+        task_type=TaskType.SESSION_ANALYSIS,
+        task_target_id=session.id,
+        status=TaskStatus.RUNNING,
+        queue_task_id="queue-cancelled-zombie",
+        cancel_requested=True,
+        started_at=now - timedelta(hours=2),
+        last_heartbeat_at=now - timedelta(hours=2),
+        lease_expires_at=now - timedelta(hours=1),
+    )
+    db.add(task_log)
+    db.commit()
+
+    revoke = MagicMock()
+    monkeypatch.setattr("src.core.celery_app.celery_app.control.revoke", revoke)
+    dispatcher = FakeTaskDispatcher()
+    assert recover_timed_out_tasks(db, now, dispatcher=dispatcher) == 1
+    db.commit()
+    db.refresh(task_log)
+    db.refresh(session)
+
+    revoke.assert_called_once_with("queue-cancelled-zombie", terminate=True)
+    assert task_log.status == TaskStatus.CANCELLED
+    assert task_log.finished_at is not None
+    assert task_log.message == "Task cancelled after lease expiry (worker lost)"
+    assert session.analysis_status == SessionAnalysisStatus.SEALED
+    # No resume dispatch may ever reach the broker for a cancelled run.
+    assert dispatcher.dispatched_analyze_session == []
+
+    # Idempotent: the row is terminal now; a second pass finalizes nothing.
+    assert recover_timed_out_tasks(db, now, dispatcher=dispatcher) == 0
+
+
+def test_recovery_spares_cancel_requested_row_with_live_lease(
+    db_session: Session,
+) -> None:
+    """``cancel_requested`` with a fresh lease stays RUNNING: the worker finalizes it itself."""
+    db = db_session
+    now = datetime.now(timezone.utc)
+    task_log = TaskLog(
+        task_type=TaskType.SESSION_BUILD,
+        task_target_id=1,
+        status=TaskStatus.RUNNING,
+        cancel_requested=True,
+        started_at=now,
+        last_heartbeat_at=now,
+        lease_expires_at=now + timedelta(minutes=5),
+    )
+    db.add(task_log)
+    db.commit()
+
+    assert recover_timed_out_tasks(db, now, dispatcher=FakeTaskDispatcher()) == 0
+    db.refresh(task_log)
+    assert task_log.status == TaskStatus.RUNNING
+    assert task_log.finished_at is None
+
+
+# ===========================================================================
 # Maintenance — missing-file reconciliation policy
 # ===========================================================================
 
@@ -862,5 +1088,105 @@ def test_heartbeat_skips_hourly_stages_outside_minute_zero(
             verify_db.query(AppRuntimeState).filter_by(state_key=HEARTBEAT_COUNTERS_KEY).one()
         )
         assert persisted.state_value == expected
+    finally:
+        verify_db.close()
+
+
+def test_heartbeat_survives_failing_retention_and_still_marks_missing_files(
+    pg_db_factory,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing hourly retention sweep cannot poison the heartbeat (Issue 3).
+
+    ``cleanup_old_task_logs`` is stubbed to delete a stale terminal row and
+    then raise — the savepoint must roll the partial deletion back, the
+    counter must stay at 0, ``mark_missing_video_files`` must still be
+    attempted, the heartbeat must not raise, and the outer commit must
+    still persist ``AppRuntimeState.heartbeat_last_counters`` (proof the
+    outer transaction survived the savepoint rollback).
+    """
+    import src.tasks._task_maintenance_orchestration as heartbeat_orchestration
+    import src.tasks.task_maintenance as heartbeat_module
+    from src.db.metrics import HEARTBEAT_COUNTERS_KEY
+    from src.models.app_runtime_state import AppRuntimeState
+
+    session_factory = pg_db_factory
+
+    @contextmanager
+    def _task_session() -> Iterator[Session]:
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(heartbeat_orchestration, "task_db_session", _task_session)
+    _container.set_container_for_tests(bootstrap_for_tests(dispatcher=FakeTaskDispatcher()))
+
+    pinned_now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+
+    class _FixedClock:
+        @staticmethod
+        def now(tz: timezone | None = None) -> datetime:
+            return pinned_now
+
+    monkeypatch.setattr(heartbeat_orchestration, "datetime", _FixedClock)
+    monkeypatch.setattr("src.core.config.settings.VIDEO_ROOT_PATH", str(tmp_path))
+
+    seed_db: Session = session_factory()
+    try:
+        source = VideoSource(
+            source_name="cam",
+            camera_name="cam",
+            location_name="home",
+            source_type="local_directory",
+            last_validate_status="success",
+            enabled=True,
+            source_paused=False,
+        )
+        seed_db.add(source)
+        stale = TaskLog(
+            task_type=TaskType.SESSION_BUILD,
+            task_target_id=99,
+            status=TaskStatus.SUCCESS,
+            created_at=pinned_now - timedelta(days=8),
+            finished_at=pinned_now - timedelta(days=8),
+        )
+        seed_db.add(stale)
+        seed_db.commit()
+        stale_id = stale.id
+    finally:
+        seed_db.close()
+
+    def _failing_retention(db: Session, now: datetime) -> int:
+        db.query(TaskLog).filter(TaskLog.id == stale_id).delete(synchronize_session=False)
+        raise RuntimeError("simulated retention FK failure")
+
+    missing_calls: list[int] = []
+
+    def _counting_marker(db: Session) -> int:
+        missing_calls.append(1)
+        return 1
+
+    monkeypatch.setattr(heartbeat_orchestration, "cleanup_old_task_logs", _failing_retention)
+    monkeypatch.setattr(heartbeat_orchestration, "mark_missing_video_files", _counting_marker)
+
+    result = heartbeat_module.heartbeat()
+
+    assert result["logs_deleted"] == 0
+    assert result["missing_marked"] == 1
+    assert missing_calls == [1]
+
+    verify_db: Session = session_factory()
+    try:
+        persisted = (
+            verify_db.query(AppRuntimeState).filter_by(state_key=HEARTBEAT_COUNTERS_KEY).one()
+        )
+        assert persisted.state_value["logs_deleted"] == 0
+        assert persisted.state_value["missing_marked"] == 1
+        # The savepoint rollback restored the row the stub had deleted,
+        # while the outer commit persisted the heartbeat counters.
+        assert verify_db.query(TaskLog).filter_by(id=stale_id).one() is not None
     finally:
         verify_db.close()

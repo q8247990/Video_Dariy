@@ -35,7 +35,7 @@ Column            Type                  Notes
 ================  ====================  ===================================
 ``id``            BIGSERIAL PK          surrogate; opaque to callers
 ``event_id``      UUID                  global UNIQUE; broker ``task_id``
-``task_log_id``   BIGINT FK → task_log  UNIQUE; 1:1 link to ``TaskLog``
+``task_log_id``   BIGINT FK → task_log  NULLABLE; UNIQUE (PostgreSQL allows multiple NULLs)
 ``dedupe_key``    TEXT NULL             mirror of ``task_log.dedupe_key``
 ``task_name``     TEXT                  registered Celery task dotted path
 ``queue``         TEXT                  Celery queue name
@@ -66,7 +66,9 @@ Index / constraint plan (per ADR §2, "Index / constraint plan"):
 7. ``INDEX (status, published_at) WHERE status='published'`` —
    retention cleanup hot path.
 8. ``FOREIGN KEY (task_log_id) REFERENCES task_log(id) ON DELETE
-   RESTRICT`` — the outbox MUST NOT outlive its run silently.
+   SET NULL`` — retention may delete the terminal run without
+   blocking on the outbox row; ``task_log_id`` is NULLABLE so the
+   ledger survives as an orphanable audit trail.
 
 Alembic-side the partial indexes are emitted with the explicit
 ``postgresql_where=...`` argument so they match the contract.
@@ -134,10 +136,10 @@ class OutboxEvent(Base):
         nullable=False,
         unique=True,
     )
-    task_log_id: Mapped[int] = mapped_column(
+    task_log_id: Mapped[int | None] = mapped_column(
         BigInteger,
-        ForeignKey("task_log.id", ondelete="RESTRICT"),
-        nullable=False,
+        ForeignKey("task_log.id", ondelete="SET NULL"),
+        nullable=True,
         unique=True,
     )
     dedupe_key: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -185,9 +187,11 @@ class OutboxEvent(Base):
         ),
         # -- Concurrency safety net (ADR §2, item 4) -----------------
         # Partial unique on ``task_log_id`` while the row is pending.
-        # The ``IS NOT NULL`` predicate is redundant (the column is
-        # NOT NULL) but is frozen verbatim by ADR §2 item 4 so the
-        # migration and the model stay byte-identical to the contract.
+        # The ``IS NOT NULL`` predicate excludes NULL links (rows
+        # whose task_log was retention-deleted) so multiple orphans
+        # never collide on the index; it also keeps the predicate
+        # byte-identical to the ``ON CONFLICT`` arbiter in the
+        # enqueue INSERT.
         Index(
             "uq_outbox_event_pending_task_log",
             "task_log_id",

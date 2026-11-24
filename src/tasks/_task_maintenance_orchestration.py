@@ -70,11 +70,13 @@ def run_heartbeat() -> dict[str, int]:
 
     Zero complex branching: each policy call returns a deterministic
     counter, the hourly-only cleanup / missing-file sweeps are gated on
-    ``now.minute == 0``, and the final result dict is the contract the
-    supervisor / dashboard consumes. On any policy failure the sweep
-    rolls back and re-raises; the per-policy try / except lives inside
-    the policy module itself (a single bad source cannot poison the
-    hot-build sweep, for example).
+    ``now.minute == 0`` and isolated behind per-policy SAVEPOINTs (a
+    failing hourly sweep logs, keeps its counter at 0, and never fails
+    the heartbeat), and the final result dict is the contract the
+    supervisor / dashboard consumes. On any other policy failure the
+    sweep rolls back and re-raises; the per-policy try / except for the
+    non-hourly stages lives inside the policy module itself (a single
+    bad source cannot poison the hot-build sweep, for example).
     """
     with pending_deliveries() as staged:
         with task_db_session() as db:
@@ -90,8 +92,25 @@ def run_heartbeat() -> dict[str, int]:
                 logs_deleted = 0
                 missing_marked = 0
                 if now.minute == 0:
-                    logs_deleted = cleanup_old_task_logs(db, now)
-                    missing_marked = mark_missing_video_files(db)
+                    # Each hourly sweep gets its own SAVEPOINT: a failure
+                    # rolls back only that policy's writes, the counter
+                    # stays at 0, and the outer heartbeat transaction
+                    # remains usable (never call db.rollback() here — it
+                    # would poison the outer transaction and the final
+                    # commit). mark_missing_video_files is always
+                    # attempted even when retention fails.
+                    try:
+                        with db.begin_nested():
+                            logs_deleted = cleanup_old_task_logs(db, now)
+                    except Exception:
+                        logger.exception("Retention cleanup failed; heartbeat continues")
+                        logs_deleted = 0
+                    try:
+                        with db.begin_nested():
+                            missing_marked = mark_missing_video_files(db)
+                    except Exception:
+                        logger.exception("Missing-file sweep failed; heartbeat continues")
+                        missing_marked = 0
 
                 counters: dict[str, int] = {
                     "dispatched_hot": len(dispatched_hot),
