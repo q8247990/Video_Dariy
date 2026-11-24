@@ -1,3 +1,5 @@
+from typing import Any
+
 VIDEO_EVENT_TYPES = {
     "member_appear",
     "member_enter",
@@ -48,6 +50,39 @@ EVENT_TYPE_DEFINITIONS: list[dict[str, str]] = [
 RECOGNITION_STATUSES = {"confirmed", "suspected", "unknown"}
 ACTIVITY_LEVELS = {"low", "medium", "high"}
 
+# 受控词表：prompt 从这里渲染（task.j2），落库前由 normalize_interpreted_state 归一化。
+INTERPRETED_STATES: list[str] = [
+    "在场",
+    "活动",
+    "移动",
+    "休息",
+    "静止",
+    "睡眠",
+    "警觉",
+    "靠近",
+    "离开",
+]
+
+INTERPRETED_STATE_CANONICAL = frozenset(INTERPRETED_STATES)
+
+INTERPRETED_STATE_ALIASES = {
+    "移动中": "移动",
+    "活跃": "活动",
+    "离场": "离开",
+    "离开中": "离开",
+    "趴卧": "休息",
+    "趴着": "休息",
+    "躺卧": "休息",
+    "卧倒": "休息",
+    "睡着": "睡眠",
+    "睡觉": "睡眠",
+    "静止状态": "静止",
+    "停留": "在场",
+    "在场中": "在场",
+    "靠近中": "靠近",
+    "警觉中": "警觉",
+}
+
 EVENT_TYPE_ALIASES = {
     "pet_stay": "pet_rest",
     "pet_enter": "pet_appear",
@@ -85,3 +120,24 @@ def normalize_activity_level(value: str | None, *, has_events: bool) -> str:
     if normalized in ACTIVITY_LEVELS:
         return normalized
     return "medium" if has_events else "low"
+
+
+def normalize_interpreted_state(values: Any) -> list[str]:
+    """同义词归一化到 :data:`INTERPRETED_STATES`，未知 token 丢弃。"""
+    if not isinstance(values, (list, tuple)):
+        return []
+    normalized: list[str] = []
+    for raw in values:
+        if not isinstance(raw, str):
+            continue
+        token = raw.strip()
+        if not token:
+            continue
+        canonical = (
+            token if token in INTERPRETED_STATE_CANONICAL else INTERPRETED_STATE_ALIASES.get(token)
+        )
+        if canonical and canonical not in normalized:
+            normalized.append(canonical)
+    if not normalized and values:
+        return ["在场"]
+    return normalized

@@ -83,7 +83,14 @@ EXPECTED_RECOGNIZED_EVENT_FIELDS = frozenset(
     }
 )
 EXPECTED_RELATED_ENTITY_FIELDS = frozenset(
-    {"entity_type", "display_name", "matched_profile_name", "recognition_status", "confidence"}
+    {
+        "entity_type",
+        "display_name",
+        "matched_profile_name",
+        "candidate_profile_names",
+        "recognition_status",
+        "confidence",
+    }
 )
 
 # A fixed, fully-populated LLM JSON sample: every DTO field is exercised so
@@ -145,7 +152,7 @@ FIXED_RECOGNITION_JSON = """
 SCHEMAS_PATH = (
     Path(__file__).resolve().parents[2] / "src" / "services" / "video_analysis" / "schemas.py"
 )
-PINNED_SCHEMAS_SHA256 = "758b0e76c3c10abab996180050451768c036dd4ca4be4deda4faea79e35cba66"
+PINNED_SCHEMAS_SHA256 = "af4eefd38f6a59cd993f87d6a07292cb0ca9764019fccffd1c813350b96ee3f2"
 
 
 # ---------------------------------------------------------------------------

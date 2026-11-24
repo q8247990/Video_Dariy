@@ -16,15 +16,16 @@
 8. 输出约束：仅输出 JSON 对象，不要输出额外文字。
 9. 干扰排除：注意电视反光、玻璃反射、走廊远处小目标等误判风险。
 10. 语言统一：所有自然语言字段（title、summary、detail、summary_text、main_subjects、observed_actions、interpreted_state、display_name、analysis_notes.note）一律使用简体中文；禁止英文单词、英文枚举名与拼音。
-11. 取值规范：observed_actions 只填可观察的中文动作短词（如“站立”“走动”“嗅探”），interpreted_state 只填可观察的中文状态短词（如“在场”“警觉”“靠近”），二者不得输出英文 token。
+11. 取值规范：observed_actions 只填可观察的中文动作短词（如“站立”“走动”“嗅探”）；interpreted_state 必须从任务级 Prompt 列出的受控词表中选取（如“在场”“休息”“静止”），禁止自造近义词（如“移动中”“离场”“活跃”）与英文 token。
 12. 名称规范：display_name 必须是可读中文称谓（成员用档案名或“爸爸/妈妈”等角色名，宠物用档案名或“猫/狗”等，陌生人用“陌生人”“未识别人员”），禁止输出 unknown_person、unknown_pet、unknown、suspected_cat 等英文占位符，也不要添加“疑似”前缀。
 13. 档案匹配：matched_profile_name 仅当对象与家庭档案中某个姓名一致时填写，且必须与档案中文姓名逐字相同；禁止拼音、英文翻译或别名（如 Feifei、Mom、Lizi）。无法逐字匹配时填 null。
 14. 关注项打标：若事件命中家庭关注项，将其 key 填入 focus_matches；只能使用家庭上下文列出的 key，无匹配时填 []，禁止自造 key。
-15. 变化判定：比较相邻帧/连续画面中主体的位置、姿态、数量与进出；只有出现可观察变化时才生成事件。若主体在本段内首次出现/离开，或姿态发生明显变化（如站立→趴卧），仍应记录对应事件；整段无任何可观察变化时，events 必须为空数组，并在 analysis_notes 中以 no_significant_event 说明，禁止为了填满示例结构而编造事件。
-16. 摘要规范：summary_text 只客观陈述可观察事实（谁、在哪、做了什么或处于什么状态），不要写氛围、情绪或叙事性描写；无实质变化时写“画面无明显变化”。
+15. 变化判定：比较相邻帧/连续画面中主体的位置、姿态、数量与进出；只有出现可观察变化时才生成事件。若主体在本段内首次出现/离开，或姿态发生明显变化（如站立→趴卧），仍应记录对应事件；整段无任何可观察变化时，events 必须为空数组，并在 analysis_notes 中以 no_significant_event 说明，禁止为了填满示例结构而编造事件。“静止”“休息”本身不是事件；只有姿态发生可观察变化（如站立→趴卧）或主体进出时才生成事件。
+16. 摘要规范：summary_text 与每个事件的 summary 只客观陈述可观察事实（主体用已确认的档案名，见规则 18；在哪；做了什么或处于什么状态），不要写氛围、情绪或叙事性描写；无实质变化时写“画面无明显变化”。
 {% if input_mode == "image" %}
 17. 事件数量上限：每个文件最多输出 8 个事件；候选事件超过 8 个时按重要性取舍，被舍弃的事件在 analysis_notes 中以 no_significant_event 说明。
 {% endif %}
+18. 称谓一致：当某主体的 matched_profile_name 非空时，title、summary、detail、summary_text、main_subjects 一律以该档案名作主语，禁止改用“一只/这只 + 物种”写法；detail 首次提及可写成“档案名（外观短语）”，但 title 与 summary 不得只出现物种称谓。仅当 matched_profile_name 为 null 时才允许“黑猫”“深色猫”等描述性称谓，并把不确定原因写进 analysis_notes.identity_uncertain，同时在该实体的 candidate_profile_names 中填写候选档案名（最多 2 个）。
 
 输出 schema（示例仅示范字段格式与中文写法，实际内容按视频填写；字段结构必须严格遵守）:
 {
@@ -40,12 +41,13 @@
       "event_type": "member_stay",
       "title": "妈妈在厨房区域整理物品",
       "summary": "妈妈在画面右侧厨房区域整理物品。",
-      "detail": "画面右侧，一名女性（妈妈）站在冰箱和橱柜前，大部分时间保持站立，偶尔有手部动作。",
+      "detail": "画面右侧，妈妈（一名女性）站在冰箱和橱柜前，大部分时间保持站立，偶尔有手部动作。",
       "related_entities": [
         {
           "entity_type": "member",
           "display_name": "妈妈",
           "matched_profile_name": "妈妈",
+          "candidate_profile_names": [],
           "recognition_status": "confirmed",
           "confidence": 0.9
         }
@@ -56,7 +58,7 @@
       "confidence": 0.9
     }
   ],
-  "analysis_notes": [{"type": "identity_uncertain", "note": "距离较远，无法确认身份。"}]
+  "analysis_notes": [{"type": "scene_noise", "note": "电视屏幕存在反光。"}]
 }
 
 空结果示例（整段无实质变化时；events 必须为空，不要编造事件）:
@@ -68,4 +70,48 @@
   },
   "events": [],
   "analysis_notes": [{"type": "no_significant_event", "note": "相邻帧中主体的位置、姿态与数量无明显变化。"}]
+}
+
+多主体称谓示例（一只能确认档案名、一只不能；注意 title/summary/detail 三处称谓一致）:
+{
+  "events": [
+    {
+      "offset_start_sec": 0,
+      "offset_end_sec": 20,
+      "event_type": "pet_activity",
+      "title": "嘟嘟在屏风附近走动嗅探",
+      "summary": "嘟嘟在画面左侧屏风与卫生间门口之间来回走动并嗅探地面。",
+      "detail": "画面左下角，嘟嘟（一只玳瑁猫）在屏风附近走动并嗅探地面；右后方另有一只深色猫缓慢经过。",
+      "related_entities": [
+        {
+          "entity_type": "pet",
+          "display_name": "嘟嘟",
+          "matched_profile_name": "嘟嘟",
+          "candidate_profile_names": [],
+          "recognition_status": "confirmed",
+          "confidence": 0.95
+        },
+        {
+          "entity_type": "pet",
+          "display_name": "深色猫",
+          "matched_profile_name": null,
+          "candidate_profile_names": ["墨墨", "嘟嘟"],
+          "recognition_status": "suspected",
+          "confidence": 0.5
+        }
+      ],
+      "observed_actions": ["走动", "嗅探"],
+      "interpreted_state": ["活动", "移动"],
+      "focus_matches": ["pet_status"],
+      "confidence": 0.9
+    }
+  ],
+  "analysis_notes": [
+    {
+      "type": "identity_uncertain",
+      "entity_index": 1,
+      "candidates": ["墨墨", "嘟嘟"],
+      "note": "右后方深色猫因光线与距离无法确认是墨墨还是嘟嘟。"
+    }
+  ]
 }

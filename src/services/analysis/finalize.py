@@ -123,10 +123,10 @@ def merge_session_fields(
     highest_activity = "low"
     subjects_seen: set[str] = set()
     merged_subjects: list[str] = []
-    merged_notes: list[dict[str, str]] = []
-    notes_seen: set[tuple[str, str]] = set()
+    merged_notes: list[dict[str, Any]] = []
+    notes_seen: set[tuple[Any, ...]] = set()
 
-    for _, _, result in structured_results:
+    for sub_chunk_index, _, result in structured_results:
         summary = result.session_summary
         if activity_score[summary.activity_level] > activity_score[highest_activity]:
             highest_activity = summary.activity_level
@@ -139,11 +139,24 @@ def merge_session_fields(
             merged_subjects.append(key)
 
         for note in result.analysis_notes:
-            note_key = (note.type, note.note.strip())
+            note_key = (
+                note.type,
+                note.note.strip(),
+                note.entity_index,
+                tuple(note.candidates),
+            )
             if not note_key[1] or note_key in notes_seen:
                 continue
             notes_seen.add(note_key)
-            merged_notes.append({"type": note.type, "note": note.note})
+            merged_notes.append(
+                {
+                    "type": note.type,
+                    "note": note.note,
+                    "entity_index": note.entity_index,
+                    "candidates": list(note.candidates),
+                    "sub_chunk_index": sub_chunk_index,
+                }
+            )
 
     session.summary_text = "\n".join(summary_lines)
     session.activity_level = highest_activity

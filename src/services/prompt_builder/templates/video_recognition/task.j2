@@ -11,6 +11,7 @@ event_type 定义（必须从中选择，禁止自造或输出英文别名）:
 - member_appear 用于首次出现或短暂经过；持续在场且无进出动作用 member_stay。
 - 仅当无法归入任何具体类型时才用 other，禁止用 other 兜底常见场景。
 analysis_note_type 枚举={{ note_type_list | compact_list }}; merge_similar_actions=true; split_only_on_significant_change=true.
+interpreted_state 受控词表（必须从中选择，禁止自造近义词与英文 token）: {% for item in interpreted_state_values %}{{ item }}{% if not loop.last %}/{% endif %}{% endfor %}.
 {% if input_mode == "image" %}
 本批帧时间戳：
 {% for ts in frame_timestamps %}

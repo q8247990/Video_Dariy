@@ -8,6 +8,7 @@ from src.services.prompt_builder.engine import render_template
 from src.services.video_analysis.enums import (
     ANALYSIS_NOTE_TYPES,
     EVENT_TYPE_DEFINITIONS,
+    INTERPRETED_STATES,
     VIDEO_EVENT_TYPES,
 )
 
@@ -69,6 +70,7 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
     # 图像帧模式可选参数：默认 video，保证现有调用方渲染结果与历史完全一致。
     input_mode = input_data.get("input_mode") or "video"
     frame_timestamps = list(input_data.get("frame_timestamps") or [])
+    previous_subjects = list(input_data.get("previous_subjects") or [])
     # 在渲染前校验，image 模式空列表 / 非法列表属于调用方错误，必须响亮失败。
     _validate_frame_timestamps(input_mode, frame_timestamps)
     frame_total = len(frame_timestamps)
@@ -87,34 +89,43 @@ def build_video_recognition_prompt(input_data: dict[str, Any]) -> tuple[str, str
 
     system_prompt = render_template("video_recognition/system_rules.j2", input_mode=input_mode)
 
-    user_prompt = "\n\n".join(
-        [
-            render_template(
-                "video_recognition/home_context.j2",
-                home_profile=home_profile,
-                members=members,
-                pets=pets,
-            ),
-            render_template(
-                "video_recognition/camera_context.j2",
-                source_name=_read_vs("source_name"),
-                camera_name=_read_vs("camera_name"),
-                location_name=_read_vs("location_name"),
-                camera_note=_read_vs("prompt_text"),
-            ),
-            render_template(
-                "video_recognition/task.j2",
-                session_context=session_context,
-                session_start_time_iso=session_start_iso,
-                session_end_time_iso=session_end_iso,
-                strategy_context=strategy_context,
-                event_type_definitions=event_type_definitions,
-                note_type_list=sorted(ANALYSIS_NOTE_TYPES),
-                input_mode=input_mode,
-                frame_timestamps=frame_timestamps,
-                frame_total=frame_total,
-            ),
-        ]
+    continuity_prompt = render_template(
+        "video_recognition/continuity.j2",
+        previous_subjects=previous_subjects,
     )
+    prompt_chunks = [
+        render_template(
+            "video_recognition/home_context.j2",
+            home_profile=home_profile,
+            members=members,
+            pets=pets,
+        ),
+        render_template(
+            "video_recognition/camera_context.j2",
+            source_name=_read_vs("source_name"),
+            camera_name=_read_vs("camera_name"),
+            location_name=_read_vs("location_name"),
+            camera_note=_read_vs("prompt_text"),
+        ),
+    ]
+    if previous_subjects:
+        prompt_chunks.append(continuity_prompt)
+    prompt_chunks.append(
+        render_template(
+            "video_recognition/task.j2",
+            session_context=session_context,
+            session_start_time_iso=session_start_iso,
+            session_end_time_iso=session_end_iso,
+            strategy_context=strategy_context,
+            event_type_definitions=event_type_definitions,
+            note_type_list=sorted(ANALYSIS_NOTE_TYPES),
+            interpreted_state_values=INTERPRETED_STATES,
+            input_mode=input_mode,
+            frame_timestamps=frame_timestamps,
+            frame_total=frame_total,
+        )
+    )
+
+    user_prompt = "\n\n".join(prompt_chunks)
 
     return system_prompt, user_prompt

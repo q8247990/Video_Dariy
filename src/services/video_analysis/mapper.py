@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from src.models.event_record import EventRecord
 from src.models.video_session import VideoSession
+from src.services.video_analysis.enums import normalize_interpreted_state
 from src.services.video_analysis.output_parser import RecognitionOutputValidationError
 from src.services.video_analysis.schemas import RecognitionResultDTO, RecognizedEventDTO
 
@@ -67,6 +68,6 @@ def build_event_record_from_recognized_event(
         offset_end_sec=absolute_offset_end,
         related_entities_json=[item.model_dump() for item in recognized_event.related_entities],
         observed_actions_json=recognized_event.observed_actions,
-        interpreted_state_json=recognized_event.interpreted_state,
+        interpreted_state_json=normalize_interpreted_state(recognized_event.interpreted_state),
         focus_matches_json=recognized_event.focus_matches,
     )

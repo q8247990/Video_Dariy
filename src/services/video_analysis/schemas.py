@@ -25,6 +25,7 @@ class RelatedEntityDTO(BaseModel):
     entity_type: str
     display_name: str
     matched_profile_name: str | None = None
+    candidate_profile_names: list[str] = Field(default_factory=list)
     recognition_status: str
     confidence: float | None = Field(default=None, ge=0, le=1)
 
@@ -34,6 +35,16 @@ class RelatedEntityDTO(BaseModel):
         if value not in RECOGNITION_STATUSES:
             raise ValueError("invalid recognition_status")
         return value
+
+    @field_validator("candidate_profile_names")
+    @classmethod
+    def normalize_candidates(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in value or []:
+            name = str(item).strip()
+            if name and name not in cleaned:
+                cleaned.append(name)
+        return cleaned[:3]
 
 
 class RecognizedEventDTO(BaseModel):
@@ -80,6 +91,8 @@ class RecognizedEventDTO(BaseModel):
 class AnalysisNoteDTO(BaseModel):
     type: str
     note: str = Field(min_length=1)
+    entity_index: int | None = Field(default=None, ge=0)
+    candidates: list[str] = Field(default_factory=list)
 
     @field_validator("type")
     @classmethod
