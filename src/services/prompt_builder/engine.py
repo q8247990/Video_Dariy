@@ -29,8 +29,10 @@ def _compact_list(value: list[Any] | None) -> str:
 
 
 def _to_json(value: Any, indent: int = 2) -> str:
-    """将 Python 对象序列化为 JSON 字符串。"""
-    return json.dumps(value, ensure_ascii=False, indent=indent)
+    """将 Python 对象序列化为 JSON 字符串（键序与分隔符固定）。"""
+    return json.dumps(
+        value, ensure_ascii=False, indent=indent, sort_keys=True, separators=(",", ": ")
+    )
 
 
 def _truncate_cjk(value: str, max_len: int) -> str:
